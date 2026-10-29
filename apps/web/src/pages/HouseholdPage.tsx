@@ -18,7 +18,7 @@ import { useAuthStore } from '@/store/auth'
 import { useDisplayName } from '@/hooks/useDisplayName'
 import {
   createHousehold, joinHousehold, getHouseholds,
-  addHouseholdDebt, getHouseholdDebts, deleteHouseholdDebt,
+  addHouseholdDebt, getHouseholdDebts, deleteHouseholdDebt, deleteHouseholdExpense,
   calcNetBalance, renameHousehold, deleteHousehold, getHouseholdIds,
   addHouseholdCrossing, getHouseholdCrossings,
 } from '@/lib/firestore'
@@ -30,14 +30,12 @@ const CAT_OPTIONS = HOUSEHOLD_DEBT_CATEGORIES.map((c) => ({
   value: c.id,
   label: `${c.icon} ${c.label}`,
 }))
-const TIPO_OPTIONS = [
-  { value: 'Deuda', label: '💸 Deuda' },
-  { value: 'Abono', label: '✅ Abono' },
-]
-
+// 'Deuda' ya no se crea a mano — toda deuda nace de un gasto compartido
+// (ver HouseholdExpenseModal), que calcula la parte de cada persona. Este
+// formulario solo registra abonos: pagos directos contra una deuda existente.
 const debtSchema = z.object({
   concept:  z.string().min(1, 'Concepto requerido'),
-  tipo:     z.enum(['Deuda', 'Abono']),
+  tipo:     z.literal('Abono'),
   amount:   z.coerce.number().positive('Monto mayor a 0'),
   debtor:   z.string().min(1),
   category: z.string().min(1),
@@ -100,7 +98,7 @@ export default function HouseholdPage() {
 
   const debtForm = useForm<DebtForm>({
     resolver: zodResolver(debtSchema),
-    defaultValues: { date: format(new Date(), 'yyyy-MM-dd'), tipo: 'Deuda', category: 'otros_hogar', debtor: user?.uid ?? '' },
+    defaultValues: { date: format(new Date(), 'yyyy-MM-dd'), tipo: 'Abono', category: 'otros_hogar', debtor: user?.uid ?? '' },
   })
   const hhForm   = useForm<HHForm>({ resolver: zodResolver(householdSchema) })
   const joinForm = useForm<JoinForm>({ resolver: zodResolver(joinSchema) })
@@ -159,10 +157,10 @@ export default function HouseholdPage() {
         date: new Date(data.date + 'T12:00:00'), registeredBy: user.uid,
         estado: '', saldaId: null, notas: data.notas ?? '', cruzado: false,
       })
-      debtForm.reset({ date: format(new Date(), 'yyyy-MM-dd'), tipo: 'Deuda', category: 'otros_hogar', debtor: user.uid })
+      debtForm.reset({ date: format(new Date(), 'yyyy-MM-dd'), tipo: 'Abono', category: 'otros_hogar', debtor: user.uid })
       setOpenDebt(false)
       await reloadDebts()
-      showToast(data.tipo === 'Deuda' ? 'Deuda registrada' : 'Abono registrado', 'success')
+      showToast('Abono registrado', 'success')
     } catch { showToast('Error al registrar', 'error') }
     finally { setSaving(false) }
   }
@@ -227,11 +225,19 @@ export default function HouseholdPage() {
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar este registro?')) return
-    await deleteHouseholdDebt(id)
-    setDebts((prev) => prev.filter((d) => d.id !== id))
-    showToast('Registro eliminado', 'info')
+  // A debt born from a gasto compartido (has expenseId) is deleted through its
+  // expense, which cascades to every share it generated — not just this row.
+  async function handleDelete(d: any) {
+    const fromExpense = Boolean(d.expenseId)
+    if (!confirm(fromExpense
+      ? '¿Eliminar este gasto compartido? Se borrará junto con la(s) deuda(s) que generó.'
+      : '¿Eliminar este registro?')) return
+    try {
+      if (fromExpense) await deleteHouseholdExpense(d.expenseId)
+      else await deleteHouseholdDebt(d.id)
+      await reloadDebts()
+      showToast('Eliminado', 'info')
+    } catch { showToast('Error al eliminar', 'error') }
   }
 
   async function handleCreateCrossing(
@@ -438,7 +444,7 @@ export default function HouseholdPage() {
             {household && (
               <>
                 <Button onClick={() => setOpenExpense(true)} size="sm"><ShoppingBag size={15} /> Gasto</Button>
-                <Button onClick={() => setOpenDebt(true)} variant="secondary" size="sm"><Plus size={15} /> Registrar</Button>
+                <Button onClick={() => setOpenDebt(true)} variant="secondary" size="sm"><Plus size={15} /> Abono</Button>
                 <Button onClick={() => { setRenameVal(household.name as string); setOpenSettings(true) }} variant="ghost" size="sm"><Settings size={15} /></Button>
               </>
             )}
@@ -570,9 +576,9 @@ export default function HouseholdPage() {
 
             <button
               onClick={() => setOpenDebt(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-xs font-semibold rounded-xl hover:bg-gray-800 transition flex-shrink-0"
+              className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-700 text-xs font-semibold rounded-xl hover:bg-gray-50 transition flex-shrink-0"
             >
-              <Plus size={14} /> Registrar gasto
+              <Plus size={14} /> Registrar abono
             </button>
           </div>
 
@@ -589,12 +595,28 @@ export default function HouseholdPage() {
                 <Card className="p-5 space-y-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Deuda seleccionada</p>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                        Deuda seleccionada
+                        {selectedDebt.expenseId && (
+                          <span className="bg-brand-50 text-brand-600 px-1.5 py-0.5 rounded font-bold normal-case tracking-normal flex items-center gap-1">
+                            <ShoppingBag size={9} /> Gasto compartido
+                          </span>
+                        )}
+                      </p>
                       <p className="text-base font-bold text-gray-900">{selectedDebt.concept}</p>
                       <p className="text-xs text-gray-500 mt-0.5">
                         {selectedDebt.debtor === user?.uid ? myName : partnerName} debe ·{' '}
                         {format(selectedDebt.date instanceof Date ? selectedDebt.date : new Date(selectedDebt.date), 'dd MMM yyyy', { locale: es })}
                       </p>
+                      {selectedDebt.dueDate && (() => {
+                        const dd = selectedDebt.dueDate instanceof Date ? selectedDebt.dueDate : new Date(selectedDebt.dueDate)
+                        const overdue = dd < new Date()
+                        return (
+                          <p className={clsx('text-xs mt-0.5 flex items-center gap-1', overdue ? 'text-red-500 font-semibold' : 'text-gray-400')}>
+                            <Clock size={11} /> {overdue ? 'Venció el' : 'Vence el'} {format(dd, 'dd MMM yyyy', { locale: es })}
+                          </p>
+                        )
+                      })()}
                     </div>
                     <div className="text-right flex-shrink-0">
                       {(selectedDebt.crossedAmount as number) > 0 && (
@@ -616,6 +638,11 @@ export default function HouseholdPage() {
                     <button onClick={() => { handleSaldar(selectedDebt); setSelectedDebt(null) }}
                       className="flex-1 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-semibold hover:bg-gray-800 transition">
                       Saldar
+                    </button>
+                    <button onClick={async () => { await handleDelete(selectedDebt); setSelectedDebt(null) }}
+                      title="Eliminar"
+                      className="px-3 rounded-xl border border-gray-200 text-red-500 hover:border-red-300 hover:bg-red-50 transition flex items-center justify-center">
+                      <Trash2 size={14} />
                     </button>
                   </div>
                 </Card>
@@ -999,12 +1026,15 @@ export default function HouseholdPage() {
         </form>
       </Modal>
 
-      <Modal open={openDebt} onClose={() => setOpenDebt(false)} title="Registrar deuda / abono">
+      <Modal open={openDebt} onClose={() => setOpenDebt(false)} title="Registrar abono">
         <form onSubmit={debtForm.handleSubmit(onAddDebt)} className="space-y-4">
-          <Select label="Tipo" options={TIPO_OPTIONS} {...debtForm.register('tipo')} />
+          <input type="hidden" {...debtForm.register('tipo')} value="Abono" />
+          <p className="text-xs text-gray-400 bg-gray-50 rounded-xl p-3">
+            Para registrar un gasto nuevo usa "Gasto compartido" — esto es solo para anotar un pago directo contra una deuda existente.
+          </p>
           <Input label="Concepto" placeholder="ej. Veterinario, Mercado…" {...debtForm.register('concept')} error={debtForm.formState.errors.concept?.message} />
           <Input label="Monto (COP)" type="number" placeholder="0" {...debtForm.register('amount')} error={debtForm.formState.errors.amount?.message} />
-          <Select label="¿Quién debe?" options={debtorOptions} {...debtForm.register('debtor')} />
+          <Select label="¿Quién abona?" options={debtorOptions} {...debtForm.register('debtor')} />
           <Select label="Categoría" options={CAT_OPTIONS} {...debtForm.register('category')} />
           <Input label="Fecha" type="date" {...debtForm.register('date')} />
           <Input label="Notas (opcional)" placeholder="ej. Medicamentos" {...debtForm.register('notas')} />
