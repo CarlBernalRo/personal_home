@@ -1,0 +1,24 @@
+node_modules
+dist
+build
+lib
+.turbo
+.env
+.env.*
+!.env.example
+*.local
+.firebase
+firebase-debug.log
+firestore-debug.log
+*.log
+npm-debug.log*
+
+# Datos personales de referencia (no deben subirse al repo)
+examples/
+scripts/allowed-users.json
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

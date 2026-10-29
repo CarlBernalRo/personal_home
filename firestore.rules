@@ -1,0 +1,90 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuth()            { return request.auth != null; }
+    function isOwner(uid)        { return request.auth.uid == uid; }
+    function isHouseholdMember(hId) {
+      return isAuth() &&
+        exists(/databases/$(database)/documents/households/$(hId)) &&
+        request.auth.uid in
+          get(/databases/$(database)/documents/households/$(hId)).data.members;
+    }
+
+    // Whitelist — any authenticated user can check, nobody can write from client
+    match /allowedUsers/{docId} {
+      allow read:  if isAuth();
+      allow write: if false;
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // Households
+    match /households/{householdId} {
+      allow read:   if isHouseholdMember(householdId);
+      allow create: if isAuth();
+      allow update: if isHouseholdMember(householdId);
+      allow delete: if isAuth() &&
+        get(/databases/$(database)/documents/households/$(householdId)).data.createdBy == request.auth.uid;
+    }
+
+    // Variable expenses — owner only
+    match /expenses/{id} {
+      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+      allow create:       if isAuth() && isOwner(request.resource.data.userId);
+      allow update:       if isAuth() && isOwner(resource.data.userId);
+    }
+
+    // Fixed expenses
+    match /fixedExpenses/{id} {
+      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+      allow create:       if isAuth() && isOwner(request.resource.data.userId);
+      allow update:       if isAuth() && isOwner(resource.data.userId);
+    }
+
+    // Fixed expense payment records
+    match /fixedExpensePayments/{id} {
+      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+      allow create:       if isAuth() && isOwner(request.resource.data.userId);
+      allow update:       if isAuth() && isOwner(resource.data.userId);
+    }
+
+    // Incomes
+    match /incomes/{id} {
+      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+      allow create:       if isAuth() && isOwner(request.resource.data.userId);
+      allow update:       if isAuth() && isOwner(resource.data.userId);
+    }
+
+    // Accounts
+    match /accounts/{id} {
+      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+      allow create:       if isAuth() && isOwner(request.resource.data.userId);
+      allow update:       if isAuth() && isOwner(resource.data.userId);
+    }
+
+    // Savings goals
+    match /savingsGoals/{id} {
+      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+      allow create:       if isAuth() && isOwner(request.resource.data.userId);
+      allow update:       if isAuth() && isOwner(resource.data.userId);
+    }
+
+    // Household debts — household members only
+    match /householdDebts/{id} {
+      allow read:           if isHouseholdMember(resource.data.householdId);
+      allow create:         if isAuth() && isHouseholdMember(request.resource.data.householdId);
+      allow update, delete: if isHouseholdMember(resource.data.householdId);
+    }
+
+    // Household crossings — household members only
+    match /householdCrossings/{id} {
+      allow read:   if isHouseholdMember(resource.data.householdId);
+      allow create: if isAuth() && isHouseholdMember(request.resource.data.householdId);
+      allow delete: if isHouseholdMember(resource.data.householdId);
+    }
+  }
+}

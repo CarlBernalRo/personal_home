@@ -1,0 +1,10 @@
+{
+  "name": "gastos-hogar",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "npm run dev --workspace=apps/web",
+    "build": "npm run build --workspace=apps/web",
+    "clean": "npm run clean --workspace=apps/web"
+  }
+}
