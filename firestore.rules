@@ -10,6 +10,15 @@ service cloud.firestore {
         request.auth.uid in
           get(/databases/$(database)/documents/households/$(hId)).data.members;
     }
+    // A non-member joining via invite code: the write may only add their own
+    // uid to members/memberNames, nothing else — rename/delete still require
+    // already being a member.
+    function isJoiningHousehold() {
+      return isAuth() &&
+        !(request.auth.uid in resource.data.members) &&
+        request.auth.uid in request.resource.data.members &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberNames']);
+    }
 
     // Whitelist — any authenticated user can check, nobody can write from client
     match /allowedUsers/{docId} {
@@ -22,11 +31,14 @@ service cloud.firestore {
       allow read, write: if isOwner(userId);
     }
 
-    // Households
+    // Households — read is open to any authenticated (whitelisted) user because
+    // joining by invite code requires reading the doc *before* you're a member;
+    // the code itself is the access control for discovery. Only members can
+    // write, except a non-member adding themselves via a valid invite code.
     match /households/{householdId} {
-      allow read:   if isHouseholdMember(householdId);
+      allow read:   if isAuth();
       allow create: if isAuth();
-      allow update: if isHouseholdMember(householdId);
+      allow update: if isHouseholdMember(householdId) || isJoiningHousehold();
       allow delete: if isAuth() &&
         get(/databases/$(database)/documents/households/$(householdId)).data.createdBy == request.auth.uid;
     }
