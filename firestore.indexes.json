@@ -25,6 +25,14 @@
       ]
     },
     {
+      "collectionGroup": "householdExpenses",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "householdId", "order": "ASCENDING" },
+        { "fieldPath": "date",        "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "allowedUsers",
       "queryScope": "COLLECTION",
       "fields": [

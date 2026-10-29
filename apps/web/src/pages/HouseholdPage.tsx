@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Copy, Users, LogIn, PlusCircle, ChevronDown, ChevronLeft, Settings, Trash2, Pencil, GitMerge, TrendingUp, ChevronRight, ArrowLeft, Info } from 'lucide-react'
+import { Plus, Copy, Users, LogIn, PlusCircle, ChevronDown, ChevronLeft, Settings, Trash2, Pencil, GitMerge, TrendingUp, ChevronRight, ArrowLeft, Info, ShoppingBag, Clock } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Card } from '@/components/ui/Card'
@@ -23,6 +23,7 @@ import {
   addHouseholdCrossing, getHouseholdCrossings,
 } from '@/lib/firestore'
 import { formatCOP, HOUSEHOLD_DEBT_CATEGORIES } from '@/shared'
+import { HouseholdExpenseModal } from '@/components/household/HouseholdExpenseModal'
 import { clsx } from 'clsx'
 
 const CAT_OPTIONS = HOUSEHOLD_DEBT_CATEGORIES.map((c) => ({
@@ -64,6 +65,7 @@ export default function HouseholdPage() {
 
   const [crossings, setCrossings]     = useState<any[]>([])
   const [openDebt, setOpenDebt]       = useState(false)
+  const [openExpense, setOpenExpense] = useState(false)
   const [openCreate, setOpenCreate]   = useState(false)
   const [openJoin, setOpenJoin]       = useState(false)
   const [openSettings, setOpenSettings] = useState(false)
@@ -409,6 +411,11 @@ export default function HouseholdPage() {
     ...(partnerUid ? [{ value: partnerUid, label: partnerName }] : []),
   ]
 
+  const expenseMembers = [
+    { uid: user?.uid ?? '', name: myName },
+    ...(partnerUid ? [{ uid: partnerUid, name: partnerName }] : []),
+  ]
+
   if (loading) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-[240px_1fr_220px] gap-4 fade-in">
@@ -430,7 +437,8 @@ export default function HouseholdPage() {
           <div className="flex gap-2">
             {household && (
               <>
-                <Button onClick={() => setOpenDebt(true)} size="sm"><Plus size={15} /> Registrar</Button>
+                <Button onClick={() => setOpenExpense(true)} size="sm"><ShoppingBag size={15} /> Gasto</Button>
+                <Button onClick={() => setOpenDebt(true)} variant="secondary" size="sm"><Plus size={15} /> Registrar</Button>
                 <Button onClick={() => { setRenameVal(household.name as string); setOpenSettings(true) }} variant="ghost" size="sm"><Settings size={15} /></Button>
               </>
             )}
@@ -552,6 +560,13 @@ export default function HouseholdPage() {
                 </div>
               )}
             </div>
+
+            <button
+              onClick={() => setOpenExpense(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-xs font-semibold rounded-xl hover:bg-brand-700 transition flex-shrink-0"
+            >
+              <ShoppingBag size={14} /> Gasto compartido
+            </button>
 
             <button
               onClick={() => setOpenDebt(true)}
@@ -999,6 +1014,17 @@ export default function HouseholdPage() {
           </div>
         </form>
       </Modal>
+
+      {activeId && (
+        <HouseholdExpenseModal
+          open={openExpense}
+          onClose={() => setOpenExpense(false)}
+          householdId={activeId}
+          members={expenseMembers}
+          currentUserUid={user?.uid ?? ''}
+          onCreated={reloadDebts}
+        />
+      )}
     </div>
   )
 }
@@ -1178,6 +1204,8 @@ function DebtItem({ d, onCross, onSaldar, onSelect }: {
 }) {
   const crossed   = (d.crossedAmount as number) || 0
   const remaining = d.amount - crossed
+  const dueDate   = d.dueDate ? (d.dueDate instanceof Date ? d.dueDate : new Date(d.dueDate)) : null
+  const overdue   = dueDate ? dueDate < new Date() : false
 
   return (
     <div className="py-3 border-b border-gray-50 last:border-0">
@@ -1189,6 +1217,11 @@ function DebtItem({ d, onCross, onSaldar, onSelect }: {
               {format(d.date instanceof Date ? d.date : new Date(d.date), 'dd MMM yyyy', { locale: es })}
               {crossed > 0 && <span className="ml-1.5 text-purple-500">· {formatCOP(crossed)} cruzado</span>}
             </p>
+            {dueDate && (
+              <p className={clsx('text-[10px] mt-0.5 flex items-center gap-1', overdue ? 'text-red-500 font-semibold' : 'text-gray-400')}>
+                <Clock size={10} /> {overdue ? 'Venció el' : 'Vence el'} {format(dueDate, 'dd MMM yyyy', { locale: es })}
+              </p>
+            )}
           </div>
           <div className="text-right flex-shrink-0">
             {crossed > 0 && (

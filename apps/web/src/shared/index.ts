@@ -6,6 +6,8 @@ export * from './types/savings';
 export * from './types/fixedExpense';
 export * from './types/income';
 export * from './types/householdDebt';
+export * from './types/householdExpense';
 export * from './types/allowedUser';
 export * from './constants/categories';
 export * from './utils/currency';
+export * from './utils/householdSplit';

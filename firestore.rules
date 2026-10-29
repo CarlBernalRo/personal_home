@@ -86,5 +86,12 @@ service cloud.firestore {
       allow create: if isAuth() && isHouseholdMember(request.resource.data.householdId);
       allow delete: if isHouseholdMember(resource.data.householdId);
     }
+
+    // Household expenses (shared purchases that auto-split into householdDebts)
+    match /householdExpenses/{id} {
+      allow read:           if isHouseholdMember(resource.data.householdId);
+      allow create:         if isAuth() && isHouseholdMember(request.resource.data.householdId);
+      allow update, delete: if isHouseholdMember(resource.data.householdId);
+    }
   }
 }

@@ -2,6 +2,7 @@ node_modules
 dist
 build
 lib
+*.tsbuildinfo
 .turbo
 .env
 .env.*
