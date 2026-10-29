@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Copy, Users, LogIn, PlusCircle, ChevronDown, ChevronLeft, Settings, Trash2, Pencil, GitMerge, TrendingUp, ChevronRight, ArrowLeft, Info, ShoppingBag, Clock } from 'lucide-react'
+import { Plus, Copy, Users, LogIn, PlusCircle, ChevronDown, ChevronLeft, Settings, Trash2, Pencil, GitMerge, TrendingUp, ChevronRight, ArrowLeft, Info, ShoppingBag, Clock, LayoutGrid, Sparkles } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Card } from '@/components/ui/Card'
@@ -24,6 +24,7 @@ import {
 } from '@/lib/firestore'
 import { formatCOP, HOUSEHOLD_DEBT_CATEGORIES } from '@/shared'
 import { HouseholdExpenseModal } from '@/components/household/HouseholdExpenseModal'
+import { FinanceExplorer } from '@/components/household/FinanceExplorer'
 import { clsx } from 'clsx'
 
 const CAT_OPTIONS = HOUSEHOLD_DEBT_CATEGORIES.map((c) => ({
@@ -64,6 +65,7 @@ export default function HouseholdPage() {
   const [crossings, setCrossings]     = useState<any[]>([])
   const [openDebt, setOpenDebt]       = useState(false)
   const [openExpense, setOpenExpense] = useState(false)
+  const [viewMode, setViewMode]       = useState<'clasico' | 'interactivo'>('clasico')
   const [openCreate, setOpenCreate]   = useState(false)
   const [openJoin, setOpenJoin]       = useState(false)
   const [openSettings, setOpenSettings] = useState(false)
@@ -512,6 +514,23 @@ export default function HouseholdPage() {
             )}
             <span className="text-[10px] text-gray-400 hidden sm:inline">· {monthDebts.length} registros</span>
 
+            <div className="flex items-center gap-0.5 bg-gray-50 rounded-xl px-1 py-1">
+              <button
+                onClick={() => setViewMode('clasico')}
+                title="Vista resumen"
+                className={clsx('p-1.5 rounded-lg transition flex items-center gap-1 text-[10px] font-semibold', viewMode === 'clasico' ? 'bg-white text-gray-700 shadow-sm' : 'text-gray-400 hover:text-gray-600')}
+              >
+                <LayoutGrid size={13} />
+              </button>
+              <button
+                onClick={() => setViewMode('interactivo')}
+                title="Vista interactiva"
+                className={clsx('p-1.5 rounded-lg transition flex items-center gap-1 text-[10px] font-semibold', viewMode === 'interactivo' ? 'bg-white text-gray-700 shadow-sm' : 'text-gray-400 hover:text-gray-600')}
+              >
+                <Sparkles size={13} />
+              </button>
+            </div>
+
             <div className="flex-1" />
 
             <div className="relative" ref={hhMenuRef}>
@@ -667,8 +686,24 @@ export default function HouseholdPage() {
             </div>
           )}
 
+          {/* Vista interactiva: burbujas que se desglosan de hogar → integrante → historial */}
+          {!selectedDebt && viewMode === 'interactivo' && (
+            debtsLoading ? (
+              <div className="bg-white border border-gray-100 rounded-2xl p-5"><SkeletonList count={3} /></div>
+            ) : (
+              <FinanceExplorer
+                householdName={household.name as string}
+                members={expenseMembers}
+                currentUserUid={user?.uid ?? ''}
+                debts={debts}
+                crossings={crossings}
+                onOpenDebt={(d) => setSelectedDebt(d)}
+              />
+            )
+          )}
+
           {/* Main grid: panel combinado + historial */}
-          {!selectedDebt && (
+          {!selectedDebt && viewMode === 'clasico' && (
             <div className="grid gap-4 items-start grid-cols-1 xl:grid-cols-[1fr_280px] md:flex-1 md:min-h-0">
 
               {/* Panel combinado: Resumen + Saldos activos */}
