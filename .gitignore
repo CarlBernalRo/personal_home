@@ -1,7 +1,6 @@
 node_modules
 dist
-build
-lib
+apps/functions/lib
 *.tsbuildinfo
 .turbo
 .env
