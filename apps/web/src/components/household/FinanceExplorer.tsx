@@ -14,7 +14,20 @@ const ME_COLOR = '#111827'
 
 type Scene = 'home' | 'member' | 'history'
 
-interface Member { uid: string; name: string }
+interface Member { uid: string; name: string; photoURL?: string | null }
+
+/** A person's profile photo as the bubble/card fill, with a bottom-weighted
+ *  dark gradient so white text stays readable over any photo. Falls back to
+ *  the flat identity color when there's no photo. */
+function personFill(photoURL: string | null | undefined, color: string): React.CSSProperties {
+  if (!photoURL) return { backgroundColor: color }
+  return {
+    backgroundColor: color,
+    backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.6)), url(${photoURL})`,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+  }
+}
 
 interface MemberStat extends Member {
   net: number
@@ -145,7 +158,7 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
                 <button
                   key={m.uid}
                   onClick={() => openMember(m.uid)}
-                  style={{ ...vt(`vt-member-${m.uid}`), width: d, height: d, backgroundColor: m.color }}
+                  style={{ ...vt(`vt-member-${m.uid}`), width: d, height: d, ...personFill(m.photoURL, m.color) }}
                   className="rounded-full text-white flex flex-col items-center justify-center text-center p-2 shadow-md hover:scale-105 transition-transform flex-shrink-0"
                 >
                   <span className="text-xs font-bold truncate px-1 max-w-full">{m.name}</span>
@@ -168,7 +181,7 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
           </button>
 
           <div
-            style={{ ...vt(`vt-member-${active.uid}`), backgroundColor: active.color }}
+            style={{ ...vt(`vt-member-${active.uid}`), ...personFill(active.photoURL, active.color) }}
             className="flex-1 rounded-3xl text-white p-6 shadow-lg min-w-0"
           >
             <p className="text-xs font-bold uppercase tracking-wider opacity-80">Integrante</p>
@@ -200,7 +213,7 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
                   <button
                     key={m.uid}
                     onClick={() => openMember(m.uid)}
-                    style={{ ...vt(`vt-member-${m.uid}`), width: d, height: d, backgroundColor: m.color }}
+                    style={{ ...vt(`vt-member-${m.uid}`), width: d, height: d, ...personFill(m.photoURL, m.color) }}
                     className="rounded-full text-white flex flex-col items-center justify-center text-center p-1.5 shadow-md hover:scale-105 transition-transform opacity-80 hover:opacity-100"
                   >
                     <span className="text-[10px] font-bold truncate px-1 max-w-full">{m.name}</span>
@@ -216,7 +229,7 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
       {scene === 'history' && active && (
         <div className="flex-1 flex flex-col min-w-0">
           <div
-            style={{ ...vt(`vt-member-${active.uid}`), backgroundColor: active.color }}
+            style={{ ...vt(`vt-member-${active.uid}`), ...personFill(active.photoURL, active.color) }}
             className="rounded-2xl text-white p-4 flex items-center justify-between flex-shrink-0"
           >
             <div>

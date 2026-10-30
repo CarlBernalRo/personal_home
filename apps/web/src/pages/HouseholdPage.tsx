@@ -7,6 +7,7 @@ import { Plus, Copy, Users, LogIn, PlusCircle, ChevronDown, ChevronLeft, Setting
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Card } from '@/components/ui/Card'
+import { Avatar } from '@/components/ui/Avatar'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
@@ -189,7 +190,7 @@ export default function HouseholdPage() {
     setSaving(true)
     let id: string
     try {
-      id = (await createHousehold(user.uid, data.name, myDisplayName)).id
+      id = (await createHousehold(user.uid, data.name, myDisplayName, user.photoURL)).id
     } catch (err) {
       console.error('Error creando hogar:', err)
       showToast('Error al crear hogar', 'error')
@@ -220,7 +221,7 @@ export default function HouseholdPage() {
     setSaving(true)
     let id: string
     try {
-      id = (await joinHousehold(user.uid, data.code, myDisplayName)).id
+      id = (await joinHousehold(user.uid, data.code, myDisplayName, user.photoURL)).id
     } catch (err: any) {
       console.error('Error al unirse al hogar:', err)
       joinForm.setError('code', { message: err?.message ?? 'Código inválido' })
@@ -334,8 +335,9 @@ export default function HouseholdPage() {
   }
 
   // Names
-  const members     = (household?.members as string[] | undefined) ?? []
-  const memberNames = (household?.memberNames as Record<string, string> | undefined) ?? {}
+  const members      = (household?.members as string[] | undefined) ?? []
+  const memberNames  = (household?.memberNames as Record<string, string> | undefined) ?? {}
+  const memberPhotos = (household?.memberPhotos as Record<string, string | null> | undefined) ?? {}
   const partnerUid  = members.find((m: string) => m !== user?.uid)
     ?? (debts.find((d) => d.debtor !== user?.uid)?.debtor as string | null)
     ?? null
@@ -345,6 +347,8 @@ export default function HouseholdPage() {
     ? (memberNames[partnerUid]?.split(' ')[0]
         || (partnerUid.includes('@') ? partnerUid.split('@')[0].replace(/\d+/g, '').replace(/^./, (c: string) => c.toUpperCase()) : 'Pareja'))
     : 'Pareja'
+  const myPhoto      = user?.photoURL ?? null
+  const partnerPhoto = partnerUid ? (memberPhotos[partnerUid] ?? null) : null
 
   // The month selector only scopes "this cycle" REPORTING metrics (new activity
   // generated that month, and the payment history list). It must NOT hide unpaid
@@ -449,8 +453,8 @@ export default function HouseholdPage() {
   ]
 
   const expenseMembers = [
-    { uid: user?.uid ?? '', name: myName },
-    ...(partnerUid ? [{ uid: partnerUid, name: partnerName }] : []),
+    { uid: user?.uid ?? '', name: myName, photoURL: myPhoto },
+    ...(partnerUid ? [{ uid: partnerUid, name: partnerName, photoURL: partnerPhoto }] : []),
   ]
 
   if (loading) {
@@ -864,9 +868,7 @@ export default function HouseholdPage() {
                         onClick={() => setMyExpanded(!myExpanded)}
                         className="w-full flex items-center gap-3 px-5 py-4 hover:bg-gray-50/80 transition text-left"
                       >
-                        <div className="w-9 h-9 rounded-full bg-gray-900 flex items-center justify-center flex-shrink-0">
-                          <span className="text-white text-xs font-bold">{myName.slice(0,2).toUpperCase()}</span>
-                        </div>
+                        <Avatar name={myName} photoURL={myPhoto} size={36} color="#111827" />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-gray-900">{myName}</p>
                           <p className="text-[10px] text-gray-400">Responsable asignado</p>
@@ -910,9 +912,7 @@ export default function HouseholdPage() {
                           onClick={() => setPartnerExpanded(!partnerExpanded)}
                           className="w-full flex items-center gap-3 px-5 py-4 hover:bg-gray-50/80 transition text-left"
                         >
-                          <div className="w-9 h-9 rounded-full bg-purple-600 flex items-center justify-center flex-shrink-0">
-                            <span className="text-white text-xs font-bold">{partnerName.slice(0,2).toUpperCase()}</span>
-                          </div>
+                          <Avatar name={partnerName} photoURL={partnerPhoto} size={36} color="#7c3aed" />
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-semibold text-gray-900">{partnerName}</p>
                             <p className="text-[10px] text-gray-400">Co-titular hogar</p>
@@ -993,6 +993,7 @@ export default function HouseholdPage() {
 
                       {fullLedger.rows.map((ev, idx) => {
                         const who  = ev.isMe ? myName : partnerName
+                        const whoPhoto  = ev.isMe ? myPhoto : partnerPhoto
                         const nodeColor = ev.isMe ? '#111827' : '#7c3aed'
                         const kindLabel = ev.kind === 'deuda' ? 'debe' : ev.kind === 'abono' ? 'abonó' : 'cruzó'
                         const owesNow = ev.diffAfter > 0 ? myName : ev.diffAfter < 0 ? partnerName : null
@@ -1005,12 +1006,7 @@ export default function HouseholdPage() {
                         return (
                           <div key={idx} className="relative flex gap-3 pb-3 last:pb-0">
                             <div className="relative z-10 flex-shrink-0 mt-0.5">
-                              <div
-                                className="w-[22px] h-[22px] rounded-full flex items-center justify-center text-white text-[9px] font-bold shadow-sm ring-2 ring-white"
-                                style={{ backgroundColor: nodeColor }}
-                              >
-                                {who.slice(0, 2).toUpperCase()}
-                              </div>
+                              <Avatar name={who} photoURL={whoPhoto} size={22} color={nodeColor} className="text-[9px]" />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start justify-between gap-2">
