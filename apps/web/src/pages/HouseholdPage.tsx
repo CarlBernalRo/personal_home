@@ -349,6 +349,20 @@ export default function HouseholdPage() {
   const myDebts       = debts.filter((d: any) => d.debtor === user?.uid)
   const partnerDebts  = partnerUid ? debts.filter((d: any) => d.debtor === partnerUid) : []
 
+  // A crossing nets two real debts against each other — it only makes sense
+  // when the counterpart actually owes something back. Without this, "Cruzar"
+  // would let you net a debt against a counterpart who's already al día.
+  function pendingDebtsOf(uid: string | null | undefined) {
+    if (!uid) return []
+    return debts.filter((d: any) => d.debtor === uid && d.tipo === 'Deuda' && (d.amount - ((d.crossedAmount as number) || 0)) > 0)
+  }
+  function counterpartOf(d: any): string | null | undefined {
+    return d.debtor === user?.uid ? partnerUid : user?.uid
+  }
+  function counterpartPendingDebts(d: any) {
+    return pendingDebtsOf(counterpartOf(d))
+  }
+
   // "This cycle" reporting — new activity generated within the selected month only.
   const totalGen     = monthDebts.filter(d => d.tipo === 'Deuda').reduce((s: number, d: any) => s + d.amount, 0)
   const totalCruzado = monthDebts.filter(d => d.tipo === 'Deuda').reduce((s: number, d: any) => s + ((d.crossedAmount as number) || 0), 0)
@@ -649,9 +663,17 @@ export default function HouseholdPage() {
                   {selectedDebt.notas && (
                     <p className="text-xs text-gray-500 bg-gray-50 rounded-xl p-3">{selectedDebt.notas}</p>
                   )}
+                  {counterpartPendingDebts(selectedDebt).length === 0 && (
+                    <p className="text-[11px] text-gray-400 bg-gray-50 rounded-xl p-2.5">
+                      No se puede cruzar: {selectedDebt.debtor === user?.uid ? partnerName : myName} no tiene deudas pendientes.
+                    </p>
+                  )}
                   <div className="flex gap-2">
-                    <button onClick={() => { setCrossTarget(selectedDebt); setSelectedDebt(null) }}
-                      className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-700 hover:border-purple-300 hover:text-purple-700 hover:bg-purple-50 transition flex items-center justify-center gap-2">
+                    <button
+                      onClick={() => { setCrossTarget(selectedDebt); setSelectedDebt(null) }}
+                      disabled={counterpartPendingDebts(selectedDebt).length === 0}
+                      title={counterpartPendingDebts(selectedDebt).length === 0 ? 'La otra persona no tiene deudas pendientes para cruzar' : undefined}
+                      className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-700 hover:border-purple-300 hover:text-purple-700 hover:bg-purple-50 transition flex items-center justify-center gap-2 disabled:opacity-40 disabled:hover:border-gray-200 disabled:hover:text-gray-700 disabled:hover:bg-transparent disabled:cursor-not-allowed">
                       <GitMerge size={14} /> Cruzar deuda
                     </button>
                     <button onClick={() => { handleSaldar(selectedDebt); setSelectedDebt(null) }}
@@ -838,6 +860,7 @@ export default function HouseholdPage() {
                           <BalanceBreakdown name={myName} {...myBreakdown} />
                           <PersonDebtGroups
                             personDebts={myDebts}
+                            canCross={pendingDebtsOf(partnerUid).length > 0}
                             onCross={(d) => setCrossTarget(d)}
                             onSaldar={(d) => handleSaldar(d)}
                             onSelect={(d) => setSelectedDebt(d)}
@@ -883,6 +906,7 @@ export default function HouseholdPage() {
                             <BalanceBreakdown name={partnerName} {...partnerBreakdown} />
                             <PersonDebtGroups
                               personDebts={partnerDebts}
+                              canCross={pendingDebtsOf(user?.uid).length > 0}
                               onCross={(d) => setCrossTarget(d)}
                               onSaldar={(d) => handleSaldar(d)}
                               onSelect={(d) => setSelectedDebt(d)}
@@ -1004,7 +1028,7 @@ export default function HouseholdPage() {
         <CrossingModal
           debt={crossTarget}
           counterPersonId={crossTarget.debtor === user?.uid ? (partnerUid ?? '') : (user?.uid ?? '')}
-          partnerNet={crossTarget.debtor === user?.uid ? partnerNet : myNet}
+          counterpartDebts={counterpartPendingDebts(crossTarget)}
           myName={myName}
           partnerName={partnerName}
           userUid={user?.uid}
@@ -1175,8 +1199,9 @@ function BalanceBreakdown({ name, deuda, abono, cruzado, saldo }: {
   )
 }
 
-function PersonDebtGroups({ personDebts, onCross, onSaldar, onSelect }: {
+function PersonDebtGroups({ personDebts, canCross, onCross, onSaldar, onSelect }: {
   personDebts: any[]
+  canCross: boolean
   onCross: (d: any) => void
   onSaldar: (d: any) => void
   onSelect: (d: any) => void
@@ -1199,6 +1224,7 @@ function PersonDebtGroups({ personDebts, onCross, onSaldar, onSelect }: {
           </p>
           {pendientes.map((d: any) => (
             <DebtItem key={d.id} d={d}
+              canCross={canCross}
               onCross={() => onCross(d)}
               onSaldar={() => onSaldar(d)}
               onSelect={() => onSelect(d)}
@@ -1261,8 +1287,9 @@ function StatusItem({ d, label, labelCls, onSelect }: {
 }
 
 // ── Compact debt item for the new panel layout ────────────────────────────────
-function DebtItem({ d, onCross, onSaldar, onSelect }: {
+function DebtItem({ d, canCross, onCross, onSaldar, onSelect }: {
   d: any
+  canCross: boolean
   onCross: () => void
   onSaldar: () => void
   onSelect: () => void
@@ -1297,8 +1324,9 @@ function DebtItem({ d, onCross, onSaldar, onSelect }: {
         </div>
       </button>
       <div className="flex gap-1.5">
-        <button onClick={onCross}
-          className="flex-1 py-1.5 rounded-lg border border-gray-200 text-[11px] font-semibold text-gray-600 hover:border-purple-300 hover:text-purple-700 hover:bg-purple-50 transition flex items-center justify-center gap-1">
+        <button onClick={onCross} disabled={!canCross}
+          title={canCross ? undefined : 'La otra persona no tiene deudas pendientes para cruzar'}
+          className="flex-1 py-1.5 rounded-lg border border-gray-200 text-[11px] font-semibold text-gray-600 hover:border-purple-300 hover:text-purple-700 hover:bg-purple-50 transition flex items-center justify-center gap-1 disabled:opacity-40 disabled:hover:border-gray-200 disabled:hover:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed">
           <GitMerge size={11} /> Cruzar
         </button>
         <button onClick={onSaldar}
@@ -1312,28 +1340,44 @@ function DebtItem({ d, onCross, onSaldar, onSelect }: {
 
 
 // ── Crossing modal ────────────────────────────────────────────────────────────
-function CrossingModal({ debt, counterPersonId, partnerNet, myName, partnerName, userUid, saving, onConfirm, onClose }: {
-  debt: any; counterPersonId: string; partnerNet: number
+// A crossing nets two real debts against each other, so it always needs a
+// specific counter-debt — "cruzar contra el saldo total" would let you net a
+// debt against someone who doesn't actually owe anything back.
+function CrossingModal({ debt, counterPersonId, counterpartDebts, myName, partnerName, userUid, saving, onConfirm, onClose }: {
+  debt: any; counterPersonId: string; counterpartDebts: any[]
   myName: string; partnerName: string; userUid?: string; saving: boolean
-  onConfirm: (counterDebt: null, counterPersonId: string, amount: number, notes: string) => void
+  onConfirm: (counterDebt: any, counterPersonId: string, amount: number, notes: string) => void
   onClose: () => void
 }) {
   const isMe        = debt.debtor === userUid
   const who         = isMe ? myName : partnerName
   const counterName = isMe ? partnerName : myName
   const remaining   = debt.amount - ((debt.crossedAmount as number) || 0)
-  const maxAmount   = Math.min(remaining, Math.max(0, partnerNet))
+
+  const [counterId, setCounterId] = useState(counterpartDebts[0]?.id ?? '')
+  const counterDebt     = counterpartDebts.find((d) => d.id === counterId) ?? null
+  const counterRemaining = counterDebt ? counterDebt.amount - ((counterDebt.crossedAmount as number) || 0) : 0
+  const maxAmount        = Math.min(remaining, counterRemaining)
 
   const [amount, setAmount] = useState(maxAmount)
   const [notes, setNotes]   = useState('')
   const [err, setErr]       = useState('')
 
-  function handleConfirm() {
-    if (amount <= 0)          { setErr('El monto debe ser mayor a 0'); return }
-    if (amount > remaining)   { setErr(`Máximo ${formatCOP(remaining)} (saldo de esta deuda)`); return }
-    if (amount > partnerNet)  { setErr(`Máximo ${formatCOP(partnerNet)} (saldo neto de ${counterName})`); return }
+  function handleSelectCounter(id: string) {
+    setCounterId(id)
+    const d = counterpartDebts.find((x) => x.id === id)
+    const rem = d ? d.amount - ((d.crossedAmount as number) || 0) : 0
+    setAmount(Math.min(remaining, rem))
     setErr('')
-    onConfirm(null, counterPersonId, amount, notes)
+  }
+
+  function handleConfirm() {
+    if (!counterDebt)           { setErr(`${counterName} no tiene deudas pendientes para cruzar`); return }
+    if (amount <= 0)             { setErr('El monto debe ser mayor a 0'); return }
+    if (amount > remaining)      { setErr(`Máximo ${formatCOP(remaining)} (saldo de esta deuda)`); return }
+    if (amount > counterRemaining) { setErr(`Máximo ${formatCOP(counterRemaining)} (lo que ${counterName} debe en esa deuda)`); return }
+    setErr('')
+    onConfirm(counterDebt, counterPersonId, amount, notes)
   }
 
   return (
@@ -1348,24 +1392,40 @@ function CrossingModal({ debt, counterPersonId, partnerNet, myName, partnerName,
           </p>
         </div>
 
-        {/* Saldo contraparte */}
-        <div className="bg-amber-50 rounded-2xl p-3.5 space-y-0.5">
-          <p className="text-xs text-amber-600 font-semibold">Saldo neto de {counterName}</p>
-          <p className="text-sm font-bold text-gray-800">{formatCOP(Math.max(0, partnerNet))}</p>
-          <p className="text-[10px] text-gray-400">Total de todas sus deudas pendientes</p>
-        </div>
+        {counterpartDebts.length === 0 ? (
+          <div className="bg-gray-50 rounded-2xl p-3.5">
+            <p className="text-sm text-gray-600">{counterName} no tiene deudas pendientes — no hay nada contra qué cruzar.</p>
+          </div>
+        ) : (
+          <>
+            {/* Deuda de la contraparte a cruzar contra */}
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-gray-600">Deuda de {counterName} a cruzar</label>
+              <select
+                value={counterId}
+                onChange={(e) => handleSelectCounter(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300 bg-white"
+              >
+                {counterpartDebts.map((d) => {
+                  const rem = d.amount - ((d.crossedAmount as number) || 0)
+                  return <option key={d.id} value={d.id}>{d.concept} · {formatCOP(rem)} pendiente</option>
+                })}
+              </select>
+            </div>
 
-        {/* Monto */}
-        <div className="space-y-1">
-          <label className="text-xs font-semibold text-gray-600">Monto a cruzar (COP)</label>
-          <input
-            type="number"
-            value={amount}
-            onChange={(e) => setAmount(Number(e.target.value))}
-            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
-          />
-          <p className="text-[10px] text-gray-400">Máx. {formatCOP(maxAmount)}</p>
-        </div>
+            {/* Monto */}
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-gray-600">Monto a cruzar (COP)</label>
+              <input
+                type="number"
+                value={amount}
+                onChange={(e) => setAmount(Number(e.target.value))}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
+              />
+              <p className="text-[10px] text-gray-400">Máx. {formatCOP(maxAmount)} — el menor entre ambas deudas</p>
+            </div>
+          </>
+        )}
 
         {/* Notas */}
         <div className="space-y-1">
@@ -1387,7 +1447,7 @@ function CrossingModal({ debt, counterPersonId, partnerNet, myName, partnerName,
           </button>
           <button
             onClick={handleConfirm}
-            disabled={saving}
+            disabled={saving || !counterDebt}
             className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700 transition disabled:opacity-50 flex items-center justify-center gap-1.5"
           >
             <GitMerge size={14} /> {saving ? 'Cruzando…' : 'Confirmar cruce'}
