@@ -27,6 +27,7 @@ import type { CrossingAllocation } from '@/lib/firestore'
 import { formatCOP, HOUSEHOLD_DEBT_CATEGORIES } from '@/shared'
 import { HouseholdExpenseModal } from '@/components/household/HouseholdExpenseModal'
 import { FinanceExplorer } from '@/components/household/FinanceExplorer'
+import { HouseholdPicker } from '@/components/household/HouseholdPicker'
 import { clsx } from 'clsx'
 
 const CAT_OPTIONS = HOUSEHOLD_DEBT_CATEGORIES.map((c) => ({
@@ -92,6 +93,14 @@ export default function HouseholdPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [hhMenuOpen])
 
+  /** Same morph-on-navigate trick as HouseholdPicker/FinanceExplorer, so
+   *  leaving a household flows back into its picker card instead of a hard cut. */
+  function goToPicker(fn: () => void) {
+    const anyDoc = document as any
+    if (typeof anyDoc.startViewTransition === 'function') anyDoc.startViewTransition(fn)
+    else fn()
+  }
+
   function shiftMonth(delta: number) {
     setSelectedMonth((prev) => { const d = new Date(prev); d.setMonth(d.getMonth() + delta); return d })
   }
@@ -115,7 +124,6 @@ export default function HouseholdPage() {
       try {
         const hhs = await getHouseholds(hhIds)
         setHouseholds(hhs)
-        if (hhs.length > 0 && !activeId) setActiveId(hhs[0].id as string)
       } catch (err) {
         console.error('Error cargando hogares:', err)
         showToast('No se pudieron cargar los hogares', 'error')
@@ -505,23 +513,34 @@ export default function HouseholdPage() {
         )}
       </div>
 
-      {/* No households */}
-      {households.length === 0 && (
-        <Card className="text-center py-14 space-y-4">
-          <Users size={48} className="mx-auto text-gray-200" />
-          <div>
-            <p className="text-sm font-semibold text-gray-700">Sin hogares configurados</p>
-            <p className="text-xs text-gray-400 mt-1">Crea un hogar o únete con un código</p>
-          </div>
-          <div className="flex gap-3 justify-center">
-            <Button onClick={() => setOpenCreate(true)} size="sm"><PlusCircle size={15} /> Crear hogar</Button>
-            <Button onClick={() => setOpenJoin(true)} variant="secondary" size="sm"><LogIn size={15} /> Unirme</Button>
-          </div>
-        </Card>
+      {/* Pantalla previa: elegir a qué hogar entrar (o crear/unirse si no hay ninguno) */}
+      {!household && (
+        <HouseholdPicker
+          households={households}
+          currentUserUid={user?.uid ?? ''}
+          onSelect={setActiveId}
+          onCreateNew={() => setOpenCreate(true)}
+          onJoin={() => setOpenJoin(true)}
+        />
       )}
 
       {household && (
         <>
+          {/* Encabezado: volver a elegir hogar */}
+          <div
+            style={{ viewTransitionName: `vt-household-${activeId}` } as React.CSSProperties}
+            className="hidden md:flex items-center gap-2"
+          >
+            <button
+              onClick={() => goToPicker(() => setActiveId(null))}
+              className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 hover:text-gray-700 transition"
+            >
+              <ArrowLeft size={13} /> Hogares
+            </button>
+            <span className="text-gray-200">/</span>
+            <span className="text-sm font-bold text-gray-800">{household.name as string}</span>
+          </div>
+
           {/* Toolbar: filtro de mes + acciones del hogar, todo en un solo componente */}
           <div className="flex flex-wrap items-center gap-2 bg-white border border-gray-100 rounded-2xl px-3 py-2.5">
             <div className="flex items-center gap-0.5 bg-gray-50 rounded-xl px-1 py-1">
