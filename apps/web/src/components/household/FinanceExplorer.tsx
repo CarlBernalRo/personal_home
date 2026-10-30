@@ -234,10 +234,11 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
                 <div className="absolute left-[11px] top-1 bottom-1 w-px bg-gray-100" />
                 {memberDebts.map((d: any) => {
                   const crossed   = (d.crossedAmount as number) || 0
-                  const remaining = d.amount - crossed
+                  const paidAbono = (d.paidAbono as number) || 0
+                  const remaining = Math.max(0, d.amount - crossed - paidAbono)
                   const dueDate   = d.dueDate ? (d.dueDate instanceof Date ? d.dueDate : new Date(d.dueDate)) : null
                   const overdue   = dueDate ? dueDate < new Date() : false
-                  const settled   = d.tipo === 'Abono' || d.cruzado
+                  const settled   = d.tipo === 'Abono' || d.cruzado || (d.tipo === 'Deuda' && remaining <= 0)
                   return (
                     <button
                       key={d.id}
