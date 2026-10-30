@@ -8,6 +8,7 @@ import type {
   NewExpense, NewAccount, NewSavingsGoal,
   NewFixedExpense, NewFixedExpensePayment,
   NewIncome, NewHouseholdDebt, NewHouseholdExpense,
+  CrossingAllocation,
 } from '@/shared'
 import { resolveExpenseShares, sharesToDebtors } from '@/shared'
 
@@ -334,8 +335,6 @@ export function calcNetBalance(
 }
 
 // ── Household Crossings ───────────────────────────────────────────────────────
-
-export interface CrossingAllocation { debtId: string; amount: number }
 
 /**
  * Crosses one debt against one or more of the counterpart's pending debts in a

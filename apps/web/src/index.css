@@ -44,6 +44,175 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ── Retro-futuristic accents (inspirations/2026-07-24-futuristic-css-theme-switcher) ──
+   Reinterpreted with broadly-supported CSS instead of the original's
+   experimental corner-shape/if()/style() — clip-path + box-shadow + color-mix
+   give the same "cut corner, neon glow" read on every current browser. Used
+   selectively (primary CTAs, cards, bubbles), not as a full reskin. */
+
+.notch {
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+}
+.notch-sm {
+  clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+}
+.notch-lg {
+  clip-path: polygon(20px 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%, 0 20px);
+}
+
+.glow-brand {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--brand), transparent 35%),
+    0 0 14px color-mix(in oklab, var(--brand), transparent 55%),
+    0 0 30px color-mix(in oklab, var(--brand), transparent 78%);
+}
+/* Tailwind's hover: prefix only targets Tailwind-known utilities, not these
+   plain CSS classes — so hover/focus variants are their own explicit rules. */
+.glow-brand-hover:hover,
+.glow-brand-hover:focus-visible {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--brand), transparent 35%),
+    0 0 14px color-mix(in oklab, var(--brand), transparent 55%),
+    0 0 30px color-mix(in oklab, var(--brand), transparent 78%);
+}
+.glow-purple-hover:hover,
+.glow-purple-hover:focus-visible {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, #7c3aed, transparent 35%),
+    0 0 14px color-mix(in oklab, #7c3aed, transparent 55%),
+    0 0 30px color-mix(in oklab, #7c3aed, transparent 78%);
+}
+.glow-brand-sm {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--brand), transparent 40%),
+    0 0 8px color-mix(in oklab, var(--brand), transparent 65%);
+}
+.glow-purple {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, #7c3aed, transparent 35%),
+    0 0 14px color-mix(in oklab, #7c3aed, transparent 55%),
+    0 0 30px color-mix(in oklab, #7c3aed, transparent 78%);
+}
+
+.font-pixel {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+/* ── Hogar dark theme scope ─────────────────────────────────────────────
+   Scoped color remap for the Household screens (picker, toolbar, classic
+   summary panel, modals) — everything EXCEPT the interactive Finance
+   Explorer, which stays light/pending by design. `.hh-dark X` beats a bare
+   Tailwind utility `X` on specificity alone (two classes vs one), so this
+   works without !important and never leaks outside elements wrapped in
+   `.hh-dark`. */
+.hh-dark { color: #f3f5f6; }
+.hh-dark .bg-white { background-color: #12161a; }
+.hh-dark .bg-gray-50 { background-color: #181d22; }
+.hh-dark .bg-gray-50\/60 { background-color: rgba(24, 29, 34, 0.6); }
+.hh-dark .bg-gray-50\/80 { background-color: rgba(24, 29, 34, 0.8); }
+.hh-dark .bg-gray-100 { background-color: #1c2227; }
+.hh-dark .bg-gray-900 { background-color: var(--brand); }
+.hh-dark .border-gray-50 { border-color: rgba(255, 255, 255, 0.06); }
+.hh-dark .border-gray-100 { border-color: rgba(255, 255, 255, 0.08); }
+.hh-dark .border-gray-200 { border-color: rgba(255, 255, 255, 0.14); }
+.hh-dark .border-gray-300 { border-color: rgba(255, 255, 255, 0.2); }
+.hh-dark .border-red-200 { border-color: rgba(248, 113, 113, 0.35); }
+.hh-dark .text-gray-900 { color: #f3f5f6; }
+.hh-dark .text-gray-800 { color: #f3f5f6; }
+.hh-dark .text-gray-700 { color: #e4e6e8; }
+.hh-dark .text-gray-600 { color: #c7ccd1; }
+.hh-dark .text-gray-500 { color: #9aa4ac; }
+.hh-dark .text-gray-400 { color: #8a929a; }
+.hh-dark .text-gray-300 { color: #5f6a72; }
+.hh-dark .text-gray-200 { color: #3a4046; }
+.hh-dark .hover\:bg-gray-50:hover { background-color: #181d22; }
+.hh-dark .hover\:bg-gray-50\/80:hover { background-color: rgba(24, 29, 34, 0.8); }
+.hh-dark .hover\:bg-gray-100:hover { background-color: #1c2227; }
+.hh-dark .hover\:bg-gray-200:hover { background-color: #242b31; }
+.hh-dark .hover\:bg-gray-800:hover { background-color: #0d4322; }
+.hh-dark .hover\:text-gray-400:hover { color: #9aa4ac; }
+.hh-dark .hover\:text-gray-600:hover { color: #c7ccd1; }
+.hh-dark .hover\:text-gray-700:hover { color: #f3f5f6; }
+.hh-dark .hover\:text-gray-800:hover { color: #f3f5f6; }
+.hh-dark .hover\:border-gray-200:hover { border-color: rgba(255, 255, 255, 0.14); }
+.hh-dark .bg-amber-50 { background-color: rgba(251, 191, 36, 0.12); }
+.hh-dark .bg-amber-100 { background-color: rgba(251, 191, 36, 0.16); }
+.hh-dark .text-amber-600 { color: #fbbf24; }
+.hh-dark .text-amber-700 { color: #fbbf24; }
+.hh-dark .bg-blue-100 { background-color: rgba(96, 165, 250, 0.14); }
+.hh-dark .text-blue-700 { color: #93c5fd; }
+.hh-dark .bg-purple-50 { background-color: rgba(167, 139, 250, 0.12); }
+.hh-dark .bg-purple-50\/60 { background-color: rgba(167, 139, 250, 0.08); }
+.hh-dark .bg-purple-100 { background-color: rgba(167, 139, 250, 0.16); }
+.hh-dark .bg-purple-600 { background-color: #a78bfa; }
+.hh-dark .text-purple-500 { color: #a78bfa; }
+.hh-dark .text-purple-600 { color: #a78bfa; }
+.hh-dark .text-purple-700 { color: #c4b5fd; }
+.hh-dark .hover\:bg-purple-50:hover { background-color: rgba(167, 139, 250, 0.12); }
+.hh-dark .hover\:bg-purple-700:hover { background-color: #8b6fe0; }
+.hh-dark .hover\:border-purple-300:hover { border-color: rgba(167, 139, 250, 0.5); }
+.hh-dark .hover\:text-purple-700:hover { color: #c4b5fd; }
+.hh-dark .bg-red-50 { background-color: rgba(248, 113, 113, 0.12); }
+.hh-dark .hover\:bg-red-50:hover { background-color: rgba(248, 113, 113, 0.14); }
+.hh-dark .hover\:border-red-300:hover { border-color: rgba(248, 113, 113, 0.5); }
+.hh-dark .text-red-500 { color: #f87171; }
+.hh-dark .text-red-600 { color: #f87171; }
+.hh-dark input,
+.hh-dark select,
+.hh-dark textarea {
+  background-color: #181d22;
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #f3f5f6;
+}
+.hh-dark input::placeholder,
+.hh-dark textarea::placeholder { color: #5f6a72; }
+.hh-dark input:focus,
+.hh-dark select:focus,
+.hh-dark textarea:focus { border-color: var(--brand); }
+.hh-dark .skeleton {
+  background: linear-gradient(90deg, #181d22 25%, #1c2227 50%, #181d22 75%);
+  background-size: 200% 100%;
+}
+
+.glow-purple-sm {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, #a78bfa, transparent 40%),
+    0 0 8px color-mix(in oklab, #a78bfa, transparent 65%);
+}
+
+/* $/COP affixes inside a currency input — wrapper must be position:relative,
+   input needs matching left/right padding to clear the glyphs. */
+.currency-field { position: relative; }
+.currency-field input { padding-left: 26px !important; }
+.currency-field.has-suffix input { padding-right: 42px !important; }
+.currency-affix-prefix,
+.currency-affix-suffix {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 13px;
+  font-weight: 600;
+  color: #9aa4ac;
+  pointer-events: none;
+}
+.currency-affix-prefix { left: 12px; }
+.currency-affix-suffix { right: 12px; font-size: 11px; font-weight: 500; color: #5f6a72; }
+
+/* Shared timing for the native View Transitions API (Finance Explorer,
+   Household Picker, and the classic/interactive view switch) — a touch
+   slower than the browser default so navigation reads as a deliberate
+   "presentation" move rather than a snap-cut. */
+::view-transition-group(*) {
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+::view-transition-old(*),
+::view-transition-new(*) {
+  animation-duration: 220ms;
+}
+
 .skeleton {
   background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
   background-size: 200% 100%;

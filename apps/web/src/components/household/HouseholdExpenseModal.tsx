@@ -135,10 +135,26 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
   })()
 
   return (
-    <Modal open={open} onClose={() => { onClose(); resetForm() }} title="Nuevo gasto compartido">
+    <Modal open={open} onClose={() => { onClose(); resetForm() }} title="Nuevo gasto compartido" dark>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <Input label="Descripción" placeholder="ej. Mueble para la sala" {...register('description')} error={errors.description?.message} />
-        <Input label="Monto total (COP)" type="number" placeholder="0" {...register('amount')} error={errors.amount?.message} />
+
+        <div className="flex flex-col gap-1">
+          <label className="text-sm font-medium text-gray-700">Monto total</label>
+          <div className="currency-field has-suffix">
+            <span className="currency-affix-prefix">$</span>
+            <input
+              type="number"
+              placeholder="0"
+              {...register('amount')}
+              className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+              aria-label="Monto total en pesos colombianos"
+            />
+            <span className="currency-affix-suffix">COP</span>
+          </div>
+          {errors.amount?.message && <p className="text-xs text-red-500">{errors.amount.message}</p>}
+        </div>
+
         <Select label="¿Quién pagó?" options={members.map((m) => ({ value: m.uid, label: m.name }))} {...register('paidBy')} />
         <Select label="Categoría" options={CAT_OPTIONS} {...register('category')} />
         <Input label="Fecha del gasto" type="date" {...register('date')} />
@@ -146,13 +162,22 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
         <Select label="¿Cómo se divide?" options={SPLIT_OPTIONS} {...register('splitMode')} />
 
         {splitMode !== 'equal' && other && (
-          <Input
-            label={splitMode === 'percentage' ? `% que le corresponde a ${other.name}` : `Monto que le corresponde a ${other.name} (COP)`}
-            type="number"
-            placeholder={splitMode === 'percentage' ? '50' : '400000'}
-            {...register('partnerShareInput')}
-            error={errors.partnerShareInput?.message}
-          />
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium text-gray-700">
+              {splitMode === 'percentage' ? `Porcentaje que le corresponde a ${other.name}` : `Monto que le corresponde a ${other.name}`}
+            </label>
+            <div className="currency-field">
+              <span className="currency-affix-prefix">{splitMode === 'percentage' ? '%' : '$'}</span>
+              <input
+                type="number"
+                placeholder={splitMode === 'percentage' ? '50' : '400000'}
+                {...register('partnerShareInput')}
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                aria-label={splitMode === 'percentage' ? `Porcentaje para ${other.name}` : `Monto para ${other.name} en pesos colombianos`}
+              />
+            </div>
+            {errors.partnerShareInput?.message && <p className="text-xs text-red-500">{errors.partnerShareInput.message}</p>}
+          </div>
         )}
 
         {otherPreview !== null && other && (

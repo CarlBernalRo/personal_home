@@ -4,7 +4,7 @@ import { es } from 'date-fns/locale'
 import { ChevronRight, Clock, GitMerge } from 'lucide-react'
 import { clsx } from 'clsx'
 import { calcNetBalance } from '@/lib/firestore'
-import { formatCOP } from '@/shared'
+import { formatCOP, remainingOf } from '@/shared'
 
 // Colors beyond "me" follow the app's established identity (purple-600 for the
 // partner), then fall back to the dataviz categorical ramp for a 3rd+ member —
@@ -26,6 +26,14 @@ function personFill(photoURL: string | null | undefined, color: string): React.C
     backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.6)), url(${photoURL})`,
     backgroundSize: 'cover',
     backgroundPosition: 'center',
+  }
+}
+
+/** A soft neon halo in the person's own identity color — can't be a static
+ *  CSS class since the color varies per member, so it's computed inline. */
+function personGlow(color: string): React.CSSProperties {
+  return {
+    boxShadow: `0 0 0 1px color-mix(in oklab, ${color}, transparent 35%), 0 0 18px color-mix(in oklab, ${color}, transparent 60%)`,
   }
 }
 
@@ -114,7 +122,7 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
     : []
 
   return (
-    <div className="bg-white border border-gray-100 rounded-2xl p-5 md:p-8 min-h-[520px] flex flex-col">
+    <div className="notch-lg bg-white border border-gray-100 p-5 md:p-8 min-h-[520px] flex flex-col">
       {/* Breadcrumb — always reflects where you are, always lets you jump back */}
       <div className="flex items-center gap-1.5 text-xs font-semibold mb-6 flex-shrink-0">
         <button onClick={backToHome} className={clsx('px-2 py-1 rounded-lg transition', scene === 'home' ? 'text-gray-900 bg-gray-100' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-50')}>
@@ -141,9 +149,9 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
         <div className="flex-1 flex items-center justify-center flex-wrap gap-10 md:gap-16">
           <div
             style={vt('vt-hogar')}
-            className="w-44 h-44 md:w-52 md:h-52 rounded-full bg-brand-600 text-white flex flex-col items-center justify-center text-center p-4 shadow-lg flex-shrink-0"
+            className="glow-brand w-44 h-44 md:w-52 md:h-52 rounded-full bg-brand-600 text-white flex flex-col items-center justify-center text-center p-4 shadow-lg flex-shrink-0"
           >
-            <p className="text-[10px] font-bold uppercase tracking-wider opacity-80">Hogar</p>
+            <p className="font-pixel text-[9px] uppercase tracking-wider opacity-80">Hogar</p>
             <p className="text-sm font-bold mt-1 px-2 leading-tight">{householdName}</p>
             <p className="text-lg font-black mt-2 tabular-nums">
               {totalPendiente > 0 ? formatCOP(totalPendiente) : 'Al día'}
@@ -158,8 +166,8 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
                 <button
                   key={m.uid}
                   onClick={() => openMember(m.uid)}
-                  style={{ ...vt(`vt-member-${m.uid}`), width: d, height: d, ...personFill(m.photoURL, m.color) }}
-                  className="rounded-full text-white flex flex-col items-center justify-center text-center p-2 shadow-md hover:scale-105 transition-transform flex-shrink-0"
+                  style={{ ...vt(`vt-member-${m.uid}`), width: d, height: d, ...personFill(m.photoURL, m.color), ...personGlow(m.color) }}
+                  className="rounded-full text-white flex flex-col items-center justify-center text-center p-2 hover:scale-105 transition-transform flex-shrink-0"
                 >
                   <span className="text-xs font-bold truncate px-1 max-w-full">{m.name}</span>
                   <span className="text-[11px] font-semibold tabular-nums opacity-90 mt-0.5">
@@ -176,15 +184,15 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
       {scene === 'member' && active && (
         <div className="flex-1 flex items-start gap-5">
           <button onClick={backToHome} style={vt('vt-hogar')}
-            className="w-16 h-16 rounded-full bg-brand-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0 hover:scale-105 transition-transform">
+            className="glow-brand-sm w-16 h-16 rounded-full bg-brand-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0 hover:scale-105 transition-transform">
             {householdName.slice(0, 2).toUpperCase()}
           </button>
 
           <div
-            style={{ ...vt(`vt-member-${active.uid}`), ...personFill(active.photoURL, active.color) }}
-            className="flex-1 rounded-3xl text-white p-6 shadow-lg min-w-0"
+            style={{ ...vt(`vt-member-${active.uid}`), ...personFill(active.photoURL, active.color), ...personGlow(active.color) }}
+            className="notch-lg flex-1 text-white p-6 min-w-0"
           >
-            <p className="text-xs font-bold uppercase tracking-wider opacity-80">Integrante</p>
+            <p className="font-pixel text-[9px] uppercase tracking-wider opacity-80">Integrante</p>
             <p className="text-2xl font-black mt-1">{active.name}</p>
             <p className="text-sm font-semibold mt-0.5 opacity-90">
               {active.net > 0 ? `Debe ${formatCOP(active.net)}` : 'Al día'}
@@ -199,7 +207,7 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
             <button
               onClick={openHistory}
               style={vt(`vt-history-${active.uid}`)}
-              className="mt-6 w-full md:w-auto px-5 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 text-sm font-semibold transition flex items-center justify-center gap-2"
+              className="notch-sm mt-6 w-full md:w-auto px-5 py-2.5 bg-white/15 hover:bg-white/25 text-sm font-semibold transition flex items-center justify-center gap-2"
             >
               Ver historial <ChevronRight size={14} />
             </button>
@@ -213,8 +221,8 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
                   <button
                     key={m.uid}
                     onClick={() => openMember(m.uid)}
-                    style={{ ...vt(`vt-member-${m.uid}`), width: d, height: d, ...personFill(m.photoURL, m.color) }}
-                    className="rounded-full text-white flex flex-col items-center justify-center text-center p-1.5 shadow-md hover:scale-105 transition-transform opacity-80 hover:opacity-100"
+                    style={{ ...vt(`vt-member-${m.uid}`), width: d, height: d, ...personFill(m.photoURL, m.color), ...personGlow(m.color) }}
+                    className="rounded-full text-white flex flex-col items-center justify-center text-center p-1.5 hover:scale-105 transition-transform opacity-80 hover:opacity-100"
                   >
                     <span className="text-[10px] font-bold truncate px-1 max-w-full">{m.name}</span>
                   </button>
@@ -229,11 +237,11 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
       {scene === 'history' && active && (
         <div className="flex-1 flex flex-col min-w-0">
           <div
-            style={{ ...vt(`vt-member-${active.uid}`), ...personFill(active.photoURL, active.color) }}
-            className="rounded-2xl text-white p-4 flex items-center justify-between flex-shrink-0"
+            style={{ ...vt(`vt-member-${active.uid}`), ...personFill(active.photoURL, active.color), ...personGlow(active.color) }}
+            className="notch text-white p-4 flex items-center justify-between flex-shrink-0"
           >
             <div>
-              <p className="text-xs font-bold uppercase tracking-wider opacity-80">Historial de</p>
+              <p className="font-pixel text-[9px] uppercase tracking-wider opacity-80">Historial de</p>
               <p className="text-lg font-black">{active.name}</p>
             </div>
             <p className="text-sm font-semibold opacity-90">{memberDebts.length} movimientos</p>
@@ -246,9 +254,7 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
               <div className="relative">
                 <div className="absolute left-[11px] top-1 bottom-1 w-px bg-gray-100" />
                 {memberDebts.map((d: any) => {
-                  const crossed   = (d.crossedAmount as number) || 0
-                  const paidAbono = (d.paidAbono as number) || 0
-                  const remaining = Math.max(0, d.amount - crossed - paidAbono)
+                  const remaining = Math.max(0, remainingOf(d))
                   const dueDate   = d.dueDate ? (d.dueDate instanceof Date ? d.dueDate : new Date(d.dueDate)) : null
                   const overdue   = dueDate ? dueDate < new Date() : false
                   const settled   = d.tipo === 'Abono' || d.cruzado || (d.tipo === 'Deuda' && remaining <= 0)
@@ -290,19 +296,14 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
           </div>
         </div>
       )}
-
-      {/* Smooths the browser's default view-transition timing for a less snappy, more "presentation" feel. */}
-      <style>{`
-        ::view-transition-group(*) { animation-duration: 420ms; animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
-      `}</style>
     </div>
   )
 }
 
 function StatBlock({ label, value }: { label: string; value: number }) {
   return (
-    <div className="bg-white/10 rounded-xl p-2.5">
-      <p className="text-[10px] opacity-75 font-semibold">{label}</p>
+    <div className="notch-sm bg-white/10 p-2.5">
+      <p className="font-pixel text-[9px] opacity-75">{label}</p>
       <p className="text-sm font-bold tabular-nums mt-0.5">{formatCOP(value)}</p>
     </div>
   )

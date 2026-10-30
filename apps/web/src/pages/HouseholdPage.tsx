@@ -23,8 +23,8 @@ import {
   calcNetBalance, renameHousehold, deleteHousehold, getHouseholdIds,
   addHouseholdCrossing, getHouseholdCrossings,
 } from '@/lib/firestore'
-import type { CrossingAllocation } from '@/lib/firestore'
-import { formatCOP, HOUSEHOLD_DEBT_CATEGORIES } from '@/shared'
+import { formatCOP, HOUSEHOLD_DEBT_CATEGORIES, remainingOf, allocateCrossing, isPendingDebt } from '@/shared'
+import type { CrossingAllocation } from '@/shared'
 import { HouseholdExpenseModal } from '@/components/household/HouseholdExpenseModal'
 import { FinanceExplorer } from '@/components/household/FinanceExplorer'
 import { HouseholdPicker } from '@/components/household/HouseholdPicker'
@@ -93,9 +93,10 @@ export default function HouseholdPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [hhMenuOpen])
 
-  /** Same morph-on-navigate trick as HouseholdPicker/FinanceExplorer, so
-   *  leaving a household flows back into its picker card instead of a hard cut. */
-  function goToPicker(fn: () => void) {
+  /** Same morph-on-navigate trick as HouseholdPicker/FinanceExplorer — any
+   *  state change wrapped here animates via the native View Transitions API
+   *  instead of jump-cutting, falling back to instant on unsupported browsers. */
+  function withTransition(fn: () => void) {
     const anyDoc = document as any
     if (typeof anyDoc.startViewTransition === 'function') anyDoc.startViewTransition(fn)
     else fn()
@@ -381,7 +382,7 @@ export default function HouseholdPage() {
   // would let you net a debt against a counterpart who's already al día.
   function pendingDebtsOf(uid: string | null | undefined) {
     if (!uid) return []
-    return debts.filter((d: any) => d.debtor === uid && d.tipo === 'Deuda' && remainingOf(d) > 0)
+    return debts.filter((d: any) => d.debtor === uid && isPendingDebt(d))
   }
   function counterpartOf(d: any): string | null | undefined {
     return d.debtor === user?.uid ? partnerUid : user?.uid
@@ -467,21 +468,25 @@ export default function HouseholdPage() {
 
   if (loading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-[240px_1fr_220px] gap-4 fade-in">
+      <div className="hh-dark bg-[#0a0d10] -m-4 p-4 min-h-[calc(100vh-56px)] md:min-h-0 md:rounded-2xl grid grid-cols-1 md:grid-cols-[240px_1fr_220px] gap-4 fade-in">
         {[1,2,3].map(i => <div key={i} className="h-64 bg-gray-100 rounded-2xl skeleton" />)}
       </div>
     )
   }
 
+  // Everything below is dark-themed EXCEPT the interactive Finance Explorer,
+  // which stays on its existing light theme as explicitly pending work — it
+  // renders as a true sibling outside every `hh-dark`-scoped wrapper so the
+  // scoped CSS overrides in index.css never reach its subtree.
   return (
     <div className="fade-in space-y-4 md:h-full md:flex md:flex-col">
 
       {/* Mobile: household chips */}
-      <div className="md:hidden space-y-3">
+      <div className="hh-dark md:hidden space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold text-[#0f172a]">Hogar</h1>
-            <p className="text-sm text-[#64748b]">Cuentas compartidas</p>
+            <h1 className="text-xl font-bold text-[#f3f5f6]">Hogar</h1>
+            <p className="text-sm text-[#9aa4ac]">Cuentas compartidas</p>
           </div>
           <div className="flex gap-2">
             {household && (
@@ -515,24 +520,51 @@ export default function HouseholdPage() {
 
       {/* Pantalla previa: elegir a qué hogar entrar (o crear/unirse si no hay ninguno) */}
       {!household && (
-        <HouseholdPicker
-          households={households}
-          currentUserUid={user?.uid ?? ''}
-          onSelect={setActiveId}
-          onCreateNew={() => setOpenCreate(true)}
-          onJoin={() => setOpenJoin(true)}
-        />
+        <div className="hh-dark bg-[#0a0d10] -m-4 p-4 min-h-[calc(100vh-56px)] md:min-h-0 md:rounded-2xl md:m-0">
+          <HouseholdPicker
+            households={households}
+            currentUserUid={user?.uid ?? ''}
+            onSelect={setActiveId}
+            onCreateNew={() => setOpenCreate(true)}
+            onJoin={() => setOpenJoin(true)}
+          />
+        </div>
       )}
 
+      {/* Crear/Unirme deben quedar siempre alcanzables — tanto desde el selector
+          de hogares (sin household aún) como desde el menú de ajustes (con uno
+          activo) — por eso viven fuera del bloque `household && (...)`. */}
+      <div className="hh-dark">
+        <Modal open={openCreate} onClose={() => setOpenCreate(false)} title="Crear hogar" dark>
+          <form onSubmit={hhForm.handleSubmit(onCreateHousehold)} className="space-y-4">
+            <Input label="Nombre del hogar" placeholder="ej. Casa Carlos y Alexandra" {...hhForm.register('name')} error={hhForm.formState.errors.name?.message} />
+            <div className="flex gap-2">
+              <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenCreate(false)}>Cancelar</Button>
+              <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Creando…' : 'Crear'}</Button>
+            </div>
+          </form>
+        </Modal>
+
+        <Modal open={openJoin} onClose={() => setOpenJoin(false)} title="Unirme a un hogar" dark>
+          <form onSubmit={joinForm.handleSubmit(onJoinHousehold)} className="space-y-4">
+            <Input label="Código de invitación" placeholder="ABC123" maxLength={6} className="uppercase" {...joinForm.register('code')} error={joinForm.formState.errors.code?.message} />
+            <div className="flex gap-2">
+              <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenJoin(false)}>Cancelar</Button>
+              <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Uniéndome…' : 'Unirme'}</Button>
+            </div>
+          </form>
+        </Modal>
+      </div>
+
       {household && (
-        <>
+        <div className="hh-dark bg-[#0a0d10] -m-4 p-4 min-h-[calc(100vh-56px)] md:min-h-0 md:rounded-2xl space-y-4 md:flex md:flex-col md:flex-1 md:min-h-0">
           {/* Encabezado: volver a elegir hogar */}
           <div
             style={{ viewTransitionName: `vt-household-${activeId}` } as React.CSSProperties}
             className="hidden md:flex items-center gap-2"
           >
             <button
-              onClick={() => goToPicker(() => setActiveId(null))}
+              onClick={() => withTransition(() => setActiveId(null))}
               className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 hover:text-gray-700 transition"
             >
               <ArrowLeft size={13} /> Hogares
@@ -568,18 +600,18 @@ export default function HouseholdPage() {
 
             <div className="flex items-center gap-0.5 bg-gray-50 rounded-xl px-1 py-1">
               <button
-                onClick={() => setViewMode('clasico')}
+                onClick={() => withTransition(() => setViewMode('clasico'))}
                 title="Vista resumen"
-                className={clsx('p-1.5 rounded-lg transition flex items-center gap-1 text-[10px] font-semibold', viewMode === 'clasico' ? 'bg-white text-gray-700 shadow-sm' : 'text-gray-400 hover:text-gray-600')}
+                className={clsx('p-1.5 transition-all flex items-center gap-1 text-[10px] font-semibold', viewMode === 'clasico' ? 'notch-sm bg-white text-gray-700 shadow-sm' : 'rounded-lg text-gray-400 hover:text-gray-600')}
               >
-                <LayoutGrid size={13} />
+                <LayoutGrid size={13} className={clsx('transition-transform duration-300', viewMode === 'clasico' && 'rotate-0')} />
               </button>
               <button
-                onClick={() => setViewMode('interactivo')}
+                onClick={() => withTransition(() => setViewMode('interactivo'))}
                 title="Vista interactiva"
-                className={clsx('p-1.5 rounded-lg transition flex items-center gap-1 text-[10px] font-semibold', viewMode === 'interactivo' ? 'bg-white text-gray-700 shadow-sm' : 'text-gray-400 hover:text-gray-600')}
+                className={clsx('p-1.5 transition-all flex items-center gap-1 text-[10px] font-semibold', viewMode === 'interactivo' ? 'notch-sm bg-white text-gray-700 shadow-sm glow-brand-sm' : 'rounded-lg text-gray-400 hover:text-gray-600')}
               >
-                <Sparkles size={13} />
+                <Sparkles size={13} className={clsx('transition-transform duration-500', viewMode === 'interactivo' && 'rotate-[360deg]')} />
               </button>
             </div>
 
@@ -594,19 +626,13 @@ export default function HouseholdPage() {
                 <Settings size={16} />
               </button>
               {hhMenuOpen && (
-                <div className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-lg border border-gray-100 py-2 z-50">
-                  {households.length > 1 && (
-                    <div className="px-3 pb-2 mb-1 border-b border-gray-100 flex flex-wrap gap-1.5">
-                      {households.map((hh: any) => (
-                        <button key={hh.id} onClick={() => { setActiveId(hh.id); setHhMenuOpen(false) }} className={clsx(
-                          'px-2.5 py-1 rounded-lg text-[10px] font-semibold transition',
-                          activeId === hh.id ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
-                        )}>
-                          {hh.name as string}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                <div className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-lg border border-gray-100 py-2 z-50 slide-up">
+                  <button
+                    onClick={() => { setSaldaTargetId(null); setOpenDebt(true); setHhMenuOpen(false) }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
+                  >
+                    <Plus size={14} className="text-gray-400" /> Registrar abono
+                  </button>
                   <button
                     onClick={() => { setRenameVal(household.name as string); setOpenSettings(true); setHhMenuOpen(false) }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
@@ -621,6 +647,13 @@ export default function HouseholdPage() {
                     <span className={clsx('text-[10px]', copied ? 'text-brand-500 font-semibold' : 'text-gray-400')}>
                       {copied ? 'Copiado' : 'Copiar'}
                     </span>
+                  </button>
+                  <div className="border-t border-gray-100 my-1" />
+                  <button
+                    onClick={() => withTransition(() => { setActiveId(null); setHhMenuOpen(false) })}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
+                  >
+                    <ArrowLeft size={14} className="text-gray-400" /> Cambiar de hogar
                   </button>
                   <button
                     onClick={() => { setOpenCreate(true); setHhMenuOpen(false) }}
@@ -640,16 +673,9 @@ export default function HouseholdPage() {
 
             <button
               onClick={() => setOpenExpense(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-xs font-semibold rounded-xl hover:bg-brand-700 transition flex-shrink-0"
+              className="notch glow-brand-hover flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 transition-all flex-shrink-0"
             >
-              <ShoppingBag size={14} /> Gasto compartido
-            </button>
-
-            <button
-              onClick={() => { setSaldaTargetId(null); setOpenDebt(true) }}
-              className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-700 text-xs font-semibold rounded-xl hover:bg-gray-50 transition flex-shrink-0"
-            >
-              <Plus size={14} /> Registrar abono
+              <ShoppingBag size={14} /> <span className="font-pixel text-[11px]">Gasto compartido</span>
             </button>
           </div>
 
@@ -657,7 +683,7 @@ export default function HouseholdPage() {
           {selectedDebt && (
             <div className="space-y-4 slide-up">
               <button
-                onClick={() => setSelectedDebt(null)}
+                onClick={() => withTransition(() => setSelectedDebt(null))}
                 className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-800 transition"
               >
                 <ArrowLeft size={15} /> Volver a saldos activos
@@ -706,13 +732,13 @@ export default function HouseholdPage() {
                       Esta deuda ya está liquidada.
                     </p>
                   )}
-                  {selectedDebt.tipo === 'Deuda' && !selectedDebt.cruzado && remainingOf(selectedDebt) > 0 && counterpartPendingDebts(selectedDebt).length === 0 && (
+                  {isPendingDebt(selectedDebt) && counterpartPendingDebts(selectedDebt).length === 0 && (
                     <p className="text-[11px] text-gray-400 bg-gray-50 rounded-xl p-2.5">
                       No se puede cruzar: {selectedDebt.debtor === user?.uid ? partnerName : myName} no tiene deudas pendientes.
                     </p>
                   )}
                   <div className="flex gap-2">
-                    {selectedDebt.tipo === 'Deuda' && !selectedDebt.cruzado && remainingOf(selectedDebt) > 0 && (
+                    {isPendingDebt(selectedDebt) && (
                       <>
                         <button
                           onClick={() => { setCrossTarget(selectedDebt); setSelectedDebt(null) }}
@@ -753,22 +779,6 @@ export default function HouseholdPage() {
                 </Card>
               </div>
             </div>
-          )}
-
-          {/* Vista interactiva: burbujas que se desglosan de hogar → integrante → historial */}
-          {!selectedDebt && viewMode === 'interactivo' && (
-            debtsLoading ? (
-              <div className="bg-white border border-gray-100 rounded-2xl p-5"><SkeletonList count={3} /></div>
-            ) : (
-              <FinanceExplorer
-                householdName={household.name as string}
-                members={expenseMembers}
-                currentUserUid={user?.uid ?? ''}
-                debts={debts}
-                crossings={crossings}
-                onOpenDebt={(d) => setSelectedDebt(d)}
-              />
-            )
           )}
 
           {/* Main grid: panel combinado + historial */}
@@ -887,7 +897,7 @@ export default function HouseholdPage() {
                         onClick={() => setMyExpanded(!myExpanded)}
                         className="w-full flex items-center gap-3 px-5 py-4 hover:bg-gray-50/80 transition text-left"
                       >
-                        <Avatar name={myName} photoURL={myPhoto} size={36} color="#111827" />
+                        <Avatar name={myName} photoURL={myPhoto} size={36} color="#16a34a" />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-gray-900">{myName}</p>
                           <p className="text-[10px] text-gray-400">Responsable asignado</p>
@@ -908,7 +918,7 @@ export default function HouseholdPage() {
                             canCross={pendingDebtsOf(partnerUid).length > 0}
                             onCross={(d) => setCrossTarget(d)}
                             onSaldar={(d) => handleSaldar(d)}
-                            onSelect={(d) => setSelectedDebt(d)}
+                            onSelect={(d) => withTransition(() => setSelectedDebt(d))}
                           />
                         </div>
                       </ExpandSection>
@@ -931,7 +941,7 @@ export default function HouseholdPage() {
                           onClick={() => setPartnerExpanded(!partnerExpanded)}
                           className="w-full flex items-center gap-3 px-5 py-4 hover:bg-gray-50/80 transition text-left"
                         >
-                          <Avatar name={partnerName} photoURL={partnerPhoto} size={36} color="#7c3aed" />
+                          <Avatar name={partnerName} photoURL={partnerPhoto} size={36} color="#a78bfa" />
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-semibold text-gray-900">{partnerName}</p>
                             <p className="text-[10px] text-gray-400">Co-titular hogar</p>
@@ -952,7 +962,7 @@ export default function HouseholdPage() {
                               canCross={pendingDebtsOf(user?.uid).length > 0}
                               onCross={(d) => setCrossTarget(d)}
                               onSaldar={(d) => handleSaldar(d)}
-                              onSelect={(d) => setSelectedDebt(d)}
+                              onSelect={(d) => withTransition(() => setSelectedDebt(d))}
                             />
                           </div>
                         </ExpandSection>
@@ -1013,7 +1023,7 @@ export default function HouseholdPage() {
                       {fullLedger.rows.map((ev, idx) => {
                         const who  = ev.isMe ? myName : partnerName
                         const whoPhoto  = ev.isMe ? myPhoto : partnerPhoto
-                        const nodeColor = ev.isMe ? '#111827' : '#7c3aed'
+                        const nodeColor = ev.isMe ? '#16a34a' : '#a78bfa'
                         const kindLabel = ev.kind === 'deuda' ? 'debe' : ev.kind === 'abono' ? 'abonó' : 'cruzó'
                         const owesNow = ev.diffAfter > 0 ? myName : ev.diffAfter < 0 ? partnerName : null
                         const statusLabel = ev.kind === 'deuda' ? 'pendiente' : ev.kind === 'abono' ? 'abonado' : 'cruzado'
@@ -1059,11 +1069,9 @@ export default function HouseholdPage() {
 
             </div>
           )}
-        </>
-      )}
 
-      {/* Modals */}
-      {crossTarget && (
+          {/* Modals */}
+          {crossTarget && (
         <CrossingModal
           debt={crossTarget}
           counterPersonId={crossTarget.debtor === user?.uid ? (partnerUid ?? '') : (user?.uid ?? '')}
@@ -1077,7 +1085,7 @@ export default function HouseholdPage() {
         />
       )}
 
-      <Modal open={openSettings} onClose={() => setOpenSettings(false)} title="Configurar hogar">
+      <Modal open={openSettings} onClose={() => setOpenSettings(false)} title="Configurar hogar" dark>
         <div className="space-y-5">
           <div className="space-y-2">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Renombrar</p>
@@ -1104,27 +1112,7 @@ export default function HouseholdPage() {
         </div>
       </Modal>
 
-      <Modal open={openCreate} onClose={() => setOpenCreate(false)} title="Crear hogar">
-        <form onSubmit={hhForm.handleSubmit(onCreateHousehold)} className="space-y-4">
-          <Input label="Nombre del hogar" placeholder="ej. Casa Carlos y Alexandra" {...hhForm.register('name')} error={hhForm.formState.errors.name?.message} />
-          <div className="flex gap-2">
-            <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenCreate(false)}>Cancelar</Button>
-            <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Creando…' : 'Crear'}</Button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal open={openJoin} onClose={() => setOpenJoin(false)} title="Unirme a un hogar">
-        <form onSubmit={joinForm.handleSubmit(onJoinHousehold)} className="space-y-4">
-          <Input label="Código de invitación" placeholder="ABC123" maxLength={6} className="uppercase" {...joinForm.register('code')} error={joinForm.formState.errors.code?.message} />
-          <div className="flex gap-2">
-            <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenJoin(false)}>Cancelar</Button>
-            <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Uniéndome…' : 'Unirme'}</Button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal open={openDebt} onClose={() => { setOpenDebt(false); setSaldaTargetId(null) }} title="Registrar abono">
+      <Modal open={openDebt} onClose={() => { setOpenDebt(false); setSaldaTargetId(null) }} title="Registrar abono" dark>
         <form onSubmit={debtForm.handleSubmit(onAddDebt)} className="space-y-4">
           <input type="hidden" {...debtForm.register('tipo')} value="Abono" />
           {saldaTargetId ? (
@@ -1137,7 +1125,19 @@ export default function HouseholdPage() {
             </p>
           )}
           <Input label="Concepto" placeholder="ej. Veterinario, Mercado…" {...debtForm.register('concept')} error={debtForm.formState.errors.concept?.message} />
-          <Input label="Monto (COP)" type="number" placeholder="0" {...debtForm.register('amount')} error={debtForm.formState.errors.amount?.message} />
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium text-gray-700">Monto</label>
+            <div className="currency-field has-suffix">
+              <span className="currency-affix-prefix">$</span>
+              <input
+                type="number" placeholder="0" {...debtForm.register('amount')}
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                aria-label="Monto en pesos colombianos"
+              />
+              <span className="currency-affix-suffix">COP</span>
+            </div>
+            {debtForm.formState.errors.amount?.message && <p className="text-xs text-red-500">{debtForm.formState.errors.amount.message}</p>}
+          </div>
           <Select label="¿Quién abona?" options={debtorOptions} {...debtForm.register('debtor')} />
           <Select label="Categoría" options={CAT_OPTIONS} {...debtForm.register('category')} />
           <Input label="Fecha" type="date" {...debtForm.register('date')} />
@@ -1148,16 +1148,37 @@ export default function HouseholdPage() {
           </div>
         </form>
       </Modal>
+        </div>
+      )}
+
+      {/* Vista interactiva: sigue en su tema claro existente — pendiente a propósito,
+          fuera de cualquier envoltorio hh-dark para que el override nunca la toque. */}
+      {household && !selectedDebt && viewMode === 'interactivo' && (
+        debtsLoading ? (
+          <div className="bg-white border border-gray-100 rounded-2xl p-5"><SkeletonList count={3} /></div>
+        ) : (
+          <FinanceExplorer
+            householdName={household.name as string}
+            members={expenseMembers}
+            currentUserUid={user?.uid ?? ''}
+            debts={debts}
+            crossings={crossings}
+            onOpenDebt={(d) => withTransition(() => setSelectedDebt(d))}
+          />
+        )
+      )}
 
       {activeId && (
-        <HouseholdExpenseModal
-          open={openExpense}
-          onClose={() => setOpenExpense(false)}
-          householdId={activeId}
-          members={expenseMembers}
-          currentUserUid={user?.uid ?? ''}
-          onCreated={reloadDebts}
-        />
+        <div className="hh-dark">
+          <HouseholdExpenseModal
+            open={openExpense}
+            onClose={() => setOpenExpense(false)}
+            householdId={activeId}
+            members={expenseMembers}
+            currentUserUid={user?.uid ?? ''}
+            onCreated={reloadDebts}
+          />
+        </div>
       )}
     </div>
   )
@@ -1251,7 +1272,7 @@ function PersonDebtGroups({ personDebts, canCross, onCross, onSaldar, onSelect }
   onSaldar: (d: any) => void
   onSelect: (d: any) => void
 }) {
-  const pendientes = personDebts.filter((d: any) => d.tipo === 'Deuda' && !d.cruzado && remainingOf(d) > 0)
+  const pendientes = personDebts.filter((d: any) => isPendingDebt(d))
   const cruzados    = personDebts.filter((d: any) => d.tipo === 'Deuda' && d.cruzado)
   const saldados    = personDebts.filter((d: any) => d.tipo === 'Deuda' && !d.cruzado && remainingOf(d) <= 0)
   const abonos      = personDebts.filter((d: any) => d.tipo === 'Abono')
@@ -1403,25 +1424,8 @@ function DebtItem({ d, canCross, onCross, onSaldar, onSelect }: {
 // A crossing nets two real debts against each other, so it always needs a
 // specific counter-debt — "cruzar contra el saldo total" would let you net a
 // debt against someone who doesn't actually owe anything back.
-/** What's actually left to settle on a debt — after crossings AND any abono
- *  linked to it via saldaId. The single source of truth for "is this still owed". */
-function remainingOf(d: any) {
-  return d.amount - ((d.crossedAmount as number) || 0) - ((d.paidAbono as number) || 0)
-}
-
-/** Fills each debt's remaining balance in order until the amount runs out —
- *  oldest debt first, so a partial cross always settles what's owed longest. */
-function allocateCrossing(amount: number, debts: any[]): CrossingAllocation[] {
-  let left = amount
-  const out: CrossingAllocation[] = []
-  for (const d of debts) {
-    if (left <= 0) break
-    const take = Math.min(remainingOf(d), left)
-    if (take > 0) out.push({ debtId: d.id, amount: take })
-    left -= take
-  }
-  return out
-}
+// remainingOf / allocateCrossing now live in shared/utils/householdSettlement
+// so they're testable without React — see shared/index.ts.
 
 function CrossingModal({ debt, counterPersonId, counterpartDebts, myName, partnerName, userUid, saving, onConfirm, onClose }: {
   debt: any; counterPersonId: string; counterpartDebts: any[]
@@ -1473,7 +1477,7 @@ function CrossingModal({ debt, counterPersonId, counterpartDebts, myName, partne
   }
 
   return (
-    <Modal open onClose={onClose} title="Cruzar deuda">
+    <Modal open onClose={onClose} title="Cruzar deuda" dark>
       <div className="space-y-4">
         {/* Deuda origen */}
         <div className="bg-purple-50 rounded-2xl p-3.5 space-y-0.5">
@@ -1495,7 +1499,7 @@ function CrossingModal({ debt, counterPersonId, counterpartDebts, myName, partne
               <label className="text-xs font-semibold text-gray-600">
                 Deudas de {counterName} a cruzar {sortedCounterDebts.length > 1 && <span className="text-gray-400 font-normal">(elige una o varias)</span>}
               </label>
-              <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 max-h-44 overflow-y-auto">
+              <div className="border border-gray-200 rounded-xl divide-y divide-white/5 max-h-44 overflow-y-auto">
                 {sortedCounterDebts.map((d) => {
                   const rem = remainingOf(d)
                   const checked = selectedIds.has(d.id)
@@ -1513,13 +1517,18 @@ function CrossingModal({ debt, counterPersonId, counterpartDebts, myName, partne
 
             {/* Monto */}
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-gray-600">Monto a cruzar (COP)</label>
-              <input
-                type="number"
-                value={amount}
-                onChange={(e) => { setAmount(Number(e.target.value)); setErr('') }}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
-              />
+              <label className="text-xs font-semibold text-gray-600">Monto a cruzar</label>
+              <div className="currency-field has-suffix">
+                <span className="currency-affix-prefix">$</span>
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => { setAmount(Number(e.target.value)); setErr('') }}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
+                  aria-label="Monto a cruzar en pesos colombianos"
+                />
+                <span className="currency-affix-suffix">COP</span>
+              </div>
               <p className="text-[10px] text-gray-400">
                 Máx. {formatCOP(maxAmount)}{selectedDebts.length > 1 && ' — si es parcial, se reparte empezando por la más antigua'}
               </p>

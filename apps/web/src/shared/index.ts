@@ -11,3 +11,4 @@ export * from './types/allowedUser';
 export * from './constants/categories';
 export * from './utils/currency';
 export * from './utils/householdSplit';
+export * from './utils/householdSettlement';

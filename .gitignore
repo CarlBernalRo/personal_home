@@ -17,6 +17,9 @@ npm-debug.log*
 examples/
 scripts/allowed-users.json
 
+# Material de inspiración de diseño (snippets de terceros, no es código de la app)
+inspirations/
+
 # Editor / OS
 .vscode/
 .idea/
