@@ -1,15 +1,13 @@
 import { useEffect, useState } from 'react'
 import { PlusCircle, LogIn, ArrowRight, Users } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Avatar } from '@/components/ui/Avatar'
-import { SkeletonList } from '@/components/ui/Skeleton'
 import { getHouseholdDebts, getHouseholdCrossings, calcNetBalance } from '@/lib/firestore'
 import { formatCOP } from '@/shared'
 
-const OTHER_COLORS = ['#a78bfa', '#2a78d6', '#eb6834', '#1baf7a']
-const ME_COLOR = '#16a34a'
+const OTHER_COLORS = ['#52b69a', '#76c893', '#d9ed92', '#1fb4e2']
+const ME_COLOR = '#168aad'
 
 /** Same morph-on-navigate trick as the Finance Explorer, so picking a
  *  household flows straight into its view instead of a hard cut. */
@@ -25,7 +23,13 @@ interface HouseholdSummary {
   members: { uid: string; name: string; photoURL: string | null; net: number; color: string }[]
 }
 
-export function HouseholdPicker({ households, currentUserUid, onSelect, onCreateNew, onJoin }: {
+export function HouseholdPicker({
+  households,
+  currentUserUid,
+  onSelect,
+  onCreateNew,
+  onJoin,
+}: {
   households: any[]
   currentUserUid: string
   onSelect: (id: string) => void
@@ -69,29 +73,33 @@ export function HouseholdPicker({ households, currentUserUid, onSelect, onCreate
   }, [households, currentUserUid])
 
   return (
-    <div className="fade-in space-y-5">
+    <div className="fade-in space-y-5 text-[#f3f5f6]">
       <div>
-        <h1 className="text-xl font-bold text-[#f3f5f6]">¿A cuál hogar quieres entrar?</h1>
-        <p className="text-sm text-[#9aa4ac]">Un vistazo rápido antes de entrar en el detalle.</p>
+        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1 notch-sm bg-white/[0.04] border border-white/[0.08]">
+          <Users size={11} className="text-brand-400" />
+          <span className="font-pixel text-[8px] text-brand-400 uppercase tracking-widest">Hogar</span>
+        </div>
+        <h1 className="text-2xl font-bold tracking-tight">¿A cuál hogar quieres entrar?</h1>
+        <p className="text-xs text-[#9aa4ac] mt-1">Un vistazo rápido antes de entrar en el detalle.</p>
       </div>
 
       {households.length === 0 && !loading && (
-        <Card className="text-center py-14 space-y-4">
-          <Users size={48} className="mx-auto text-gray-200" />
+        <div className="notch bg-[#0a1f2f] border border-white/10 text-center py-14 px-6 space-y-4">
+          <Users size={48} className="mx-auto text-brand-400/40" />
           <div>
-            <p className="text-sm font-semibold text-gray-700">Sin hogares configurados</p>
-            <p className="text-xs text-gray-400 mt-1">Crea un hogar o únete con un código</p>
+            <p className="text-sm font-bold text-[#f0fae8]">Sin hogares configurados</p>
+            <p className="text-xs text-[#8a929a] mt-1">Crea un hogar o únete con un código</p>
           </div>
           <div className="flex gap-3 justify-center">
-            <Button onClick={onCreateNew} size="sm"><PlusCircle size={15} /> Crear hogar</Button>
-            <Button onClick={onJoin} variant="secondary" size="sm"><LogIn size={15} /> Unirme</Button>
+            <Button onClick={onCreateNew} size="sm" notched><PlusCircle size={15} /> Crear hogar</Button>
+            <Button onClick={onJoin} variant="secondary" size="sm" notched><LogIn size={15} /> Unirme</Button>
           </div>
-        </Card>
+        </div>
       )}
 
       {loading && households.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {households.map((h) => <div key={h.id} className="h-40 bg-gray-100 rounded-2xl skeleton" />)}
+          {households.map((h) => <div key={h.id} className="h-40 rounded-2xl skeleton" />)}
         </div>
       )}
 
@@ -104,38 +112,38 @@ export function HouseholdPicker({ households, currentUserUid, onSelect, onCreate
                 key={h.id}
                 onClick={() => goTo(() => onSelect(h.id))}
                 style={{ viewTransitionName: `vt-household-${h.id}` } as React.CSSProperties}
-                className="notch glow-brand-hover group text-left bg-white border border-gray-100 p-5 shadow-sm hover:border-brand-200 transition-all"
+                className="notch glow-brand-hover group text-left bg-[#0a1f2f] border border-white/10 p-5 shadow-xl hover:border-brand-400/50 transition-all"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-pixel text-[9px] text-gray-400 uppercase tracking-wider mb-1">Hogar</p>
-                    <p className="text-base font-bold text-gray-900 truncate">{h.name as string}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
+                    <p className="font-pixel text-[9px] text-brand-400 uppercase tracking-widest mb-1">Hogar</p>
+                    <p className="text-base font-bold text-[#f3f5f6] truncate">{h.name as string}</p>
+                    <p className="text-xs font-mono text-[#8a929a] mt-0.5">
                       {s ? (s.pending > 0 ? `${formatCOP(s.pending)} pendiente` : 'Cuentas al día') : '—'}
                     </p>
                   </div>
-                  <div className="notch-sm w-8 h-8 bg-gray-50 group-hover:bg-brand-50 flex items-center justify-center flex-shrink-0 transition-colors">
-                    <ArrowRight size={14} className="text-gray-400 group-hover:text-brand-600 group-hover:translate-x-0.5 transition-all" />
+                  <div className="notch-sm w-8 h-8 bg-white/5 group-hover:bg-brand-500/20 flex items-center justify-center flex-shrink-0 transition-colors">
+                    <ArrowRight size={14} className="text-[#8a929a] group-hover:text-brand-300 group-hover:translate-x-0.5 transition-all" />
                   </div>
                 </div>
 
                 <div className="flex items-center gap-4 mt-4">
                   {s?.members.map((m) => (
                     <div key={m.uid} className="flex flex-col items-center gap-1.5 min-w-0">
-                      <Avatar name={m.name} photoURL={m.photoURL} size={44} color={m.color} />
-                      <span className="text-[10px] text-gray-500 font-semibold truncate max-w-[56px]">{m.name}</span>
+                      <Avatar name={m.name} photoURL={m.photoURL} size={44} color={m.color} className="!ring-white/20" />
+                      <span className="text-[10px] text-[#c7ccd1] font-semibold truncate max-w-[56px]">{m.name}</span>
                       <span className={clsx(
-                        'font-pixel text-[8px] font-bold px-1.5 py-0.5',
-                        m.net > 0 ? 'text-[#f87171] bg-[rgba(248,113,113,0.12)]' : 'text-brand-500 bg-[rgba(22,163,74,0.14)]',
+                        'font-pixel text-[8px] font-bold px-1.5 py-0.5 rounded-md border',
+                        m.net > 0 ? 'text-red-300 bg-red-500/15 border-red-500/30' : 'text-emerald-300 bg-emerald-500/15 border-emerald-500/30',
                       )}>
                         {m.net > 0 ? formatCOP(m.net) : 'Al día'}
                       </span>
                     </div>
                   ))}
                   {s && s.members.length < 2 && (
-                    <div className="flex flex-col items-center gap-1.5 opacity-40">
-                      <div className="w-11 h-11 rounded-full border-2 border-dashed border-gray-300" />
-                      <span className="text-[10px] text-gray-400">Sin pareja</span>
+                    <div className="flex flex-col items-center gap-1.5 opacity-50">
+                      <div className="w-11 h-11 rounded-full border-2 border-dashed border-white/30" />
+                      <span className="text-[10px] text-[#8a929a]">Sin pareja</span>
                     </div>
                   )}
                 </div>
@@ -143,11 +151,11 @@ export function HouseholdPicker({ households, currentUserUid, onSelect, onCreate
             )
           })}
 
-          <div className="notch bg-gray-50/60 border border-dashed border-gray-200 p-5 flex flex-col items-center justify-center gap-2 text-center">
-            <p className="text-xs text-gray-400">¿Otro hogar?</p>
+          <div className="notch bg-white/[0.02] border border-dashed border-white/15 p-5 flex flex-col items-center justify-center gap-2 text-center">
+            <p className="text-xs text-[#8a929a]">¿Otro hogar?</p>
             <div className="flex gap-2">
-              <Button onClick={onCreateNew} variant="secondary" size="sm"><PlusCircle size={14} /> Crear</Button>
-              <Button onClick={onJoin} variant="ghost" size="sm"><LogIn size={14} /> Unirme</Button>
+              <Button onClick={onCreateNew} variant="secondary" size="sm" notched><PlusCircle size={14} /> Crear</Button>
+              <Button onClick={onJoin} variant="ghost" size="sm" notched><LogIn size={14} /> Unirme</Button>
             </div>
           </div>
         </div>

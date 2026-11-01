@@ -1,3 +1,4 @@
+import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -10,14 +11,15 @@ import { Input } from '@/components/ui/Input'
 import { useAuth } from '@/hooks/useAuth'
 import { addSavingsGoal, getSavingsGoals, updateSavingsGoal, deleteSavingsGoal } from '@/lib/firestore'
 import { formatCOP } from '@/shared'
+import { AppIcon, EmptyMark, GOAL_ICON_KEYS } from '@/components/ui/AppIcon'
 
-const ICONS = ['🏠', '✈️', '🚗', '📱', '💍', '🎓', '🐾', '🛍️', '🎯', '💰']
-const COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#a855f7', '#ec4899', '#06b6d4']
+const ICONS = [...GOAL_ICON_KEYS]
+const COLORS = ['#52b69a', '#34a0a4', '#168aad', '#76c893', '#d9ed92', '#1a759f']
 
 const schema = z.object({
   name:          z.string().min(1, 'Nombre requerido'),
-  targetAmount:  z.coerce.number().positive('Meta debe ser mayor a 0'),
-  currentAmount: z.coerce.number().min(0),
+  targetAmount:  z.coerce.number().positive('La meta debe ser mayor a 0'),
+  currentAmount: z.coerce.number().min(0, 'El monto inicial no puede ser negativo'),
   icon:          z.string(),
   color:         z.string(),
   deadline:      z.string().optional(),
@@ -25,10 +27,11 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>
 
-const addSchema = z.object({ amount: z.coerce.number().positive() })
+const addSchema = z.object({ amount: z.coerce.number().positive('El monto a abonar debe ser mayor a 0') })
 type AddForm = z.infer<typeof addSchema>
 
 export default function SavingsPage() {
+  const ask = useConfirm()
   const { user }             = useAuth()
   const [goals, setGoals]   = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -84,7 +87,7 @@ export default function SavingsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar esta meta de ahorro?')) return
+    if (!(await ask('¿Eliminar esta meta de ahorro?', { title: 'Eliminar meta de ahorro' }))) return
     await deleteSavingsGoal(id)
     setGoals((prev) => prev.filter((g) => g.id !== id))
   }
@@ -124,7 +127,7 @@ export default function SavingsPage() {
         <div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-brand-200 border-t-brand-600 rounded-full animate-spin" /></div>
       ) : goals.length === 0 ? (
         <Card className="text-center py-10">
-          <p className="text-4xl mb-2">🐷</p>
+          <EmptyMark name="savings" />
           <p className="text-sm text-gray-500">No tienes metas de ahorro aún.</p>
           <p className="text-xs text-gray-400 mt-1">Crea tu primera meta para empezar.</p>
         </Card>
@@ -137,7 +140,7 @@ export default function SavingsPage() {
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl flex-shrink-0"
                     style={{ backgroundColor: g.color + '20' }}>
-                    {g.icon}
+                    <AppIcon name={g.icon} size={20} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-gray-900 truncate">{g.name}</p>
@@ -170,8 +173,8 @@ export default function SavingsPage() {
       <Modal open={open} onClose={() => setOpen(false)} title="Nueva meta de ahorro">
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <Input label="Nombre de la meta" placeholder="ej. Vacaciones, Carro…" {...register('name')} error={errors.name?.message} />
-          <Input label="Monto objetivo (COP)" type="number" placeholder="0" {...register('targetAmount')} error={errors.targetAmount?.message} />
-          <Input label="Ya tengo ahorrado (COP)" type="number" placeholder="0" {...register('currentAmount')} />
+          <Input label="Monto objetivo (COP)" money placeholder="0" {...register('targetAmount')} error={errors.targetAmount?.message} />
+          <Input label="Ya tengo ahorrado (COP)" money placeholder="0" {...register('currentAmount')} />
           <Input label="Fecha límite (opcional)" type="date" {...register('deadline')} />
           <div>
             <p className="text-sm font-medium text-gray-700 mb-2">Ícono</p>
@@ -180,7 +183,7 @@ export default function SavingsPage() {
                 <button key={ic} type="button"
                   onClick={() => setSelectedIcon(ic)}
                   className={`text-xl p-1.5 rounded-xl transition ${selectedIcon === ic ? 'bg-brand-100 ring-2 ring-brand-400' : 'hover:bg-gray-100'}`}>
-                  {ic}
+                  <AppIcon name={ic} size={18} />
                 </button>
               ))}
             </div>
@@ -208,7 +211,7 @@ export default function SavingsPage() {
           <p className="text-sm text-gray-500">
             Ahorrado: <strong>{formatCOP(addMoneyGoal?.currentAmount ?? 0)}</strong> de <strong>{formatCOP(addMoneyGoal?.targetAmount ?? 0)}</strong>
           </p>
-          <Input label="Monto a abonar (COP)" type="number" placeholder="0" {...addMoneyForm.register('amount')} error={addMoneyForm.formState.errors.amount?.message} />
+          <Input label="Monto a abonar (COP)" money placeholder="0" {...addMoneyForm.register('amount')} error={addMoneyForm.formState.errors.amount?.message} />
           <div className="flex gap-2 pt-1">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setAddMoneyGoal(null)}>Cancelar</Button>
             <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Guardando…' : 'Abonar'}</Button>

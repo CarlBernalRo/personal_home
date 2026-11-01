@@ -3,18 +3,22 @@
 @tailwind utilities;
 
 :root {
-  --brand: #16a34a;
-  --brand-light: #dcfce7;
-  --brand-dark: #15803d;
-  --bg: #f8fafc;
-  --surface: #ffffff;
-  --surface-2: #f1f5f9;
-  --text: #0f172a;
-  --text-2: #64748b;
-  --border: #e2e8f0;
+  --brand: #34a0a4;
+  --brand-light: #52b69a;
+  --brand-dark: #168aad;
+  --brand-neon: #d9ed92;
+  --bg: #051018;
+  --surface: #0a1f2f;
+  --surface-2: #0d263a;
+  --surface-3: #133e5f;
+  --text: #f0fae8;
+  --text-2: #dcf1eb;
+  --text-3: #97d4c3;
+  --border: rgba(52, 160, 164, 0.18);
+  --border-bright: rgba(82, 182, 154, 0.40);
   --danger: #ef4444;
-  --warning: #f59e0b;
-  --success: #10b981;
+  --warning: #fbbf24;
+  --success: #52b69a;
 }
 
 @layer base {
@@ -22,8 +26,16 @@
   body {
     font-family: 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
-    background-color: #f8fafc;
-    color: #0f172a;
+    background-color: #051018;
+    color: #f0fae8;
+    overflow-x: hidden;
+    overscroll-behavior-y: none;
+    /* Subtle, atmospheric ambient gradients that keep dark mode deep and crisp */
+    background-image:
+      radial-gradient(ellipse 70% 45% at 50% -10%, rgba(52, 160, 164, 0.08) 0%, rgba(22, 138, 173, 0.03) 40%, transparent 70%),
+      radial-gradient(ellipse 60% 40% at 85% 90%, rgba(30, 96, 145, 0.10) 0%, transparent 65%),
+      radial-gradient(ellipse 50% 35% at 15% 40%, rgba(82, 182, 154, 0.04) 0%, transparent 60%);
+    background-attachment: fixed;
   }
 }
 
@@ -31,8 +43,26 @@
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-.fade-in { animation: fadeIn 0.2s ease-out; }
-.slide-up { animation: slideUp 0.25s ease-out; }
+.fade-in { animation: fadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
+.slide-up { animation: slideUp 0.28s cubic-bezier(0.16, 1, 0.3, 1); }
+.scale-in { animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+/* Phones: dialogs rise from the bottom like a sheet; from sm up the card keeps its scale-in */
+.sheet-in { animation: sheetIn 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+@media (min-width: 640px) { .sheet-in { animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1); } }
+@keyframes sheetIn {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+/* Phones: a field smaller than 16px makes iOS zoom the page when it is focused, and it stays zoomed after the
+   keyboard closes (the screen "stuck at half"). 16px keeps the page exactly as it was. */
+@media (max-width: 767px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
 
 @keyframes fadeIn {
   from { opacity: 0; }
@@ -40,58 +70,193 @@
 }
 
 @keyframes slideUp {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Retro-futuristic accents (inspirations/2026-07-24-futuristic-css-theme-switcher) ──
-   Reinterpreted with broadly-supported CSS instead of the original's
-   experimental corner-shape/if()/style() — clip-path + box-shadow + color-mix
-   give the same "cut corner, neon glow" read on every current browser. Used
-   selectively (primary CTAs, cards, bubbles), not as a full reskin. */
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
 
+/* ── Cybernetic Grid & Atmospheric Glow Accents ── */
+.cyber-grid {
+  background-size: 32px 32px;
+  background-image: 
+    linear-gradient(to right, rgba(52, 160, 164, 0.025) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(52, 160, 164, 0.025) 1px, transparent 1px);
+}
+
+.radial-glow {
+  background-color: #051018;
+  background-image:
+    radial-gradient(ellipse 70% 40% at 50% -10%, rgba(52, 160, 164, 0.07) 0%, rgba(22, 138, 173, 0.03) 40%, transparent 75%),
+    radial-gradient(circle 650px at 85% 90%, rgba(30, 96, 145, 0.09) 0%, transparent 70%),
+    radial-gradient(circle 500px at 15% 45%, rgba(82, 182, 154, 0.04) 0%, transparent 60%);
+}
+
+.radial-glow-purple {
+  background: radial-gradient(circle at 50% -10%, rgba(52, 160, 164, 0.12) 0%, rgba(22, 138, 173, 0.06) 40%, transparent 70%);
+}
+
+/* ── Retro-futuristic cut-corner notch geometry ── */
 .notch {
-  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
 }
 .notch-sm {
-  clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
 }
 .notch-lg {
-  clip-path: polygon(20px 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%, 0 20px);
+  clip-path: polygon(22px 0, 100% 0, 100% calc(100% - 22px), calc(100% - 22px) 100%, 0 100%, 0 22px);
+}
+
+/* ── Native input chrome that doesn't fit the theme ── */
+/* Number inputs: no browser spinner arrows (amounts are typed, not stepped) */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+/* Date/time pickers: dark scheme and a brand-coloured picker icon */
+input[type="date"],
+input[type="month"],
+input[type="time"] {
+  color-scheme: dark;
+}
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.55;
+  filter: invert(72%) sepia(23%) saturate(780%) hue-rotate(110deg) brightness(92%);
+  transition: opacity 0.15s;
+}
+input[type="date"]::-webkit-calendar-picker-indicator:hover,
+input[type="month"]::-webkit-calendar-picker-indicator:hover,
+input[type="time"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+/* ── Diamond / Rombo Checkbox Styling ── */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  transform: rotate(45deg);
+  border: 1.5px solid rgba(82, 182, 154, 0.45) !important;
+  background-color: #0a1f2f !important;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px !important;
+  margin: 3px 6px;
+  flex-shrink: 0;
+  vertical-align: middle;
+  position: relative;
+}
+
+input[type="checkbox"]:hover {
+  border-color: #52b69a !important;
+  box-shadow: 0 0 10px rgba(82, 182, 154, 0.5) !important;
+}
+
+/* Checked state: FILLED with vibrant teal and neon lime glow */
+input[type="checkbox"]:checked {
+  background-color: #34a0a4 !important;
+  border-color: #d9ed92 !important;
+  box-shadow: 0 0 12px rgba(82, 182, 154, 0.7), inset 0 0 0 1px rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Crisp checkmark inside the diamond */
+input[type="checkbox"]:checked::after {
+  content: "";
+  display: block;
+  width: 4px;
+  height: 7px;
+  border: solid #051018;
+  border-width: 0 2px 2px 0;
+  transform: rotate(-45deg) translate(-0.5px, -0.5px);
+}
+
+input[type="checkbox"].text-purple-600,
+input[type="checkbox"].checkbox-purple {
+  border-color: rgba(82, 182, 154, 0.5) !important;
+}
+input[type="checkbox"].text-purple-600:hover,
+input[type="checkbox"].checkbox-purple:hover {
+  border-color: #52b69a !important;
+  box-shadow: 0 0 10px rgba(82, 182, 154, 0.5) !important;
+}
+input[type="checkbox"].text-purple-600:checked,
+input[type="checkbox"].checkbox-purple:checked {
+  background-color: #34a0a4 !important;
+  border-color: #d9ed92 !important;
+  box-shadow: 0 0 12px rgba(82, 182, 154, 0.7), inset 0 0 0 1px rgba(255, 255, 255, 0.3) !important;
+}
+input[type="checkbox"].text-purple-600:checked::after,
+input[type="checkbox"].checkbox-purple:checked::after {
+  content: "";
+  display: block;
+  width: 4px;
+  height: 7px;
+  border: solid #051018;
+  border-width: 0 2px 2px 0;
+  transform: rotate(-45deg) translate(-0.5px, -0.5px);
 }
 
 .glow-brand {
   box-shadow:
-    0 0 0 1px color-mix(in oklab, var(--brand), transparent 35%),
-    0 0 14px color-mix(in oklab, var(--brand), transparent 55%),
-    0 0 30px color-mix(in oklab, var(--brand), transparent 78%);
+    0 0 0 1px rgba(52, 160, 164, 0.35),
+    0 0 14px rgba(22, 138, 173, 0.45),
+    0 0 25px rgba(52, 160, 164, 0.25);
 }
-/* Tailwind's hover: prefix only targets Tailwind-known utilities, not these
-   plain CSS classes — so hover/focus variants are their own explicit rules. */
 .glow-brand-hover:hover,
 .glow-brand-hover:focus-visible {
   box-shadow:
-    0 0 0 1px color-mix(in oklab, var(--brand), transparent 35%),
-    0 0 14px color-mix(in oklab, var(--brand), transparent 55%),
-    0 0 30px color-mix(in oklab, var(--brand), transparent 78%);
+    0 0 0 1px rgba(82, 182, 154, 0.45),
+    0 0 16px rgba(52, 160, 164, 0.60),
+    0 0 28px rgba(22, 138, 173, 0.35);
+}
+.glow-brand-sm {
+  box-shadow:
+    0 0 0 1px rgba(52, 160, 164, 0.35),
+    0 0 8px rgba(22, 138, 173, 0.45);
+}
+
+.glow-purple {
+  box-shadow:
+    0 0 0 1px rgba(22, 138, 173, 0.35),
+    0 0 12px rgba(22, 138, 173, 0.45);
 }
 .glow-purple-hover:hover,
 .glow-purple-hover:focus-visible {
   box-shadow:
-    0 0 0 1px color-mix(in oklab, #7c3aed, transparent 35%),
-    0 0 14px color-mix(in oklab, #7c3aed, transparent 55%),
-    0 0 30px color-mix(in oklab, #7c3aed, transparent 78%);
+    0 0 0 1px rgba(52, 160, 164, 0.45),
+    0 0 14px rgba(22, 138, 173, 0.60);
 }
-.glow-brand-sm {
+.glow-purple-sm {
   box-shadow:
-    0 0 0 1px color-mix(in oklab, var(--brand), transparent 40%),
-    0 0 8px color-mix(in oklab, var(--brand), transparent 65%);
+    0 0 0 1px rgba(22, 138, 173, 0.3),
+    0 0 6px rgba(22, 138, 173, 0.4);
 }
-.glow-purple {
+
+.glow-coral {
   box-shadow:
-    0 0 0 1px color-mix(in oklab, #7c3aed, transparent 35%),
-    0 0 14px color-mix(in oklab, #7c3aed, transparent 55%),
-    0 0 30px color-mix(in oklab, #7c3aed, transparent 78%);
+    0 0 0 1px rgba(239, 68, 68, 0.35),
+    0 0 10px rgba(239, 68, 68, 0.4);
+}
+.glow-coral-hover:hover,
+.glow-coral-hover:focus-visible {
+  box-shadow:
+    0 0 0 1px rgba(239, 68, 68, 0.45),
+    0 0 14px rgba(239, 68, 68, 0.55);
 }
 
 .font-pixel {
@@ -100,90 +265,198 @@
   letter-spacing: 0.08em;
 }
 
-/* ── Hogar dark theme scope ─────────────────────────────────────────────
-   Scoped color remap for the Household screens (picker, toolbar, classic
-   summary panel, modals) — everything EXCEPT the interactive Finance
-   Explorer, which stays light/pending by design. `.hh-dark X` beats a bare
-   Tailwind utility `X` on specificity alone (two classes vs one), so this
-   works without !important and never leaks outside elements wrapped in
-   `.hh-dark`. */
-.hh-dark { color: #f3f5f6; }
-.hh-dark .bg-white { background-color: #12161a; }
-.hh-dark .bg-gray-50 { background-color: #181d22; }
-.hh-dark .bg-gray-50\/60 { background-color: rgba(24, 29, 34, 0.6); }
-.hh-dark .bg-gray-50\/80 { background-color: rgba(24, 29, 34, 0.8); }
-.hh-dark .bg-gray-100 { background-color: #1c2227; }
-.hh-dark .bg-gray-900 { background-color: var(--brand); }
-.hh-dark .border-gray-50 { border-color: rgba(255, 255, 255, 0.06); }
-.hh-dark .border-gray-100 { border-color: rgba(255, 255, 255, 0.08); }
-.hh-dark .border-gray-200 { border-color: rgba(255, 255, 255, 0.14); }
-.hh-dark .border-gray-300 { border-color: rgba(255, 255, 255, 0.2); }
-.hh-dark .border-red-200 { border-color: rgba(248, 113, 113, 0.35); }
-.hh-dark .text-gray-900 { color: #f3f5f6; }
-.hh-dark .text-gray-800 { color: #f3f5f6; }
-.hh-dark .text-gray-700 { color: #e4e6e8; }
-.hh-dark .text-gray-600 { color: #c7ccd1; }
-.hh-dark .text-gray-500 { color: #9aa4ac; }
-.hh-dark .text-gray-400 { color: #8a929a; }
-.hh-dark .text-gray-300 { color: #5f6a72; }
-.hh-dark .text-gray-200 { color: #3a4046; }
-.hh-dark .hover\:bg-gray-50:hover { background-color: #181d22; }
-.hh-dark .hover\:bg-gray-50\/80:hover { background-color: rgba(24, 29, 34, 0.8); }
-.hh-dark .hover\:bg-gray-100:hover { background-color: #1c2227; }
-.hh-dark .hover\:bg-gray-200:hover { background-color: #242b31; }
-.hh-dark .hover\:bg-gray-800:hover { background-color: #0d4322; }
-.hh-dark .hover\:text-gray-400:hover { color: #9aa4ac; }
-.hh-dark .hover\:text-gray-600:hover { color: #c7ccd1; }
-.hh-dark .hover\:text-gray-700:hover { color: #f3f5f6; }
-.hh-dark .hover\:text-gray-800:hover { color: #f3f5f6; }
-.hh-dark .hover\:border-gray-200:hover { border-color: rgba(255, 255, 255, 0.14); }
-.hh-dark .bg-amber-50 { background-color: rgba(251, 191, 36, 0.12); }
-.hh-dark .bg-amber-100 { background-color: rgba(251, 191, 36, 0.16); }
-.hh-dark .text-amber-600 { color: #fbbf24; }
-.hh-dark .text-amber-700 { color: #fbbf24; }
-.hh-dark .bg-blue-100 { background-color: rgba(96, 165, 250, 0.14); }
-.hh-dark .text-blue-700 { color: #93c5fd; }
-.hh-dark .bg-purple-50 { background-color: rgba(167, 139, 250, 0.12); }
-.hh-dark .bg-purple-50\/60 { background-color: rgba(167, 139, 250, 0.08); }
-.hh-dark .bg-purple-100 { background-color: rgba(167, 139, 250, 0.16); }
-.hh-dark .bg-purple-600 { background-color: #a78bfa; }
-.hh-dark .text-purple-500 { color: #a78bfa; }
-.hh-dark .text-purple-600 { color: #a78bfa; }
-.hh-dark .text-purple-700 { color: #c4b5fd; }
-.hh-dark .hover\:bg-purple-50:hover { background-color: rgba(167, 139, 250, 0.12); }
-.hh-dark .hover\:bg-purple-700:hover { background-color: #8b6fe0; }
-.hh-dark .hover\:border-purple-300:hover { border-color: rgba(167, 139, 250, 0.5); }
-.hh-dark .hover\:text-purple-700:hover { color: #c4b5fd; }
-.hh-dark .bg-red-50 { background-color: rgba(248, 113, 113, 0.12); }
-.hh-dark .hover\:bg-red-50:hover { background-color: rgba(248, 113, 113, 0.14); }
-.hh-dark .hover\:border-red-300:hover { border-color: rgba(248, 113, 113, 0.5); }
-.hh-dark .text-red-500 { color: #f87171; }
-.hh-dark .text-red-600 { color: #f87171; }
-.hh-dark input,
-.hh-dark select,
-.hh-dark textarea {
-  background-color: #181d22;
-  border-color: rgba(255, 255, 255, 0.14);
-  color: #f3f5f6;
+/* ── Interactive tactile press feedback ── */
+.interactive-press {
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s ease, border-color 0.15s ease;
 }
-.hh-dark input::placeholder,
-.hh-dark textarea::placeholder { color: #5f6a72; }
-.hh-dark input:focus,
-.hh-dark select:focus,
-.hh-dark textarea:focus { border-color: var(--brand); }
-.hh-dark .skeleton {
-  background: linear-gradient(90deg, #181d22 25%, #1c2227 50%, #181d22 75%);
-  background-size: 200% 100%;
+.interactive-press:active {
+  transform: scale(0.98);
 }
 
-.glow-purple-sm {
-  box-shadow:
-    0 0 0 1px color-mix(in oklab, #a78bfa, transparent 40%),
-    0 0 8px color-mix(in oklab, #a78bfa, transparent 65%);
+/* ── Refined Icon Animations (No awkward 3D tilt on hover) ── */
+button:not(:disabled) svg:not(.animate-spin):not([data-static]),
+a svg:not(.animate-spin):not([data-static]),
+.interactive-icon svg:not(.animate-spin):not([data-static]),
+.btn-3d svg:not(.animate-spin):not([data-static]),
+.icon-iso {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), filter 0.25s ease, color 0.2s ease;
+  transform-origin: center center;
 }
 
-/* $/COP affixes inside a currency input — wrapper must be position:relative,
-   input needs matching left/right padding to clear the glyphs. */
+button:not(:disabled):hover svg:not(.animate-spin):not([data-static]):not(.sidebar-icon),
+a:not(.sidebar-nav-item):hover svg:not(.animate-spin):not([data-static]):not(.sidebar-icon),
+.interactive-icon:hover svg:not(.animate-spin):not([data-static]):not(.sidebar-icon),
+.group:hover .icon-iso,
+.group:hover svg:not(.animate-spin):not([data-static]):not(.sidebar-icon) {
+  transform: scale(1.10);
+  filter: drop-shadow(0 0 5px currentColor);
+}
+
+/* ── Clean Sidebar Navigation (No jarring 3D rotation) ── */
+.sidebar-nav-item {
+  transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.15s ease;
+}
+
+.sidebar-nav-item:not(.is-collapsed):not(.is-mobile-nav):hover {
+  transform: translateX(3px);
+  background: rgba(52, 160, 164, 0.08) !important;
+  border-color: rgba(52, 160, 164, 0.30) !important;
+  box-shadow: 0 4px 14px -2px rgba(5, 16, 24, 0.6);
+}
+
+.sidebar-nav-item.is-collapsed:hover {
+  transform: scale(1.05);
+  background: rgba(52, 160, 164, 0.08) !important;
+  border-color: rgba(52, 160, 164, 0.30) !important;
+}
+
+.sidebar-nav-item.is-mobile-nav:hover {
+  transform: translateY(-2px);
+  background: rgba(52, 160, 164, 0.10) !important;
+}
+
+.sidebar-nav-item:active {
+  transform: scale(0.98) !important;
+}
+
+.sidebar-nav-item:hover svg.sidebar-icon,
+.sidebar-nav-item:hover .icon-box svg {
+  transform: scale(1.15) !important;
+  color: var(--nav-accent, #52b69a) !important;
+  filter: drop-shadow(0 0 6px var(--nav-accent, #52b69a)) !important;
+}
+
+.sidebar-nav-item.is-active svg.sidebar-icon,
+.sidebar-nav-item.is-active .icon-box svg {
+  color: var(--nav-accent, #52b69a);
+  filter: drop-shadow(0 0 6px var(--nav-accent, #52b69a));
+}
+
+/* ── Global Dark Mode Theme Overrides (Palette: Teal / Ocean / Yale Blue) ── */
+body { color: #f0fae8; }
+.bg-white { background-color: #0a1f2f !important; }
+.bg-gray-50 { background-color: #0d263a !important; }
+.bg-gray-50\/60 { background-color: rgba(13, 38, 58, 0.6) !important; }
+.bg-gray-50\/80 { background-color: rgba(13, 38, 58, 0.8) !important; }
+.bg-gray-100 { background-color: #102d44 !important; }
+.bg-gray-200 { background-color: #133e5f !important; }
+.bg-gray-900 { background-color: var(--brand) !important; }
+
+.border-gray-50 { border-color: rgba(52, 160, 164, 0.08) !important; }
+.border-gray-100 { border-color: rgba(52, 160, 164, 0.15) !important; }
+.border-gray-200 { border-color: rgba(52, 160, 164, 0.25) !important; }
+.border-gray-300 { border-color: rgba(82, 182, 154, 0.35) !important; }
+.border-red-200 { border-color: rgba(248, 113, 113, 0.35) !important; }
+
+/* Crisp high-contrast typography hierarchy */
+.text-gray-900 { color: #ffffff !important; }
+.text-gray-800 { color: #f0fae8 !important; }
+.text-gray-700 { color: #dcf1eb !important; }
+.text-gray-600 { color: #bae2d7 !important; }
+.text-gray-500 { color: #97d4c3 !important; }
+.text-gray-400 { color: #75c5ae !important; }
+.text-gray-300 { color: #52b69a !important; }
+.text-gray-200 { color: #34a0a4 !important; }
+
+/* ── Universal Hover Fixes: NO light-mode white flashes in dark mode! ── */
+.hover\:bg-gray-50:hover,
+.hover\:bg-gray-50\/60:hover,
+.hover\:bg-gray-50\/80:hover {
+  background-color: rgba(52, 160, 164, 0.08) !important;
+}
+.hover\:bg-gray-100:hover {
+  background-color: rgba(52, 160, 164, 0.12) !important;
+}
+.hover\:bg-gray-200:hover {
+  background-color: rgba(52, 160, 164, 0.18) !important;
+}
+.hover\:bg-gray-800:hover {
+  background-color: #168aad !important;
+}
+.hover\:bg-white:hover,
+.hover\:bg-white\/5:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+.hover\:bg-white\/10:hover {
+  background-color: rgba(255, 255, 255, 0.10) !important;
+}
+.hover\:text-gray-400:hover,
+.hover\:text-gray-500:hover,
+.hover\:text-gray-600:hover,
+.hover\:text-gray-700:hover,
+.hover\:text-gray-800:hover {
+  color: #ffffff !important;
+}
+.hover\:border-gray-200:hover {
+  border-color: rgba(82, 182, 154, 0.40) !important;
+}
+.hover\:border-gray-300:hover {
+  border-color: rgba(82, 182, 154, 0.55) !important;
+}
+
+.interactive-hover {
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+}
+.interactive-hover:hover {
+  background-color: rgba(52, 160, 164, 0.08) !important;
+  border-color: rgba(52, 160, 164, 0.35) !important;
+  box-shadow: 0 4px 20px -2px rgba(5, 16, 24, 0.7);
+}
+
+.bg-amber-50 { background-color: rgba(251, 191, 36, 0.12) !important; }
+.bg-amber-100 { background-color: rgba(251, 191, 36, 0.16) !important; }
+.text-amber-600,
+.text-amber-700 { color: #fbbf24 !important; }
+
+.bg-blue-50 { background-color: rgba(22, 138, 173, 0.12) !important; }
+.bg-blue-100 { background-color: rgba(22, 138, 173, 0.18) !important; }
+.hover\:bg-blue-50:hover { background-color: rgba(22, 138, 173, 0.18) !important; }
+.hover\:bg-blue-100:hover { background-color: rgba(22, 138, 173, 0.24) !important; }
+.text-blue-500 { color: #1fb4e2 !important; }
+.text-blue-600 { color: #168aad !important; }
+.text-blue-700 { color: #57c7e9 !important; }
+
+.bg-purple-50 { background-color: rgba(52, 160, 164, 0.10) !important; }
+.bg-purple-50\/60 { background-color: rgba(52, 160, 164, 0.06) !important; }
+.bg-purple-100 { background-color: rgba(52, 160, 164, 0.16) !important; }
+.bg-purple-600 { background-color: #168aad !important; }
+.text-purple-500 { color: #52b69a !important; }
+.text-purple-600 { color: #34a0a4 !important; }
+.text-purple-700 { color: #dcf1eb !important; }
+.hover\:bg-purple-50:hover { background-color: rgba(52, 160, 164, 0.14) !important; }
+.hover\:bg-purple-700:hover { background-color: #126d89 !important; }
+.hover\:border-purple-300:hover { border-color: rgba(82, 182, 154, 0.45) !important; }
+.hover\:text-purple-700:hover { color: #ffffff !important; }
+
+.bg-red-50 { background-color: rgba(248, 113, 113, 0.12) !important; }
+.hover\:bg-red-50:hover { background-color: rgba(248, 113, 113, 0.18) !important; }
+.hover\:border-red-300:hover { border-color: rgba(248, 113, 113, 0.45) !important; }
+.text-red-500,
+.text-red-600 { color: #f87171 !important; }
+
+.bg-brand-50 { background-color: rgba(52, 160, 164, 0.12) !important; }
+.hover\:bg-brand-50:hover { background-color: rgba(52, 160, 164, 0.18) !important; }
+.hover\:bg-brand-100:hover { background-color: rgba(52, 160, 164, 0.24) !important; }
+.text-brand-600 { color: #52b69a !important; }
+.text-brand-700 { color: #dcf1eb !important; }
+
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  background-color: #0d263a !important;
+  border-color: rgba(52, 160, 164, 0.25) !important;
+  color: #f0fae8 !important;
+}
+input:not([type="checkbox"]):not([type="radio"])::placeholder,
+textarea::placeholder { color: #52b69a !important; }
+input:not([type="checkbox"]):not([type="radio"]):focus,
+select:focus,
+textarea:focus {
+  border-color: #52b69a !important;
+  box-shadow: 0 0 0 2px rgba(82, 182, 154, 0.30) !important;
+}
+
+/* $/COP affixes inside a currency input */
 .currency-field { position: relative; }
 .currency-field input { padding-left: 26px !important; }
 .currency-field.has-suffix input { padding-right: 42px !important; }
@@ -194,31 +467,120 @@
   transform: translateY(-50%);
   font-size: 13px;
   font-weight: 600;
-  color: #9aa4ac;
+  color: #52b69a;
   pointer-events: none;
 }
 .currency-affix-prefix { left: 12px; }
-.currency-affix-suffix { right: 12px; font-size: 11px; font-weight: 500; color: #5f6a72; }
+.currency-affix-suffix { right: 12px; font-size: 11px; font-weight: 500; color: #34a0a4; }
 
-/* Shared timing for the native View Transitions API (Finance Explorer,
-   Household Picker, and the classic/interactive view switch) — a touch
-   slower than the browser default so navigation reads as a deliberate
-   "presentation" move rather than a snap-cut. */
+/* ── Native View Transitions ── */
 ::view-transition-group(*) {
-  animation-duration: 420ms;
-  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  animation-duration: 380ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 ::view-transition-old(*),
 ::view-transition-new(*) {
-  animation-duration: 220ms;
+  animation-duration: 200ms;
 }
 
+/* Shimmer Skeleton */
 .skeleton {
-  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+  background: linear-gradient(90deg, #0a1f2f 25%, #133e5f 50%, #0a1f2f 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
 
 @keyframes shimmer {
   to { background-position: -200% 0; }
+}
+
+/* Scrollbar polish - Theme: Teal / Ocean / Yale Blue */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #051018;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #52b69a 0%, #34a0a4 50%, #168aad 100%);
+  border-radius: 9999px;
+  border: 1.5px solid rgba(82, 182, 154, 0.4);
+  box-shadow: 0 0 8px rgba(52, 160, 164, 0.6);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #d9ed92 0%, #52b69a 50%, #34a0a4 100%);
+  box-shadow: 0 0 12px rgba(82, 182, 154, 0.85);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #34a0a4 #051018;
+  }
+}
+
+.scrollbar-none {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none !important;
+}
+
+/* ── Session clock (sidebar): sweeping hand and state pulses ── */
+@keyframes sessionSweep {
+  to { transform: rotate(360deg); }
+}
+@keyframes sessionPulse {
+  0%, 100% { filter: drop-shadow(0 0 2px var(--session-color)); }
+  50%      { filter: drop-shadow(0 0 9px var(--session-color)); }
+}
+@keyframes sessionShake {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-9deg); }
+  40% { transform: rotate(8deg); }
+  60% { transform: rotate(-6deg); }
+  80% { transform: rotate(5deg); }
+}
+.session-hand { transform-origin: 16px 16px; animation: sessionSweep 60s linear infinite; }
+.session-clock[data-state="danger"] .session-hand   { animation-duration: 12s; }
+.session-clock[data-state="critical"] .session-hand { animation-duration: 3s; }
+.session-clock[data-state="ok"]       { filter: drop-shadow(0 0 3px var(--session-color)); }
+.session-clock[data-state="low"]      { animation: sessionPulse 3s ease-in-out infinite; }
+.session-clock[data-state="danger"]   { animation: sessionPulse 1.4s ease-in-out infinite; }
+.session-clock[data-state="critical"] { animation: sessionPulse 0.6s ease-in-out infinite, sessionShake 0.9s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .session-hand, .session-clock { animation: none !important; }
+}
+
+/* ── Notification bell: rings while there is something unread ── */
+@keyframes bellRing {
+  0%, 46%, 100% { transform: rotate(0); }
+  4%  { transform: rotate(16deg); }
+  10% { transform: rotate(-14deg); }
+  16% { transform: rotate(11deg); }
+  22% { transform: rotate(-8deg); }
+  28% { transform: rotate(5deg); }
+  34% { transform: rotate(-3deg); }
+  40% { transform: rotate(1deg); }
+}
+@keyframes bellGlow {
+  0%, 100% { filter: drop-shadow(0 0 1px var(--bell-color)); }
+  50%      { filter: drop-shadow(0 0 7px var(--bell-color)); }
+}
+.bell-icon { transform-origin: 50% 12%; }
+.bell-btn[data-state="info"] .bell-icon,
+.bell-btn[data-state="warning"] .bell-icon { animation: bellRing 5s ease-in-out infinite, bellGlow 2.6s ease-in-out infinite; }
+.bell-btn[data-state="critical"] .bell-icon { animation: bellRing 2.4s ease-in-out infinite, bellGlow 1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .bell-btn .bell-icon { animation: none !important; }
 }

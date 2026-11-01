@@ -1,3 +1,4 @@
+import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -12,32 +13,34 @@ import { useAuth } from '@/hooks/useAuth'
 import { addAccount, getAccounts, updateAccount, deleteAccount } from '@/lib/firestore'
 import { formatCOP } from '@/shared'
 import type { AccountType } from '@/shared'
+import { AppIcon, EmptyMark } from '@/components/ui/AppIcon'
 
 const ACCOUNT_TYPES: { value: AccountType; label: string; icon: string }[] = [
-  { value: 'checking',   label: 'Cuenta corriente', icon: '🏦' },
-  { value: 'savings',    label: 'Cuenta de ahorros', icon: '💰' },
-  { value: 'cash',       label: 'Efectivo',          icon: '💵' },
-  { value: 'investment', label: 'Inversión',          icon: '📈' },
+  { value: 'checking', label: 'Cuenta corriente', icon: 'bank' },
+  { value: 'savings', label: 'Cuenta de ahorros', icon: 'savings' },
+  { value: 'cash', label: 'Efectivo', icon: 'cash' },
+  { value: 'investment', label: 'Inversión', icon: 'invest' },
 ]
 
-const COLORS = ['#22c55e','#3b82f6','#f59e0b','#a855f7','#ec4899','#06b6d4','#ef4444']
+const COLORS = ['#52b69a', '#34a0a4', '#168aad', '#76c893', '#d9ed92', '#1a759f', '#1e6091']
 
 const schema = z.object({
-  name:    z.string().min(1, 'Nombre requerido'),
-  type:    z.enum(['checking', 'savings', 'cash', 'investment']),
-  balance: z.coerce.number(),
-  color:   z.string(),
+  name: z.string().min(1, 'Nombre requerido'),
+  type: z.enum(['checking', 'savings', 'cash', 'investment']),
+  balance: z.coerce.number().min(0, 'El saldo no puede ser negativo'),
+  color: z.string(),
 })
 
 type FormData = z.infer<typeof schema>
 
 export default function AccountsPage() {
-  const { user }                    = useAuth()
-  const [accounts, setAccounts]     = useState<any[]>([])
-  const [loading, setLoading]       = useState(true)
-  const [open, setOpen]             = useState(false)
-  const [editItem, setEditItem]     = useState<any>(null)
-  const [saving, setSaving]         = useState(false)
+  const ask = useConfirm()
+  const { user } = useAuth()
+  const [accounts, setAccounts] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [editItem, setEditItem] = useState<any>(null)
+  const [saving, setSaving] = useState(false)
 
   const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -80,7 +83,7 @@ export default function AccountsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar esta cuenta?')) return
+    if (!(await ask('¿Eliminar esta cuenta?', { title: 'Eliminar cuenta' }))) return
     await deleteAccount(id)
     setAccounts((prev) => prev.filter((a) => a.id !== id))
   }
@@ -101,7 +104,7 @@ export default function AccountsPage() {
         <div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-brand-200 border-t-brand-600 rounded-full animate-spin" /></div>
       ) : accounts.length === 0 ? (
         <Card className="text-center py-10">
-          <p className="text-4xl mb-2">💳</p>
+          <EmptyMark name="debt" />
           <p className="text-sm text-gray-500">No tienes cuentas registradas.</p>
           <p className="text-xs text-gray-400 mt-1">Agrega tus cuentas para llevar el control.</p>
         </Card>
@@ -114,7 +117,7 @@ export default function AccountsPage() {
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl flex-shrink-0"
                     style={{ backgroundColor: acc.color + '20' }}>
-                    {typeInfo?.icon ?? '💳'}
+                    <AppIcon name={typeInfo?.icon ?? 'debt'} size={20} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-gray-900">{acc.name}</p>
@@ -137,8 +140,8 @@ export default function AccountsPage() {
       <Modal open={open} onClose={() => setOpen(false)} title={editItem ? 'Editar cuenta' : 'Nueva cuenta'}>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <Input label="Nombre" placeholder="ej. Bancolombia ahorros" {...register('name')} error={errors.name?.message} />
-          <Select label="Tipo" options={ACCOUNT_TYPES.map((t) => ({ value: t.value, label: `${t.icon} ${t.label}` }))} {...register('type')} />
-          <Input label="Saldo actual (COP)" type="number" placeholder="0" {...register('balance')} error={errors.balance?.message} />
+          <Select label="Tipo" options={ACCOUNT_TYPES.map((t) => ({ value: t.value, label: t.label }))} {...register('type')} />
+          <Input label="Saldo actual (COP)" money placeholder="0" {...register('balance')} error={errors.balance?.message} />
           <div>
             <p className="text-sm font-medium text-gray-700 mb-2">Color</p>
             <div className="flex gap-2 flex-wrap">

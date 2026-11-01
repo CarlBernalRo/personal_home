@@ -9,14 +9,16 @@ import HouseholdPage from '@/pages/HouseholdPage'
 import FinancesPage from '@/pages/FinancesPage'
 import SeedPage from '@/pages/SeedPage'
 import ProfilePage from '@/pages/ProfilePage'
+import AdminUsersPage from '@/pages/AdminUsersPage'
+import NotificationsPage from '@/pages/NotificationsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center bg-[#f8fafc]">
+    <div className="min-h-screen flex items-center justify-center bg-[#0d1114]">
       <div className="flex flex-col items-center gap-3">
-        <div className="w-10 h-10 border-4 border-brand-200 border-t-brand-600 rounded-full animate-spin" />
-        <p className="text-sm text-gray-400">Cargando…</p>
+        <div className="w-10 h-10 border-4 border-brand-500/20 border-t-brand-500 rounded-full animate-spin" />
+        <p className="text-sm text-[#8a929a] font-mono">Cargando…</p>
       </div>
     </div>
   )
@@ -24,11 +26,18 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function RequireAdmin({ children }: { children: React.ReactNode }) {
+  const { isAdmin, loading } = useAuth()
+  if (loading) return null
+  if (!isAdmin) return <Navigate to="/" replace />
+  return <>{children}</>
+}
+
 function RedirectIfAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center bg-[#f8fafc]">
-      <div className="w-10 h-10 border-4 border-brand-200 border-t-brand-600 rounded-full animate-spin" />
+    <div className="min-h-screen flex items-center justify-center bg-[#0d1114]">
+      <div className="w-10 h-10 border-4 border-brand-500/20 border-t-brand-500 rounded-full animate-spin" />
     </div>
   )
   if (user) return <Navigate to="/" replace />
@@ -50,7 +59,10 @@ export const router = createBrowserRouter([
       { path: 'hogar',        element: <HouseholdPage /> },
       { path: 'finanzas',     element: <FinancesPage /> },
       { path: 'seed',          element: <SeedPage /> },
+      { path: 'notificaciones', element: <NotificationsPage /> },
       { path: 'perfil',        element: <ProfilePage /> },
+      { path: 'usuarios',      element: <RequireAdmin><AdminUsersPage /></RequireAdmin> },
     ],
+
   },
 ])

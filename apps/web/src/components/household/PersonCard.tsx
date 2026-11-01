@@ -1,0 +1,254 @@
+import { type ReactNode } from 'react'
+import { format } from 'date-fns'
+import { es } from 'date-fns/locale'
+import { ChevronDown, Clock, Coins, GitMerge, Info } from 'lucide-react'
+import { clsx } from 'clsx'
+import { Avatar } from '@/components/ui/Avatar'
+import { IconTip } from '@/components/ui/IconTip'
+import { formatCOP, remainingOf, isPendingDebt } from '@/shared'
+import { toDate, type Rec } from './ledger'
+
+/** Small info icon with a themed tooltip, used next to micro-labels. */
+export function Tip({ text }: { text: string }) {
+  return (
+    <IconTip text={text}>
+      <Info size={11} className="text-[#8a929a] hover:text-brand-300 transition" />
+    </IconTip>
+  )
+}
+
+const labelCls = 'font-pixel text-[9px] text-brand-400 uppercase tracking-widest font-bold flex items-center gap-1.5'
+
+/** Expand / collapse with a CSS grid height animation. */
+function ExpandSection({ open, children }: { open: boolean; children: ReactNode }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateRows: open ? '1fr' : '0fr', transition: 'grid-template-rows 220ms ease' }}>
+      <div style={{ overflow: 'hidden' }}>{children}</div>
+    </div>
+  )
+}
+
+// ── How a person's balance was calculated ────────────────────────────────────
+function BalanceBreakdown({ name, deuda, abono, cruzado, saldo }: { name: string; deuda: number; abono: number; cruzado: number; saldo: number }) {
+  return (
+    <div className="bg-[#0d263a] border border-white/10 rounded-xl px-3.5 py-3 mb-3 space-y-1.5">
+      <p className={clsx(labelCls, 'mb-1.5')}>
+        Cómo se calcula
+        <Tip text="Suma de todas sus deudas históricas, menos lo que ha abonado y lo que se le ha cruzado: nunca se resetea por mes." />
+      </p>
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-[#9aa4ac]">Deudas totales</span>
+        <span className="font-semibold text-[#f3f5f6] tabular-nums font-mono">{formatCOP(deuda)}</span>
+      </div>
+      {abono > 0 && (
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="text-[#9aa4ac]">− Abonos</span>
+          <span className="font-semibold text-brand-300 tabular-nums font-mono">−{formatCOP(abono)}</span>
+        </div>
+      )}
+      {cruzado > 0 && (
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="text-[#9aa4ac]">− Cruzado</span>
+          <span className="font-semibold text-sky-300 tabular-nums font-mono">−{formatCOP(cruzado)}</span>
+        </div>
+      )}
+      <div className="flex items-center justify-between text-[11px] pt-1.5 mt-1 border-t border-white/10">
+        <span className="font-bold text-[#f3f5f6]">= {name} debe</span>
+        <span className="font-bold text-amber-300 tabular-nums font-mono text-xs">{formatCOP(Math.max(0, saldo))}</span>
+      </div>
+    </div>
+  )
+}
+
+// ── Read-only compact row for settled debts / abonos ─────────────────────────
+function StatusItem({ d, label, chip, onSelect }: { d: Rec; label: string; chip: string; onSelect: () => void }) {
+  return (
+    <button onClick={onSelect} className="w-full text-left py-2 px-2 border-b border-white/[0.06] last:border-0 group hover:bg-white/[0.04] rounded-lg transition-colors">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+        <div className="min-w-0">
+          <p className="text-xs text-[#f0fae8] truncate">{d.concept}</p>
+          <p className="text-[10px] font-mono text-[#8a929a]">{format(toDate(d.date), 'dd MMM yyyy', { locale: es })}</p>
+        </div>
+        <div className="flex items-center justify-between gap-2 sm:justify-end flex-shrink-0">
+          <span className={clsx('text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md border', chip)}>{label}</span>
+          <span className="text-xs font-semibold text-[#9aa4ac] tabular-nums font-mono">{formatCOP(d.amount)}</span>
+        </div>
+      </div>
+    </button>
+  )
+}
+
+// ── Open debt with its progress and the Cruzar / Abonar actions ──────────────
+function DebtItem({ d, canCross, onCross, onAbonar, onSelect }: {
+  d: Rec; canCross: boolean; onCross: () => void; onAbonar: () => void; onSelect: () => void
+}) {
+  const crossed = (d.crossedAmount as number) || 0
+  const paidAbono = (d.paidAbono as number) || 0
+  const remaining = remainingOf(d)
+  const dueDate = d.dueDate ? toDate(d.dueDate) : null
+  const overdue = dueDate ? dueDate < new Date() : false
+  const progress = d.amount > 0 ? Math.min(100, Math.round(((crossed + paidAbono) / d.amount) * 100)) : 0
+
+  return (
+    <div className="py-3 border-b border-white/[0.06] last:border-0">
+      <button onClick={onSelect} className="w-full text-left group">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3 mb-2">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-[#f0fae8] truncate group-hover:text-brand-300 transition">{d.concept}</p>
+            <div className="flex items-center gap-1.5 text-[10px] font-mono text-[#8a929a] mt-0.5 flex-wrap">
+              <span>{format(toDate(d.date), 'dd MMM yyyy', { locale: es })}</span>
+              {crossed > 0 && <span className="text-sky-300">· {formatCOP(crossed)} cruzado</span>}
+              {paidAbono > 0 && <span className="text-brand-300">· {formatCOP(paidAbono)} abonado</span>}
+            </div>
+            {dueDate && (
+              <p className={clsx('text-[10px] mt-0.5 flex items-center gap-1', overdue ? 'text-red-400 font-semibold' : 'text-[#8a929a]')}>
+                <Clock size={10} /> {overdue ? 'Venció el' : 'Vence el'} {format(dueDate, 'dd MMM yyyy', { locale: es })}
+              </p>
+            )}
+          </div>
+          <div className="sm:text-right flex-shrink-0">
+            {(crossed > 0 || paidAbono > 0) && <p className="text-[10px] text-white/40 line-through tabular-nums font-mono">{formatCOP(d.amount)}</p>}
+            <p className="text-sm font-bold text-amber-300 tabular-nums font-mono">{formatCOP(remaining)}</p>
+          </div>
+        </div>
+        {(crossed > 0 || paidAbono > 0) && (
+          <div className="mb-2 flex items-center gap-2">
+            <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
+              <div className="h-full bg-brand-400 rounded-full transition-all duration-300" style={{ width: `${progress}%` }} />
+            </div>
+            <span className="text-[10px] font-mono text-[#8a929a]">{progress}% cubierto</span>
+          </div>
+        )}
+      </button>
+      <div className="flex gap-1.5">
+        <button
+          onClick={onCross}
+          disabled={!canCross}
+          title={canCross ? undefined : 'La otra persona no tiene deudas pendientes para cruzar'}
+          className="flex-1 py-1.5 rounded-lg border border-white/10 bg-white/[0.03] text-[11px] font-semibold text-[#dcf1eb] hover:border-brand-400/50 hover:text-white hover:bg-brand-500/10 transition flex items-center justify-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <GitMerge size={11} /> Cruzar
+        </button>
+        <button
+          onClick={onAbonar}
+          className="flex-1 py-1.5 rounded-lg bg-brand-500 text-[#051018] hover:bg-brand-400 text-[11px] font-semibold transition flex items-center justify-center gap-1 interactive-press"
+        >
+          <Coins size={12} /> Abonar
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── A person's debts grouped by state: Pendiente / Cruzado / Pagado / Abonos ─
+function PersonDebtGroups({ personDebts, canCross, onCross, onAbonar, onSelect }: {
+  personDebts: Rec[]; canCross: boolean; onCross: (d: Rec) => void; onAbonar: (d: Rec) => void; onSelect: (d: Rec) => void
+}) {
+  const pendientes = personDebts.filter((d) => isPendingDebt(d))
+  const cruzados = personDebts.filter((d) => d.tipo === 'Deuda' && d.cruzado)
+  const saldados = personDebts.filter((d) => d.tipo === 'Deuda' && !d.cruzado && remainingOf(d) <= 0)
+  const abonos = personDebts.filter((d) => d.tipo === 'Abono')
+
+  if (pendientes.length + cruzados.length + saldados.length + abonos.length === 0) {
+    return <p className="text-xs text-[#8a929a] py-3">Sin registros.</p>
+  }
+
+  const Group = ({ title, tip, children }: { title: string; tip: string; children: ReactNode }) => (
+    <div className="pt-2">
+      <p className={clsx(labelCls, 'pb-0.5')}>{title}<Tip text={tip} /></p>
+      {children}
+    </div>
+  )
+
+  return (
+    <div>
+      {pendientes.length > 0 && (
+        <Group title="Pendiente" tip="Gastos sin cubrir todavía: ni abonados ni cruzados.">
+          {pendientes.map((d) => (
+            <DebtItem key={d.id} d={d} canCross={canCross} onCross={() => onCross(d)} onAbonar={() => onAbonar(d)} onSelect={() => onSelect(d)} />
+          ))}
+        </Group>
+      )}
+      {cruzados.length > 0 && (
+        <Group title="Cruzado" tip="Se compensó contra un gasto de la otra persona, sin mover dinero entre ambos.">
+          {cruzados.map((d) => <StatusItem key={d.id} d={d} label="Cruzado" chip="bg-sky-500/15 text-sky-300 border-sky-500/30" onSelect={() => onSelect(d)} />)}
+        </Group>
+      )}
+      {saldados.length > 0 && (
+        <Group title="Pagado" tip="Se pagó directamente, en efectivo o transferencia: ya no cuenta como pendiente.">
+          {saldados.map((d) => <StatusItem key={d.id} d={d} label="Pagado" chip="bg-emerald-500/15 text-emerald-300 border-emerald-500/30" onSelect={() => onSelect(d)} />)}
+        </Group>
+      )}
+      {abonos.length > 0 && (
+        <Group title="Movimientos de abono" tip="El historial de pagos directos registrados, en orden.">
+          {abonos.map((d) => <StatusItem key={d.id} d={d} label="Abono" chip="bg-brand-500/20 text-brand-300 border-brand-500/40" onSelect={() => onSelect(d)} />)}
+        </Group>
+      )}
+    </div>
+  )
+}
+
+interface PersonCardProps {
+  name: string
+  role: string
+  photoURL: string | null
+  color: string
+  net: number
+  breakdown: { deuda: number; abono: number; cruzado: number; saldo: number }
+  debts: Rec[]
+  canCross: boolean
+  expanded: boolean
+  onToggle: () => void
+  onAbonarAll: () => void
+  onCross: (d: Rec) => void
+  onAbonar: (d: Rec) => void
+  onSelect: (d: Rec) => void
+}
+
+/** One member of the household: balance chip on top, breakdown and debts when expanded. */
+export function PersonCard({ name, role, photoURL, color, net, breakdown, debts, canCross, expanded, onToggle, onAbonarAll, onCross, onAbonar, onSelect }: PersonCardProps) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-[#0a1f2f] shadow-xl overflow-hidden">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle() } }}
+        className="w-full flex items-center gap-3 p-4 hover:bg-white/[0.04] transition-colors text-left cursor-pointer"
+      >
+        <Avatar name={name} photoURL={photoURL} size={36} color={color} className="!ring-white/20" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-[#f3f5f6] truncate">{name}</p>
+          <p className="font-pixel text-[8px] text-[#8a929a] uppercase tracking-widest">{role}</p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {net > 0 ? (
+            <span className="text-xs font-bold font-mono text-red-300 bg-red-500/15 border border-red-500/30 px-2 py-1 rounded-md whitespace-nowrap">Debe {formatCOP(net)}</span>
+          ) : (
+            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-2 py-1 rounded-md">Al día</span>
+          )}
+          <ChevronDown size={14} className={clsx('text-[#8a929a] transition-transform duration-200', expanded && 'rotate-180')} />
+        </div>
+      </div>
+
+      {net > 0 && (
+        <div className="px-4 pb-3 -mt-1">
+          <button
+            onClick={onAbonarAll}
+            className="w-full py-1.5 rounded-lg border border-brand-500/30 bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 text-[11px] font-semibold transition flex items-center justify-center gap-1.5"
+            title={`Registrar abono de ${name}`}
+          >
+            <Coins size={12} /> Abonar al saldo de {name}
+          </button>
+        </div>
+      )}
+
+      <ExpandSection open={expanded}>
+        <div className="px-4 pb-3 border-t border-white/10 pt-3">
+          <BalanceBreakdown name={name} {...breakdown} />
+          <PersonDebtGroups personDebts={debts} canCross={canCross} onCross={onCross} onAbonar={onAbonar} onSelect={onSelect} />
+        </div>
+      </ExpandSection>
+    </div>
+  )
+}

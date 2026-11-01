@@ -20,10 +20,24 @@ service cloud.firestore {
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberNames', 'memberPhotos']);
     }
 
-    // Whitelist — any authenticated user can check, nobody can write from client
+    // The single admin signs in with username/password (Auth email below, password
+    // provider). Integrantes sign in with Google, so they can never match this.
+    function isAdmin() {
+      return isAuth() &&
+        request.auth.token.email == 'admin@gastoshogar.local' &&
+        request.auth.token.firebase.sign_in_provider == 'password';
+    }
+
+    // Whitelist — any authenticated user can read (login check); only the admin writes
     match /allowedUsers/{docId} {
       allow read:  if isAuth();
-      allow write: if false;
+      allow write: if isAdmin();
+    }
+
+    // Roles
+    match /roles/{roleId} {
+      allow read:  if isAuth();
+      allow write: if isAdmin();
     }
 
     // User profiles
@@ -62,6 +76,12 @@ service cloud.firestore {
       allow read, delete: if isAuth() && isOwner(resource.data.userId);
       allow create:       if isAuth() && isOwner(request.resource.data.userId);
       allow update:       if isAuth() && isOwner(resource.data.userId);
+    }
+
+    // Money moved between a user's own accounts
+    match /accountTransfers/{id} {
+      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+      allow create:       if isAuth() && isOwner(request.resource.data.userId);
     }
 
     // Incomes
@@ -104,6 +124,20 @@ service cloud.firestore {
       allow read:           if isHouseholdMember(resource.data.householdId);
       allow create:         if isAuth() && isHouseholdMember(request.resource.data.householdId);
       allow update, delete: if isHouseholdMember(resource.data.householdId);
+    }
+    // Notifications — each one belongs to its recipient; anyone signed in may create one, but only as themselves
+    match /notifications/{id} {
+      allow read, update, delete: if isAuth() && isOwner(resource.data.userId);
+      allow create:              if isAuth() && request.resource.data.fromUid == request.auth.uid;
+    }
+
+    // Household invitations — made by a member, answered by the invited e-mail
+    match /householdInvites/{id} {
+      allow read:   if isAuth() && (request.auth.token.email.lower() == resource.data.email || isHouseholdMember(resource.data.householdId));
+      allow create: if isAuth() && isHouseholdMember(request.resource.data.householdId) && request.resource.data.invitedBy == request.auth.uid;
+      allow update: if isAuth() && request.auth.token.email.lower() == resource.data.email &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt']);
+      allow delete: if isAuth() && (request.auth.token.email.lower() == resource.data.email || isHouseholdMember(resource.data.householdId));
     }
   }
 }

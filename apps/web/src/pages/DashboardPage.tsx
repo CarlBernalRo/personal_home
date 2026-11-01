@@ -1,254 +1,120 @@
-import { useEffect, useState } from 'react'
-import { format, startOfMonth, endOfMonth } from 'date-fns'
+import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { TrendingDown, TrendingUp, CalendarCheck, Scale } from 'lucide-react'
-import { Card } from '@/components/ui/Card'
-import { SkeletonCard, SkeletonList } from '@/components/ui/Skeleton'
-import { useAuth } from '@/hooks/useAuth'
-import { useDisplayName } from '@/hooks/useDisplayName'
-import {
-  getExpenses, getIncomes, getFixedExpenses, getFixedExpensePayments,
-  getHouseholdDebts, calcNetBalance, getSavingsGoals,
-} from '@/lib/firestore'
-import { formatCOP, PERSONAL_CATEGORIES } from '@/shared'
+import { CalendarRange, Sparkles } from 'lucide-react'
+import { SkeletonCard } from '@/components/ui/Skeleton'
+import { MobileCollapse } from '@/components/ui/MobileCollapse'
+import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
+import { SalaryPanel } from '@/components/salary/SalaryPanel'
+import { useDashboardData } from '@/hooks/useDashboardData'
+import { useDefaultAccount } from '@/hooks/useDefaultAccount'
+import { KpiRow } from '@/components/dashboard/KpiRow'
+import { SalarySplit } from '@/components/dashboard/SalarySplit'
+import { ScheduleTimeline } from '@/components/dashboard/ScheduleTimeline'
+import { TrendChart } from '@/components/dashboard/TrendChart'
+import { BalanceChart } from '@/components/dashboard/BalanceChart'
+import { FixedZone } from '@/components/dashboard/FixedZone'
+import { ExpensesZone } from '@/components/dashboard/ExpensesZone'
+import { AccountsZone } from '@/components/dashboard/AccountsZone'
+import { HouseholdZone } from '@/components/dashboard/HouseholdZone'
+import { GoalsCard } from '@/components/dashboard/GoalsCard'
+
+const DAY_MS = 86_400_000
 
 export default function DashboardPage() {
-  const { user, profile } = useAuth()
-  const [expenses, setExpenses]   = useState<any[]>([])
-  const [incomes, setIncomes]     = useState<any[]>([])
-  const [fixedExp, setFixedExp]   = useState<any[]>([])
-  const [fixedPay, setFixedPay]   = useState<any[]>([])
-  const [debts, setDebts]         = useState<any[]>([])
-  const [goals, setGoals]         = useState<any[]>([])
-  const [loading, setLoading]     = useState(true)
+  const data = useDashboardData()
+  useDefaultAccount(data.salary, data.outlook ? data.outlook.cash : null)
 
-  const now         = new Date()
-  const currentMonth = format(now, 'yyyy-MM')
-  const monthStart  = startOfMonth(now)
-  const monthEnd    = endOfMonth(now)
-  const householdId = (profile?.householdId as string | null) ?? null
-
-  useEffect(() => {
-    if (!user) return
-    const loads: Promise<any>[] = [
-      getExpenses(user.uid),
-      getIncomes(user.uid),
-      getFixedExpenses(user.uid),
-      getFixedExpensePayments(user.uid, currentMonth),
-      getSavingsGoals(user.uid),
-    ]
-    if (householdId) {
-      loads.push(getHouseholdDebts(householdId))
-    } else {
-      loads.push(Promise.resolve([]))
-    }
-    Promise.all(loads).then(([exp, inc, fxExp, fxPay, gls, dbt]) => {
-      setExpenses(exp as any[])
-      setIncomes(inc as any[])
-      setFixedExp(fxExp as any[])
-      setFixedPay(fxPay as any[])
-      setGoals(gls as any[])
-      setDebts(dbt as any[])
-      setLoading(false)
-    })
-  }, [user, householdId, currentMonth])
-
-  const monthExpenses = expenses.filter((e) => {
-    const d = e.date instanceof Date ? e.date : new Date(e.date)
-    return d >= monthStart && d <= monthEnd
-  })
-  const monthIncomes = incomes.filter((i) => i.month === currentMonth)
-
-  const totalExpenses = monthExpenses.reduce((s: number, e: any) => s + e.amount, 0)
-  const totalIncomes  = monthIncomes.reduce((s: number, i: any) => s + i.amount, 0)
-  const netMonth      = totalIncomes - totalExpenses
-
-  const fixedPaidIds = new Set(fixedPay.map((p: any) => p.fixedExpenseId as string))
-  const fixedPaidCount = fixedExp.filter((fe: any) => fixedPaidIds.has(fe.id as string)).length
-  const fixedTotal     = fixedExp.length
-
-  const myBalance = user ? calcNetBalance(debts, user.uid) : 0
-
-  const displayNameVal = useDisplayName()
-  const firstName = displayNameVal || 'bienvenido'
-  const monthLabel = format(now, "MMMM 'de' yyyy", { locale: es })
-
-  const recentExpenses = monthExpenses.slice(0, 5)
-
-  const totalSaved  = goals.reduce((s: number, g: any) => s + g.currentAmount, 0)
-  const totalTarget = goals.reduce((s: number, g: any) => s + g.targetAmount, 0)
-
-  if (loading) {
+  if (data.loading) {
     return (
-      <div className="space-y-4 fade-in">
-        <div className="space-y-1">
+      <div className="space-y-4 fade-in" aria-busy="true" aria-label="Cargando resumen">
+        <div className="h-14 bg-[#0d263a] notch-sm skeleton" />
+        <div className="h-24 bg-[#0d263a] notch-sm skeleton" />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
           <SkeletonCard />
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="h-72 bg-[#0d263a] notch skeleton" />
+          <div className="h-72 bg-[#0d263a] notch skeleton" />
         </div>
-        <SkeletonList count={3} />
       </div>
     )
   }
 
+  const { bounds, salaryMonth } = data
+  const periodLabel = `${format(bounds.start, 'd MMM', { locale: es })} – ${format(new Date(bounds.end.getTime() - DAY_MS), 'd MMM', { locale: es })}`
+  const [y, m] = salaryMonth.split('-').map(Number)
+  const monthLabel = format(new Date(y, m - 1, 1), 'MMMM', { locale: es })
+
+  const framed = 'rounded-3xl border border-white/10 bg-[#0a1f2f]/50'
+  const scrollProps = {
+    contentClassName: 'max-lg:!overflow-visible space-y-5 py-3 !pl-3 !pr-3 lg:py-4 lg:!pl-4 lg:!pr-6',
+    corners: 'both' as const,
+    borderRadius: 24,
+    offset: 7,
+    variant: 'plain' as const,
+    themeColor: 'brand' as const,
+  }
+
   return (
-    <div className="space-y-5 fade-in">
-      {/* Greeting */}
-      <div>
-        <h1 className="text-xl font-bold text-[#0f172a]">
-          Hola, {firstName} 👋
-        </h1>
-        <p className="text-sm text-[#64748b] capitalize">{monthLabel}</p>
+    <div className="flex flex-col gap-5 fade-in text-[#f0fae8] min-w-0 lg:flex-row lg:h-full lg:min-h-0">
+      {/* Left pane: who you are, the salary and the money now; the zones that need little room (Hogar, metas) */}
+      <CurvedScrollContainer
+        className={`lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 ${framed}`}
+        {...scrollProps}
+      >
+        <div className="min-w-0">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 mb-1.5 notch-sm bg-brand-500/10 border border-brand-500/30 text-brand-400 font-pixel text-[8px] uppercase tracking-wider glow-brand-sm">
+            <Sparkles size={10} aria-hidden="true" />
+            <span>Período de sueldo</span>
+          </div>
+          <h1 className="text-3xl font-bold tracking-tight text-[#f0fae8] capitalize truncate">{monthLabel} <span className="text-brand-400">{y}</span></h1>
+          <p className="mt-1.5 inline-flex items-center gap-2 notch-sm px-3 py-1.5 bg-brand-500/10 border border-brand-500/30 text-sm font-mono font-semibold text-brand-200">
+            <CalendarRange size={14} className="text-brand-400" aria-hidden="true" />
+            {periodLabel}
+          </p>
+        </div>
+
+        {/* On pay day the prompt to confirm the salary shows here; the detailed breakdown lives in Fijos / Gastos */}
+        <SalaryPanel variant="pending" salary={data.salary} expenses={data.fixed.expenses} paymentIndex={data.fixed.paymentIndex} />
+
+        <KpiRow compact outlook={data.outlook} ledger={data.ledger} income={data.income} salary={data.salary} />
+
+        <MobileCollapse title="Hogar y metas">
+          <HouseholdZone households={data.households} householdTotals={data.householdTotals} />
+          <GoalsCard goals={data.goals} />
+        </MobileCollapse>
+      </CurvedScrollContainer>
+
+      {/* Right pane: the salary split is the fixed header, the charts and the zones scroll below it */}
+      <div className="min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0">
+        {/* Where the salary went stays fixed on top; the charts and zones scroll below it */}
+        <div className="flex-shrink-0">
+          <SalarySplit ledger={data.ledger} income={data.income} />
+        </div>
+
+        <CurvedScrollContainer className={`lg:flex-1 lg:min-h-0 ${framed}`} {...scrollProps}>
+          <MobileCollapse title="Cronograma de períodos">
+            <ScheduleTimeline salary={data.salary} expenses={data.fixed.expenses} paymentIndex={data.fixed.paymentIndex} />
+          </MobileCollapse>
+
+          <MobileCollapse title="Tendencias y saldo proyectado">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <TrendChart history={data.history} />
+              <BalanceChart balanceCurve={data.balanceCurve} outlook={data.outlook} />
+            </div>
+          </MobileCollapse>
+
+          <AccountsZone accounts={data.salary.accounts} />
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+            <FixedZone fixedStats={data.fixedStats} entries={data.entries} />
+            <ExpensesZone additional={data.additional} categories={data.categories} spendCurve={data.spendCurve} bounds={data.bounds} />
+          </div>
+        </CurvedScrollContainer>
       </div>
-
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 gap-3">
-        <Card className="p-4">
-          <div className="inline-flex p-2 rounded-xl bg-red-50 text-red-500 mb-2">
-            <TrendingDown size={18} />
-          </div>
-          <p className="text-xs text-[#64748b]">Gastos del mes</p>
-          <p className="text-base font-bold text-[#0f172a] mt-0.5 truncate">
-            {formatCOP(totalExpenses)}
-          </p>
-        </Card>
-
-        <Card className="p-4">
-          <div className="inline-flex p-2 rounded-xl bg-brand-50 text-brand-600 mb-2">
-            <TrendingUp size={18} />
-          </div>
-          <p className="text-xs text-[#64748b]">Ingresos del mes</p>
-          <p className="text-base font-bold text-[#0f172a] mt-0.5 truncate">
-            {formatCOP(totalIncomes)}
-          </p>
-        </Card>
-
-        <Card className="p-4">
-          <div className="inline-flex p-2 rounded-xl bg-blue-50 text-blue-500 mb-2">
-            <CalendarCheck size={18} />
-          </div>
-          <p className="text-xs text-[#64748b]">Fijos pagados</p>
-          <p className="text-base font-bold text-[#0f172a] mt-0.5">
-            {fixedPaidCount} / {fixedTotal}
-          </p>
-        </Card>
-
-        <Card className="p-4">
-          <div className="inline-flex p-2 rounded-xl bg-amber-50 text-amber-500 mb-2">
-            <Scale size={18} />
-          </div>
-          <p className="text-xs text-[#64748b]">Balance neto</p>
-          <p className={`text-base font-bold mt-0.5 truncate ${netMonth >= 0 ? 'text-brand-600' : 'text-red-500'}`}>
-            {formatCOP(netMonth)}
-          </p>
-        </Card>
-      </div>
-
-      {/* Household debt chip */}
-      {householdId && (
-        <Card className="p-4 flex items-center gap-3">
-          <span className="text-2xl">🏠</span>
-          <div>
-            <p className="text-xs text-[#64748b] font-semibold uppercase tracking-wider">
-              Deuda del hogar
-            </p>
-            {myBalance === 0 ? (
-              <p className="text-sm font-semibold text-brand-600">Están al día ✓</p>
-            ) : myBalance > 0 ? (
-              <p className="text-sm font-semibold text-red-500">
-                Debes {formatCOP(myBalance)}
-              </p>
-            ) : (
-              <p className="text-sm font-semibold text-brand-600">
-                Te deben {formatCOP(Math.abs(myBalance))}
-              </p>
-            )}
-          </div>
-        </Card>
-      )}
-
-      {/* Savings mini overview */}
-      {goals.length > 0 && (
-        <Card className="p-4">
-          <p className="text-xs font-semibold text-[#64748b] uppercase tracking-wider mb-3">
-            Ahorros
-          </p>
-          <div className="space-y-2.5">
-            {goals.slice(0, 3).map((g: any) => {
-              const pct = g.targetAmount > 0 ? Math.min(Math.round((g.currentAmount / g.targetAmount) * 100), 100) : 0
-              return (
-                <div key={g.id}>
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-base">{g.icon}</span>
-                      <span className="text-xs font-medium text-gray-700 truncate max-w-[140px]">{g.name}</span>
-                    </div>
-                    <span className="text-xs font-semibold text-gray-500">{pct}%</span>
-                  </div>
-                  <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-all"
-                      style={{ width: `${pct}%`, backgroundColor: g.color ?? '#16a34a' }}
-                    />
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-          {totalTarget > 0 && (
-            <p className="text-xs text-[#64748b] mt-3">
-              {formatCOP(totalSaved)} ahorrados de {formatCOP(totalTarget)}
-            </p>
-          )}
-        </Card>
-      )}
-
-      {/* Recent expenses */}
-      {recentExpenses.length > 0 && (
-        <Card className="p-4">
-          <p className="text-xs font-semibold text-[#64748b] uppercase tracking-wider mb-3">
-            Últimos gastos
-          </p>
-          <div className="space-y-2">
-            {recentExpenses.map((e: any) => {
-              const cat = PERSONAL_CATEGORIES.find((c) => c.id === e.category)
-              return (
-                <div key={e.id} className="flex items-center gap-3 py-1">
-                  <div
-                    className="w-9 h-9 rounded-xl flex items-center justify-center text-lg flex-shrink-0"
-                    style={{ backgroundColor: (cat?.color ?? '#6b7280') + '20' }}
-                  >
-                    {cat?.icon ?? '📦'}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-800 truncate">{e.description}</p>
-                    <p className="text-xs text-gray-400">
-                      {format(e.date instanceof Date ? e.date : new Date(e.date), 'dd MMM', { locale: es })}
-                    </p>
-                  </div>
-                  <span className="text-sm font-bold text-gray-900 flex-shrink-0 tabular-nums">
-                    {formatCOP(e.amount)}
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        </Card>
-      )}
-
-      {expenses.length === 0 && incomes.length === 0 && goals.length === 0 && (
-        <Card className="text-center py-10">
-          <p className="text-5xl mb-3">📊</p>
-          <p className="text-sm font-semibold text-gray-700">Sin datos aún</p>
-          <p className="text-xs text-gray-400 mt-1">
-            Agrega tus gastos e ingresos para ver el resumen.
-          </p>
-        </Card>
-      )}
     </div>
   )
 }

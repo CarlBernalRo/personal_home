@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { User, Mail, AtSign, LogOut, BadgeCheck } from 'lucide-react'
+import { User, Mail, AtSign, LogOut, BadgeCheck, Shield } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -13,6 +13,8 @@ import { useAuthStore } from '@/store/auth'
 import { useDisplayName } from '@/hooks/useDisplayName'
 import { updateUserProfile } from '@/lib/firestore'
 import { logout } from '@/lib/auth'
+import { PayScheduleForm } from '@/components/profile/PayScheduleForm'
+import { PayAccountForm } from '@/components/profile/PayAccountForm'
 
 const schema = z.object({
   firstName: z.string().max(40).optional(),
@@ -51,7 +53,7 @@ export default function ProfilePage() {
       }
       await updateUserProfile(user.uid, patch, householdId)
       setProfile({ ...profile, ...patch } as any)
-      showToast('Perfil actualizado', 'success')
+      showToast('Perfil actualizado', 'edit')
     } catch { showToast('Error al guardar', 'error') }
     finally { setSaving(false) }
   }
@@ -64,57 +66,61 @@ export default function ProfilePage() {
   const initials = displayName.slice(0, 2).toUpperCase()
 
   return (
-    <div className="space-y-5 fade-in max-w-lg mx-auto">
+    <div className="space-y-5 fade-in max-w-lg mx-auto text-[#f3f5f6]">
       <div>
-        <h1 className="text-xl font-bold text-[#0f172a]">Mi perfil</h1>
-        <p className="text-sm text-[#64748b]">Información de tu cuenta</p>
+        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1 notch-sm bg-white/[0.04] border border-white/[0.08]">
+          <Shield size={11} className="text-brand-400" />
+          <span className="font-pixel text-[8px] text-brand-400 uppercase tracking-widest">Identidad</span>
+        </div>
+        <h1 className="text-2xl font-bold tracking-tight text-[#f0fae8]">Mi Perfil</h1>
+        <p className="text-xs text-[#9aa4ac]">Administra tu información y nombre visible</p>
       </div>
 
-      {/* Avatar + name */}
-      <Card className="flex items-center gap-4 p-5">
+      {/* Avatar + name card */}
+      <div className="rounded-2xl bg-[#0a1f2f] border border-white/10 p-5 flex items-center gap-4 glow-brand-sm shadow-xl">
         {user?.photoURL ? (
           <img
             src={user.photoURL}
             alt={displayName}
-            className="w-16 h-16 rounded-full ring-2 ring-brand-100 flex-shrink-0"
+            className="w-16 h-16 rounded-full ring-2 ring-brand-500/40 flex-shrink-0 object-cover"
           />
         ) : (
-          <div className="w-16 h-16 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 text-xl font-bold flex-shrink-0">
+          <div className="w-16 h-16 rounded-full bg-brand-500/20 border border-brand-500/40 flex items-center justify-center text-brand-400 text-xl font-bold flex-shrink-0">
             {initials}
           </div>
         )}
         <div className="min-w-0">
-          <p className="text-base font-bold text-gray-900 truncate">{displayName}</p>
+          <p className="text-base font-bold text-[#f0fae8] truncate">{displayName}</p>
           {((profile as any)?.firstName || (profile as any)?.lastName) && (
-            <p className="text-xs text-gray-500 truncate">
+            <p className="text-xs text-[#9aa4ac] truncate mt-0.5">
               {[(profile as any)?.firstName, (profile as any)?.lastName].filter(Boolean).join(' ')}
             </p>
           )}
-          <p className="text-xs text-gray-400 truncate">{user?.email}</p>
+          <p className="text-xs text-[#5f6a72] truncate font-mono mt-0.5">{user?.email}</p>
         </div>
-      </Card>
+      </div>
 
       {/* Edit form */}
-      <Card className="p-5 space-y-4">
-        <p className="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Editar datos</p>
+      <div className="rounded-2xl bg-[#0a1f2f] border border-white/10 p-5 sm:p-6 space-y-4 shadow-xl">
+        <p className="font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold">Editar Datos</p>
 
         <form onSubmit={handleSubmit(onSave)} className="space-y-4">
           {/* Read-only fields */}
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-gray-500 flex items-center gap-1.5">
-              <User size={12} /> Nombre completo
+            <label className="text-xs font-semibold text-[#8a929a] flex items-center gap-1.5">
+              <User size={12} /> Nombre de Google
             </label>
-            <div className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-400 bg-gray-50 select-none">
+            <div className="border border-white/10 rounded-xl px-3 py-2 text-sm text-[#8a929a] bg-[#0d263a] select-none font-mono">
               {user?.displayName ?? '—'}
             </div>
-            <p className="text-[10px] text-gray-400">Viene de tu cuenta de Google</p>
+            <p className="text-[10px] text-[#5f6a72]">Proveniente de tu cuenta autenticada</p>
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-gray-500 flex items-center gap-1.5">
-              <Mail size={12} /> Correo
+            <label className="text-xs font-semibold text-[#8a929a] flex items-center gap-1.5">
+              <Mail size={12} /> Correo Electrónico
             </label>
-            <div className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-400 bg-gray-50 select-none">
+            <div className="border border-white/10 rounded-xl px-3 py-2 text-sm text-[#8a929a] bg-[#0d263a] select-none font-mono">
               {user?.email ?? '—'}
             </div>
           </div>
@@ -122,7 +128,7 @@ export default function ProfilePage() {
           {/* Editable */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+              <label className="text-xs font-semibold text-[#c7ccd1] flex items-center gap-1.5">
                 <BadgeCheck size={12} /> Primer nombre
               </label>
               <Input
@@ -132,7 +138,7 @@ export default function ProfilePage() {
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+              <label className="text-xs font-semibold text-[#c7ccd1] flex items-center gap-1.5">
                 <BadgeCheck size={12} /> Primer apellido
               </label>
               <Input
@@ -144,35 +150,39 @@ export default function ProfilePage() {
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
-              <AtSign size={12} /> Apodo
+            <label className="text-xs font-semibold text-[#c7ccd1] flex items-center gap-1.5">
+              <AtSign size={12} /> Apodo preferido
             </label>
             <Input
               placeholder={(profile as any)?.firstName || user?.displayName?.split(' ')[0] || 'Tu apodo'}
               {...register('apodo')}
               error={errors.apodo?.message}
             />
-            <p className="text-[10px] text-gray-400">
-              Si lo dejas vacío se usa el primer nombre. Se muestra en todo el app.
+            <p className="text-[10px] text-[#8a929a]">
+              Se muestra en todos los balances y tarjetas del hogar.
             </p>
           </div>
 
-          <Button type="submit" className="w-full" disabled={saving || !isDirty}>
-            {saving ? 'Guardando…' : 'Guardar cambios'}
+          <Button type="submit" className="w-full mt-2" disabled={saving || !isDirty} notched={false}>
+            {saving ? 'Guardando…' : 'Guardar Cambios'}
           </Button>
         </form>
-      </Card>
+      </div>
 
-      {/* Danger zone */}
-      <Card className="p-5 space-y-3">
-        <p className="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Sesión</p>
+      <PayScheduleForm />
+
+      <PayAccountForm />
+
+      {/* Danger zone / Logout */}
+      <div className="rounded-2xl bg-[#0a1f2f] border border-white/10 p-5 space-y-3 shadow-xl">
+        <p className="font-pixel text-[10px] text-red-400 uppercase tracking-widest font-bold">Sesión</p>
         <button
           onClick={handleLogout}
-          className="w-full flex items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition"
+          className="rounded-xl w-full flex items-center justify-center gap-2 px-4 py-2.5 border border-red-500/30 text-red-400 text-xs font-bold hover:bg-red-500/20 hover:text-red-300 transition interactive-press"
         >
-          <LogOut size={15} /> Cerrar sesión
+          <LogOut size={14} /> Cerrar sesión en este dispositivo
         </button>
-      </Card>
+      </div>
     </div>
   )
 }

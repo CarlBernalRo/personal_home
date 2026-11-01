@@ -1,19 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Copy, Users, LogIn, PlusCircle, ChevronDown, ChevronLeft, Settings, Trash2, Pencil, GitMerge, TrendingUp, ChevronRight, ArrowLeft, Info, ShoppingBag, Clock, LayoutGrid, Sparkles } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, Home, LayoutGrid, Sparkles } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { Card } from '@/components/ui/Card'
-import { Avatar } from '@/components/ui/Avatar'
+import { clsx } from 'clsx'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
-import { Select } from '@/components/ui/Select'
 import { SkeletonList } from '@/components/ui/Skeleton'
+import { ProgressBar } from '@/components/ui/ProgressBar'
+import { MobileCollapse } from '@/components/ui/MobileCollapse'
+import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { useToast } from '@/components/ui/Toast'
+import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthStore } from '@/store/auth'
 import { useDisplayName } from '@/hooks/useDisplayName'
@@ -21,43 +23,46 @@ import {
   createHousehold, joinHousehold, getHouseholds,
   addHouseholdDebt, getHouseholdDebts, deleteHouseholdDebt, deleteHouseholdExpense,
   calcNetBalance, renameHousehold, deleteHousehold, getHouseholdIds,
-  addHouseholdCrossing, getHouseholdCrossings,
+  addHouseholdCrossing, getHouseholdCrossings, notifyHouseholdMembers,
 } from '@/lib/firestore'
-import { formatCOP, HOUSEHOLD_DEBT_CATEGORIES, remainingOf, allocateCrossing, isPendingDebt } from '@/shared'
-import type { CrossingAllocation } from '@/shared'
+import { formatCOP, remainingOf, allocateAbono, isPendingDebt } from '@/shared'
 import { HouseholdExpenseModal } from '@/components/household/HouseholdExpenseModal'
 import { FinanceExplorer } from '@/components/household/FinanceExplorer'
 import { HouseholdPicker } from '@/components/household/HouseholdPicker'
-import { clsx } from 'clsx'
+import { BalanceCard } from '@/components/household/BalanceCard'
+import { PersonCard, Tip } from '@/components/household/PersonCard'
+import { HouseholdTimeline } from '@/components/household/HouseholdTimeline'
+import { HouseholdDebtDetail } from '@/components/household/HouseholdDebtDetail'
+import { HouseholdMenu } from '@/components/household/HouseholdMenu'
+import { HouseholdSettingsModal } from '@/components/household/HouseholdSettingsModal'
+import { InviteModal } from '@/components/household/InviteModal'
+import { CrossingModal } from '@/components/household/CrossingModal'
+import { AbonoModal, debtSchema, type DebtForm } from '@/components/household/AbonoModal'
+import { buildLedger, balanceBreakdown, splitByMonth } from '@/components/household/ledger'
+import { AppIcon, EmptyMark } from '@/components/ui/AppIcon'
 
-const CAT_OPTIONS = HOUSEHOLD_DEBT_CATEGORIES.map((c) => ({
-  value: c.id,
-  label: `${c.icon} ${c.label}`,
-}))
-// 'Deuda' ya no se crea a mano — toda deuda nace de un gasto compartido
-// (ver HouseholdExpenseModal), que calcula la parte de cada persona. Este
-// formulario solo registra abonos: pagos directos contra una deuda existente.
-const debtSchema = z.object({
-  concept:  z.string().min(1, 'Concepto requerido'),
-  tipo:     z.literal('Abono'),
-  amount:   z.coerce.number().positive('Monto mayor a 0'),
-  debtor:   z.string().min(1),
-  category: z.string().min(1),
-  date:     z.string().min(1),
-  notas:    z.string().optional(),
-})
 const householdSchema = z.object({ name: z.string().min(1, 'Ingresa un nombre') })
 const joinSchema      = z.object({ code: z.string().min(6).max(6) })
 
-type DebtForm = z.infer<typeof debtSchema>
 type HHForm   = z.infer<typeof householdSchema>
 type JoinForm = z.infer<typeof joinSchema>
+
+const framed = 'rounded-3xl border border-white/10 bg-[#0a1f2f]/50'
+const scrollProps = {
+  contentClassName: 'max-lg:!overflow-visible space-y-5 py-3 !pl-3 !pr-3 lg:py-4 lg:!pl-4 lg:!pr-6',
+  corners: 'both' as const,
+  borderRadius: 24,
+  offset: 7,
+  variant: 'plain' as const,
+  themeColor: 'brand' as const,
+}
 
 export default function HouseholdPage() {
   const { user, profile }     = useAuth()
   const setProfile             = useAuthStore((s) => s.setProfile)
   const myDisplayName          = useDisplayName()
   const { showToast }          = useToast()
+  const ask = useConfirm()
 
   const [households, setHouseholds]   = useState<any[]>([])
   const [activeId, setActiveId]       = useState<string | null>(null)
@@ -71,9 +76,11 @@ export default function HouseholdPage() {
   const [viewMode, setViewMode]       = useState<'clasico' | 'interactivo'>('clasico')
   const [openCreate, setOpenCreate]   = useState(false)
   const [openJoin, setOpenJoin]       = useState(false)
+  const [openInvite, setOpenInvite]   = useState(false)
   const [openSettings, setOpenSettings] = useState(false)
   const [crossTarget, setCrossTarget]     = useState<any | null>(null)
   const [saldaTargetId, setSaldaTargetId] = useState<string | null>(null)
+  const [selectedTargetDebtId, setSelectedTargetDebtId] = useState<string | null>(null)
   const [saving, setSaving]               = useState(false)
   const [copied, setCopied]               = useState(false)
   const [renameVal, setRenameVal]         = useState('')
@@ -81,17 +88,6 @@ export default function HouseholdPage() {
   const [partnerExpanded, setPartnerExpanded] = useState(false)
   const [selectedDebt, setSelectedDebt]   = useState<any | null>(null)
   const [selectedMonth, setSelectedMonth] = useState(() => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d })
-  const [hhMenuOpen, setHhMenuOpen]       = useState(false)
-  const hhMenuRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!hhMenuOpen) return
-    function handleClick(e: MouseEvent) {
-      if (hhMenuRef.current && !hhMenuRef.current.contains(e.target as Node)) setHhMenuOpen(false)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [hhMenuOpen])
 
   /** Same morph-on-navigate trick as HouseholdPicker/FinanceExplorer — any
    *  state change wrapped here animates via the native View Transitions API
@@ -109,7 +105,25 @@ export default function HouseholdPage() {
   const isCurrentMonth = selectedMonth.getFullYear() === now.getFullYear() && selectedMonth.getMonth() === now.getMonth()
 
   const hhIds    = getHouseholdIds(profile as any)
+
+  // A link like /hogar?id=<household> opens that household directly (and is consumed, so going
+  // back to the household list afterwards doesn't reopen it)
+  const [params, setParams] = useSearchParams()
+  const requestedId = params.get('id')
+  useEffect(() => {
+    if (!requestedId || households.length === 0) return
+    if (households.some((h) => h.id === requestedId)) setActiveId(requestedId)
+    setParams({}, { replace: true })
+  }, [requestedId, households])
   const household = households.find((h) => h.id === activeId) ?? null
+
+  /** Lets the other members of the active household know about something that changes their accounts. */
+  function tellHousehold(title: string, body: string) {
+    if (!user || !household || !activeId) return
+    notifyHouseholdMembers((household.members as string[] | undefined) ?? [], {
+      fromUid: user.uid, zone: 'hogar', severity: 'info', title, body, link: `/hogar?id=${activeId}`,
+    }).catch(() => { /* a failed notice must never undo what was saved */ })
+  }
 
   const debtForm = useForm<DebtForm>({
     resolver: zodResolver(debtSchema),
@@ -179,19 +193,103 @@ export default function HouseholdPage() {
     if (!user || !activeId) return
     setSaving(true)
     try {
-      await addHouseholdDebt({
-        householdId: activeId, concept: data.concept, tipo: data.tipo,
-        amount: data.amount, debtor: data.debtor, category: data.category,
-        date: new Date(data.date + 'T12:00:00'), registeredBy: user.uid,
-        estado: '', saldaId: saldaTargetId, notas: data.notas ?? '', cruzado: false,
-      })
+      const effectiveTargetId = saldaTargetId || selectedTargetDebtId
+      const targetDebt = effectiveTargetId ? debts.find((d: any) => d.id === effectiveTargetId) : null
+
+      if (effectiveTargetId && targetDebt) {
+        await addHouseholdDebt({
+          householdId: activeId,
+          concept: `Abono: ${targetDebt.concept}`,
+          tipo: 'Abono',
+          amount: data.amount,
+          debtor: data.debtor,
+          category: targetDebt.category || data.category,
+          date: new Date(data.date + 'T12:00:00'),
+          registeredBy: user.uid,
+          estado: '',
+          saldaId: effectiveTargetId,
+          notas: data.notas ?? '',
+          cruzado: false,
+        })
+        const newRemaining = Math.max(0, remainingOf(targetDebt) - data.amount)
+        if (newRemaining === 0) {
+          showToast(`¡Deuda "${targetDebt.concept}" 100% saldada!`, 'success')
+        } else {
+          showToast(`Abono de ${formatCOP(data.amount)} registrado. Saldo pendiente: ${formatCOP(newRemaining)}`, 'success')
+        }
+        tellHousehold(`${myName} registró un abono`, `${formatCOP(data.amount)} a "${targetDebt.concept}".`)
+      } else {
+        // General abono: allocate across pending debts of this debtor (oldest first)
+        const pending = debts.filter((d: any) => d.debtor === data.debtor && isPendingDebt(d))
+        const allocations = allocateAbono(data.amount, pending)
+
+        if (allocations.length > 0) {
+          for (const alloc of allocations) {
+            const d = pending.find((x: any) => x.id === alloc.debtId)
+            await addHouseholdDebt({
+              householdId: activeId,
+              concept: `Abono: ${d?.concept ?? data.concept}`,
+              tipo: 'Abono',
+              amount: alloc.amount,
+              debtor: data.debtor,
+              category: d?.category ?? data.category,
+              date: new Date(data.date + 'T12:00:00'),
+              registeredBy: user.uid,
+              estado: '',
+              saldaId: alloc.debtId,
+              notas: data.notas ?? '',
+              cruzado: false,
+            })
+          }
+          const allocatedTotal = allocations.reduce((s, a) => s + a.amount, 0)
+          if (data.amount > allocatedTotal) {
+            await addHouseholdDebt({
+              householdId: activeId,
+              concept: data.concept || 'Abono al hogar',
+              tipo: 'Abono',
+              amount: data.amount - allocatedTotal,
+              debtor: data.debtor,
+              category: data.category,
+              date: new Date(data.date + 'T12:00:00'),
+              registeredBy: user.uid,
+              estado: '',
+              saldaId: null,
+              notas: data.notas ?? '',
+              cruzado: false,
+            })
+          }
+          showToast(`Abono de ${formatCOP(data.amount)} distribuido en ${allocations.length} deuda(s)`, 'success')
+          tellHousehold(`${myName} registró un abono`, `${formatCOP(data.amount)} repartidos en ${allocations.length} deuda(s).`)
+        } else {
+          await addHouseholdDebt({
+            householdId: activeId,
+            concept: data.concept || 'Abono al hogar',
+            tipo: 'Abono',
+            amount: data.amount,
+            debtor: data.debtor,
+            category: data.category,
+            date: new Date(data.date + 'T12:00:00'),
+            registeredBy: user.uid,
+            estado: '',
+            saldaId: null,
+            notas: data.notas ?? '',
+            cruzado: false,
+          })
+          showToast(`Abono de ${formatCOP(data.amount)} registrado`, 'success')
+          tellHousehold(`${myName} registró un abono`, `${formatCOP(data.amount)}${data.concept ? ` · ${data.concept}` : ''}.`)
+        }
+      }
+
       debtForm.reset({ date: format(new Date(), 'yyyy-MM-dd'), tipo: 'Abono', category: 'otros_hogar', debtor: user.uid })
       setSaldaTargetId(null)
+      setSelectedTargetDebtId(null)
       setOpenDebt(false)
       await reloadDebts()
-      showToast('Abono registrado', 'success')
-    } catch { showToast('Error al registrar', 'error') }
-    finally { setSaving(false) }
+    } catch {
+      showToast('Error al registrar abono', 'error')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function onCreateHousehold(data: HHForm) {
@@ -258,15 +356,21 @@ export default function HouseholdPage() {
   // expense, which cascades to every share it generated — not just this row.
   async function handleDelete(d: any) {
     const fromExpense = Boolean(d.expenseId)
-    if (!confirm(fromExpense
-      ? '¿Eliminar este gasto compartido? Se borrará junto con la(s) deuda(s) que generó.'
-      : '¿Eliminar este registro?')) return
+    if (!(await ask(
+      fromExpense
+        ? '¿Eliminar este gasto compartido? Se borrará junto con la(s) deuda(s) que generó.'
+        : '¿Eliminar este registro?',
+      { title: fromExpense ? 'Eliminar gasto compartido' : 'Eliminar registro' },
+    ))) return
     try {
-      if (fromExpense) await deleteHouseholdExpense(d.expenseId)
+      if (fromExpense) await deleteHouseholdExpense(d.expenseId, d.householdId ?? activeId)
       else await deleteHouseholdDebt(d.id)
       await reloadDebts()
-      showToast('Eliminado', 'info')
-    } catch { showToast('Error al eliminar', 'error') }
+      showToast('Eliminado', 'delete')
+    } catch (err) {
+      console.error('No se pudo eliminar el registro:', err)
+      showToast('Error al eliminar', 'error')
+    }
   }
 
   async function handleCreateCrossing(
@@ -288,6 +392,7 @@ export default function HouseholdPage() {
       setCrossTarget(null)
       await reloadDebts()
       showToast(allocations.length > 1 ? 'Cruce registrado contra varias deudas' : 'Cruce registrado', 'success')
+      tellHousehold(`${myName} registró un cruce de cuentas`, `${formatCOP(allocations.reduce((sum, a) => sum + a.amount, 0))} compensados entre ambos.`)
     } catch (e: any) {
       showToast(e.message ?? 'Error al cruzar', 'error')
     } finally { setSaving(false) }
@@ -300,14 +405,14 @@ export default function HouseholdPage() {
       await renameHousehold(activeId, renameVal.trim())
       setHouseholds((prev) => prev.map((h) => h.id === activeId ? { ...h, name: renameVal.trim() } : h))
       setOpenSettings(false)
-      showToast('Hogar renombrado', 'success')
+      showToast('Hogar renombrado', 'edit')
     } catch { showToast('Error al renombrar', 'error') }
     finally { setSaving(false) }
   }
 
   async function handleDeleteHousehold() {
     if (!user || !activeId) return
-    if (!confirm('¿Eliminar el hogar? Esto borrará TODOS los registros de deudas compartidas y no se puede deshacer.')) return
+    if (!(await ask('¿Eliminar el hogar? Esto borrará TODOS los registros de deudas compartidas y no se puede deshacer.', { title: 'Eliminar hogar', confirmLabel: 'Eliminar hogar' }))) return
     setSaving(true)
     try {
       await deleteHousehold(activeId, user.uid)
@@ -318,7 +423,7 @@ export default function HouseholdPage() {
       setActiveId((hhs[0]?.id as string) ?? null)
       setDebts([])
       setOpenSettings(false)
-      showToast('Hogar eliminado', 'info')
+      showToast('Hogar eliminado', 'delete')
     } catch { showToast('Error al eliminar hogar', 'error') }
     finally { setSaving(false) }
   }
@@ -329,19 +434,41 @@ export default function HouseholdPage() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  function handleSaldar(d: any) {
+  function handleAbonar(d: any) {
     setSaldaTargetId(d.id)
+    setSelectedTargetDebtId(null)
+    const rem = remainingOf(d)
     debtForm.reset({
       date: format(new Date(), 'yyyy-MM-dd'),
       tipo: 'Abono',
-      concept: d.concept,
-      amount: remainingOf(d),
+      concept: `Abono: ${d.concept}`,
+      amount: rem,
       debtor: d.debtor,
-      category: d.category,
-      notas: `Saldo de: ${d.concept}`,
+      category: d.category || 'otros_hogar',
+      notas: '',
     })
     setOpenDebt(true)
   }
+
+  function handleOpenAbonoGeneral(debtorUid?: string) {
+    setSaldaTargetId(null)
+    setSelectedTargetDebtId(null)
+    const targetUid = debtorUid || user?.uid || ''
+    const debtorPending = debts.filter((d: any) => d.debtor === targetUid && isPendingDebt(d))
+    const totalPending = debtorPending.reduce((s: number, d: any) => s + remainingOf(d), 0)
+    debtForm.reset({
+      date: format(new Date(), 'yyyy-MM-dd'),
+      tipo: 'Abono',
+      concept: 'Abono al saldo del hogar',
+      amount: totalPending > 0 ? totalPending : 0,
+      debtor: targetUid,
+      category: 'otros_hogar',
+      notas: '',
+    })
+    setOpenDebt(true)
+  }
+
+  const handleSaldar = handleAbonar
 
   // Names
   const members      = (household?.members as string[] | undefined) ?? []
@@ -391,6 +518,108 @@ export default function HouseholdPage() {
     return pendingDebtsOf(counterpartOf(d))
   }
 
+  async function handleSettleAllToday() {
+    if (!user || !activeId) return
+    const partnerId = partnerUid
+    const msg = partnerId
+      ? `¿Registrar pagos mutuos a la fecha de hoy para saldar todas las cuentas?\n\n• ${myName}: ${formatCOP(Math.max(0, myNet))}\n• ${partnerName}: ${formatCOP(Math.max(0, partnerNet))}\n\nAmbos quedarán al día ($0).`
+      : `¿Registrar pago a la fecha de hoy para quedar al día ($0)?`
+    if (!(await ask(msg, { title: 'Saldar cuentas', tone: 'default', confirmLabel: 'Registrar pagos' }))) return
+    setSaving(true)
+    try {
+      const todayDate = new Date()
+
+      // 1. Settle me if myNet > 0
+      if (myNet > 0) {
+        const pendingMe = debts.filter((d: any) => d.debtor === user.uid && isPendingDebt(d))
+        const allocs = allocateAbono(myNet, pendingMe)
+        for (const a of allocs) {
+          const d = pendingMe.find((x: any) => x.id === a.debtId)
+          await addHouseholdDebt({
+            householdId: activeId,
+            concept: `Abono: ${d?.concept ?? 'Liquidación de cuentas'}`,
+            tipo: 'Abono',
+            amount: a.amount,
+            debtor: user.uid,
+            category: d?.category ?? 'otros_hogar',
+            date: todayDate,
+            registeredBy: user.uid,
+            estado: '',
+            saldaId: a.debtId,
+            notas: `Pago mutuo completado a ${partnerName}`,
+            cruzado: false,
+          })
+        }
+        const totalAlloc = allocs.reduce((s, a) => s + a.amount, 0)
+        if (myNet > totalAlloc) {
+          await addHouseholdDebt({
+            householdId: activeId,
+            concept: `Liquidación saldo pendiente a ${partnerName}`,
+            tipo: 'Abono',
+            amount: myNet - totalAlloc,
+            debtor: user.uid,
+            category: 'otros_hogar',
+            date: todayDate,
+            registeredBy: user.uid,
+            estado: '',
+            saldaId: null,
+            notas: `Pago mutuo completado a ${partnerName}`,
+            cruzado: false,
+          })
+        }
+      }
+
+      // 2. Settle Partner if partnerNet > 0 and partnerUid exists
+      if (partnerNet > 0 && partnerUid) {
+        const pendingPartner = debts.filter((d: any) => d.debtor === partnerUid && isPendingDebt(d))
+        const allocs = allocateAbono(partnerNet, pendingPartner)
+        for (const a of allocs) {
+          const d = pendingPartner.find((x: any) => x.id === a.debtId)
+          await addHouseholdDebt({
+            householdId: activeId,
+            concept: `Abono: ${d?.concept ?? 'Liquidación de cuentas'}`,
+            tipo: 'Abono',
+            amount: a.amount,
+            debtor: partnerUid,
+            category: d?.category ?? 'otros_hogar',
+            date: todayDate,
+            registeredBy: user.uid,
+            estado: '',
+            saldaId: a.debtId,
+            notas: `Pago mutuo completado a ${myName}`,
+            cruzado: false,
+          })
+        }
+        const totalAlloc = allocs.reduce((s, a) => s + a.amount, 0)
+        if (partnerNet > totalAlloc) {
+          await addHouseholdDebt({
+            householdId: activeId,
+            concept: `Liquidación saldo pendiente a ${myName}`,
+            tipo: 'Abono',
+            amount: partnerNet - totalAlloc,
+            debtor: partnerUid,
+            category: 'otros_hogar',
+            date: todayDate,
+            registeredBy: user.uid,
+            estado: '',
+            saldaId: null,
+            notas: `Pago mutuo completado a ${myName}`,
+            cruzado: false,
+          })
+        }
+      }
+
+      await reloadDebts()
+      showToast('¡Cuentas mutuas 100% saldadas a la fecha de hoy!', 'success')
+      tellHousehold(`${myName} saldó las cuentas`, 'Se registraron pagos mutuos a la fecha de hoy.')
+    } catch (err: any) {
+      console.error('Error saldando cuentas:', err)
+      showToast(err?.message || 'Error al saldar cuentas', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // "This cycle" reporting — new activity generated within the selected month only.
   const totalGen     = monthDebts.filter(d => d.tipo === 'Deuda').reduce((s: number, d: any) => s + d.amount, 0)
   const totalCruzado = monthDebts.filter(d => d.tipo === 'Deuda').reduce((s: number, d: any) => s + ((d.crossedAmount as number) || 0), 0)
@@ -400,61 +629,31 @@ export default function HouseholdPage() {
   const myMonthGen      = monthDebts.filter((d: any) => d.tipo === 'Deuda' && d.debtor === user?.uid).reduce((s: number, d: any) => s + d.amount, 0)
   const partnerMonthGen = partnerUid ? monthDebts.filter((d: any) => d.tipo === 'Deuda' && d.debtor === partnerUid).reduce((s: number, d: any) => s + d.amount, 0) : 0
 
-  // Full step-by-step breakdown of each person's all-time balance, so "Carlos debe
-  // $281.000" is never a black box — the UI always shows: deudas − abonos − cruzado.
-  function balanceBreakdown(uid: string | undefined) {
-    if (!uid) return { deuda: 0, abono: 0, cruzado: 0, saldo: 0 }
-    const ownDebts = debts.filter((d: any) => d.debtor === uid)
-    const deuda   = ownDebts.filter((d: any) => d.tipo === 'Deuda').reduce((s: number, d: any) => s + d.amount, 0)
-    const abono   = ownDebts.filter((d: any) => d.tipo === 'Abono').reduce((s: number, d: any) => s + d.amount, 0)
-    const crossedOwn    = ownDebts.filter((d: any) => d.tipo === 'Deuda').reduce((s: number, d: any) => s + ((d.crossedAmount as number) || 0), 0)
-    const crossedInFavor = crossings.filter((c: any) => c.debt2PersonId === uid && !c.debt2Id).reduce((s: number, c: any) => s + (c.amount as number), 0)
-    const cruzado = crossedOwn + crossedInFavor
-    return { deuda, abono, cruzado, saldo: deuda - abono - cruzado }
+  // Abono deleted from a debt's detail
+  async function handleDeleteAbono(a: any) {
+    if (!(await ask(`¿Eliminar este abono de ${formatCOP(a.amount)}?`, { title: 'Eliminar abono' }))) return
+    try {
+      await deleteHouseholdDebt(a.id)
+      await reloadDebts()
+      showToast('Abono eliminado', 'delete')
+    } catch (err) {
+      console.error('No se pudo eliminar el abono:', err)
+      showToast('Error al eliminar el abono', 'error')
+    }
   }
-  const myBreakdown      = balanceBreakdown(user?.uid)
-  const partnerBreakdown = balanceBreakdown(partnerUid ?? undefined)
 
-  // Debt ledger for the selected month — a bank-statement style view: what was
-  // inherited (not settled) from the previous month, each movement that happened
-  // THIS month in order, and the resulting balance after each one. Uses the same
-  // per-person-then-diff math as the "¿Quién debe más?" bar, event-sourced so it
-  // never depends on the mutable crossedAmount snapshot.
-  // Full timeline, not scoped to the toolbar's month — every movement from day
-  // one, attributed to whoever it belongs to, with each person's own running
-  // total tracked separately (not just the combined diff) so you can see how
-  // each person's balance moved over time.
-  const fullLedger = (() => {
-    type Ev = { date: Date; debtor: string; delta: number; concept: string; kind: 'deuda' | 'abono' | 'cruce' }
-    const events: Ev[] = []
-    for (const d of debts) {
-      const dt = d.date instanceof Date ? d.date : new Date(d.date)
-      events.push({
-        date: dt, debtor: d.debtor as string, concept: d.concept as string,
-        delta: d.tipo === 'Deuda' ? (d.amount as number) : -(d.amount as number),
-        kind: d.tipo === 'Deuda' ? 'deuda' : 'abono',
-      })
-    }
-    for (const c of crossings) {
-      // A crossing reduces what debt1's debtor owes, same effect as an abono.
-      const debt1 = debts.find((d: any) => d.id === c.debt1Id)
-      if (!debt1) continue
-      const dt = c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt)
-      events.push({ date: dt, debtor: debt1.debtor as string, concept: debt1.concept as string, delta: -(c.amount as number), kind: 'cruce' })
-    }
-    events.sort((a, b) => a.date.getTime() - b.date.getTime())
+  function closeAbono() {
+    setOpenDebt(false)
+    setSaldaTargetId(null)
+    setSelectedTargetDebtId(null)
+  }
 
-    let runningMe = 0
-    let runningPartner = 0
-    const rows = events.map((ev) => {
-      const isMe = ev.debtor === user?.uid
-      if (isMe) runningMe += ev.delta
-      else if (partnerUid && ev.debtor === partnerUid) runningPartner += ev.delta
-      return { ...ev, isMe, myTotal: runningMe, partnerTotal: runningPartner, diffAfter: runningMe - runningPartner }
-    })
+  // Full ledger since day one; the timeline shows the selected month and carries the earlier balance in
+  const ledger = buildLedger(debts, crossings, user?.uid, partnerUid)
+  const { monthRows, carryIn } = splitByMonth(ledger.rows, selectedMonth)
 
-    return { rows: [...rows].reverse(), finalDiff: runningMe - runningPartner }
-  })()
+  const myBreakdown      = balanceBreakdown(debts, crossings, user?.uid)
+  const partnerBreakdown = balanceBreakdown(debts, crossings, partnerUid ?? undefined)
 
   const debtorOptions = [
     { value: user?.uid ?? '', label: myName },
@@ -468,59 +667,26 @@ export default function HouseholdPage() {
 
   if (loading) {
     return (
-      <div className="hh-dark bg-[#0a0d10] -m-4 p-4 min-h-[calc(100vh-56px)] md:min-h-0 md:rounded-2xl grid grid-cols-1 md:grid-cols-[240px_1fr_220px] gap-4 fade-in">
-        {[1,2,3].map(i => <div key={i} className="h-64 bg-gray-100 rounded-2xl skeleton" />)}
+      <div className="flex flex-col gap-5 lg:flex-row fade-in">
+        <div className="h-64 lg:w-[32%] rounded-3xl skeleton" />
+        <div className="h-64 lg:flex-1 rounded-3xl skeleton" />
       </div>
     )
   }
 
-  // Everything below is dark-themed EXCEPT the interactive Finance Explorer,
-  // which stays on its existing light theme as explicitly pending work — it
-  // renders as a true sibling outside every `hh-dark`-scoped wrapper so the
-  // scoped CSS overrides in index.css never reach its subtree.
+  const monthName = format(selectedMonth, 'MMMM', { locale: es })
+  const showMonthControls = !selectedDebt && viewMode === 'clasico'
+
+  function pickView(mode: 'clasico' | 'interactivo') {
+    withTransition(() => { setViewMode(mode); setSelectedDebt(null) })
+  }
+
   return (
-    <div className="fade-in space-y-4 md:h-full md:flex md:flex-col">
+    <div className="flex flex-col gap-5 fade-in text-[#f3f5f6] lg:flex-row lg:h-full lg:min-h-0">
 
-      {/* Mobile: household chips */}
-      <div className="hh-dark md:hidden space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-[#f3f5f6]">Hogar</h1>
-            <p className="text-sm text-[#9aa4ac]">Cuentas compartidas</p>
-          </div>
-          <div className="flex gap-2">
-            {household && (
-              <>
-                <Button onClick={() => setOpenExpense(true)} size="sm"><ShoppingBag size={15} /> Gasto</Button>
-                <Button onClick={() => { setSaldaTargetId(null); setOpenDebt(true) }} variant="secondary" size="sm"><Plus size={15} /> Abono</Button>
-                <Button onClick={() => { setRenameVal(household.name as string); setOpenSettings(true) }} variant="ghost" size="sm"><Settings size={15} /></Button>
-              </>
-            )}
-            {!household && (
-              <>
-                <Button onClick={() => setOpenCreate(true)} variant="secondary" size="sm"><PlusCircle size={15} /></Button>
-                <Button onClick={() => setOpenJoin(true)} variant="ghost" size="sm"><LogIn size={15} /></Button>
-              </>
-            )}
-          </div>
-        </div>
-        {households.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-            {households.map((hh: any) => (
-              <button key={hh.id} onClick={() => setActiveId(hh.id)} className={clsx(
-                'flex-shrink-0 px-4 py-2 rounded-2xl text-sm font-semibold transition-all',
-                activeId === hh.id ? 'bg-brand-600 text-white shadow-sm' : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
-              )}>
-                {hh.name as string}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Pantalla previa: elegir a qué hogar entrar (o crear/unirse si no hay ninguno) */}
+      {/* Before entering a household: pick one (or create / join) */}
       {!household && (
-        <div className="hh-dark bg-[#0a0d10] -m-4 p-4 min-h-[calc(100vh-56px)] md:min-h-0 md:rounded-2xl md:m-0">
+        <CurvedScrollContainer className={clsx('lg:flex-1 lg:min-w-0 lg:min-h-0', framed)} {...scrollProps}>
           <HouseholdPicker
             households={households}
             currentUserUid={user?.uid ?? ''}
@@ -528,550 +694,292 @@ export default function HouseholdPage() {
             onCreateNew={() => setOpenCreate(true)}
             onJoin={() => setOpenJoin(true)}
           />
-        </div>
+        </CurvedScrollContainer>
       )}
 
-      {/* Crear/Unirme deben quedar siempre alcanzables — tanto desde el selector
-          de hogares (sin household aún) como desde el menú de ajustes (con uno
-          activo) — por eso viven fuera del bloque `household && (...)`. */}
-      <div className="hh-dark">
-        <Modal open={openCreate} onClose={() => setOpenCreate(false)} title="Crear hogar" dark>
-          <form onSubmit={hhForm.handleSubmit(onCreateHousehold)} className="space-y-4">
-            <Input label="Nombre del hogar" placeholder="ej. Casa Carlos y Alexandra" {...hhForm.register('name')} error={hhForm.formState.errors.name?.message} />
-            <div className="flex gap-2">
-              <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenCreate(false)}>Cancelar</Button>
-              <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Creando…' : 'Crear'}</Button>
-            </div>
-          </form>
-        </Modal>
-
-        <Modal open={openJoin} onClose={() => setOpenJoin(false)} title="Unirme a un hogar" dark>
-          <form onSubmit={joinForm.handleSubmit(onJoinHousehold)} className="space-y-4">
-            <Input label="Código de invitación" placeholder="ABC123" maxLength={6} className="uppercase" {...joinForm.register('code')} error={joinForm.formState.errors.code?.message} />
-            <div className="flex gap-2">
-              <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenJoin(false)}>Cancelar</Button>
-              <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Uniéndome…' : 'Unirme'}</Button>
-            </div>
-          </form>
-        </Modal>
-      </div>
-
       {household && (
-        <div className="hh-dark bg-[#0a0d10] -m-4 p-4 min-h-[calc(100vh-56px)] md:min-h-0 md:rounded-2xl space-y-4 md:flex md:flex-col md:flex-1 md:min-h-0">
-          {/* Encabezado: volver a elegir hogar */}
-          <div
-            style={{ viewTransitionName: `vt-household-${activeId}` } as React.CSSProperties}
-            className="hidden md:flex items-center gap-2"
+        <>
+          {/* Left pane: who owes whom, the actions, and each person. On phones it gives way to the debt detail. */}
+          <CurvedScrollContainer
+            className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, selectedDebt && 'max-lg:hidden')}
+            {...scrollProps}
           >
-            <button
-              onClick={() => withTransition(() => setActiveId(null))}
-              className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 hover:text-gray-700 transition"
-            >
-              <ArrowLeft size={13} /> Hogares
-            </button>
-            <span className="text-gray-200">/</span>
-            <span className="text-sm font-bold text-gray-800">{household.name as string}</span>
-          </div>
-
-          {/* Toolbar: filtro de mes + acciones del hogar, todo en un solo componente */}
-          <div className="flex flex-wrap items-center gap-2 bg-white border border-gray-100 rounded-2xl px-3 py-2.5">
-            <div className="flex items-center gap-0.5 bg-gray-50 rounded-xl px-1 py-1">
-              <button onClick={() => shiftMonth(-1)} title="Mes anterior"
-                className="p-1.5 rounded-lg hover:bg-white text-gray-400 hover:text-gray-700 transition">
-                <ChevronLeft size={14} />
-              </button>
-              <span className="text-xs font-semibold text-gray-700 capitalize px-1 min-w-[88px] text-center select-none">
-                {format(selectedMonth, 'MMMM yyyy', { locale: es })}
-              </span>
-              <button onClick={() => shiftMonth(1)} title="Mes siguiente"
-                className="p-1.5 rounded-lg hover:bg-white text-gray-400 hover:text-gray-700 transition">
-                <ChevronRight size={14} />
-              </button>
-            </div>
-            {!isCurrentMonth && (
+            <div style={{ viewTransitionName: `vt-household-${activeId}` } as React.CSSProperties}>
               <button
-                onClick={() => setSelectedMonth(() => { const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); return d })}
-                className="text-[10px] font-semibold text-brand-600 hover:underline"
+                onClick={() => withTransition(() => setActiveId(null))}
+                className="flex items-center gap-1.5 text-xs font-semibold text-[#9aa4ac] hover:text-white transition mb-2"
               >
-                Hoy
+                <ArrowLeft size={13} /> Hogares
               </button>
+              <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1 notch-sm bg-white/[0.04] border border-white/[0.08]">
+                <Home size={11} className="text-brand-400" />
+                <span className="font-pixel text-[8px] text-brand-400 uppercase tracking-widest">Hogar</span>
+              </div>
+              <h1 className="text-2xl font-bold tracking-tight break-words">{household.name as string}</h1>
+              <p className="hidden lg:block text-xs text-[#9aa4ac] mt-1">Cuentas compartidas: gastos que se dividen, abonos y cruces entre ustedes.</p>
+            </div>
+
+            {debtsLoading ? (
+              <SkeletonList count={3} />
+            ) : (
+              <>
+                <BalanceCard
+                  diff={ledger.finalDiff}
+                  myName={myName}
+                  partnerName={partnerName}
+                  myNet={myNet}
+                  partnerNet={partnerNet}
+                  hasPartner={Boolean(partnerUid)}
+                  inviteCode={household.inviteCode as string}
+                  saving={saving}
+                  onExpense={() => setOpenExpense(true)}
+                  onAbonar={() => handleOpenAbonoGeneral(user?.uid)}
+                  onSettleAll={handleSettleAllToday}
+                />
+
+                <PersonCard
+                  name={myName}
+                  role="Responsable asignado"
+                  photoURL={myPhoto}
+                  color="#52b69a"
+                  net={myNet}
+                  breakdown={myBreakdown}
+                  debts={myDebts}
+                  canCross={pendingDebtsOf(partnerUid).length > 0}
+                  expanded={myExpanded}
+                  onToggle={() => setMyExpanded(!myExpanded)}
+                  onAbonarAll={() => handleOpenAbonoGeneral(user?.uid)}
+                  onCross={(d) => setCrossTarget(d)}
+                  onAbonar={handleAbonar}
+                  onSelect={(d) => withTransition(() => setSelectedDebt(d))}
+                />
+                {partnerUid && (
+                  <PersonCard
+                    name={partnerName}
+                    role="Co-titular hogar"
+                    photoURL={partnerPhoto}
+                    color="#168aad"
+                    net={partnerNet}
+                    breakdown={partnerBreakdown}
+                    debts={partnerDebts}
+                    canCross={pendingDebtsOf(user?.uid).length > 0}
+                    expanded={partnerExpanded}
+                    onToggle={() => setPartnerExpanded(!partnerExpanded)}
+                    onAbonarAll={() => handleOpenAbonoGeneral(partnerUid)}
+                    onCross={(d) => setCrossTarget(d)}
+                    onAbonar={handleAbonar}
+                    onSelect={(d) => withTransition(() => setSelectedDebt(d))}
+                  />
+                )}
+              </>
             )}
-            <span className="text-[10px] text-gray-400 hidden sm:inline">· {monthDebts.length} registros</span>
+          </CurvedScrollContainer>
 
-            <div className="flex items-center gap-0.5 bg-gray-50 rounded-xl px-1 py-1">
-              <button
-                onClick={() => withTransition(() => setViewMode('clasico'))}
-                title="Vista resumen"
-                className={clsx('p-1.5 transition-all flex items-center gap-1 text-[10px] font-semibold', viewMode === 'clasico' ? 'notch-sm bg-white text-gray-700 shadow-sm' : 'rounded-lg text-gray-400 hover:text-gray-600')}
-              >
-                <LayoutGrid size={13} className={clsx('transition-transform duration-300', viewMode === 'clasico' && 'rotate-0')} />
-              </button>
-              <button
-                onClick={() => withTransition(() => setViewMode('interactivo'))}
-                title="Vista interactiva"
-                className={clsx('p-1.5 transition-all flex items-center gap-1 text-[10px] font-semibold', viewMode === 'interactivo' ? 'notch-sm bg-white text-gray-700 shadow-sm glow-brand-sm' : 'rounded-lg text-gray-400 hover:text-gray-600')}
-              >
-                <Sparkles size={13} className={clsx('transition-transform duration-500', viewMode === 'interactivo' && 'rotate-[360deg]')} />
-              </button>
-            </div>
+          {/* Right pane: fixed header (month, view, menu) and one card with summary on top, history below */}
+          <div className="min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0">
+            <div className="flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
+              {showMonthControls ? (
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => shiftMonth(-1)} className="p-2 rounded-lg bg-[#0d263a] border border-white/10 hover:bg-white/10 transition" aria-label="Mes anterior">
+                    <ChevronLeft size={16} />
+                  </button>
+                  <div className="min-w-[160px] text-center">
+                    <p className="text-sm font-semibold capitalize">{format(selectedMonth, 'MMMM yyyy', { locale: es })}</p>
+                  </div>
+                  <button onClick={() => shiftMonth(1)} className="p-2 rounded-lg bg-[#0d263a] border border-white/10 hover:bg-white/10 transition" aria-label="Mes siguiente">
+                    <ChevronRight size={16} />
+                  </button>
+                  {!isCurrentMonth && (
+                    <Button variant="secondary" size="sm" onClick={() => setSelectedMonth(() => { const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); return d })}>Hoy</Button>
+                  )}
+                </div>
+              ) : (
+                <p className="font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold">
+                  {selectedDebt ? 'Detalle de deuda' : 'Vista interactiva'}
+                </p>
+              )}
 
-            <div className="flex-1" />
-
-            <div className="relative" ref={hhMenuRef}>
-              <button
-                onClick={() => setHhMenuOpen((v) => !v)}
-                title="Hogar y ajustes"
-                className="p-2 rounded-xl hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition"
-              >
-                <Settings size={16} />
-              </button>
-              {hhMenuOpen && (
-                <div className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-lg border border-gray-100 py-2 z-50 slide-up">
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-0.5 bg-[#0d263a] border border-white/10 rounded-lg p-1">
                   <button
-                    onClick={() => { setSaldaTargetId(null); setOpenDebt(true); setHhMenuOpen(false) }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
+                    onClick={() => pickView('clasico')}
+                    title="Vista resumen"
+                    aria-label="Vista resumen"
+                    className={clsx('p-1.5 rounded-md transition', viewMode === 'clasico' ? 'bg-brand-500/20 text-brand-300 border border-brand-500/40' : 'text-[#9aa4ac] hover:text-white hover:bg-white/5 border border-transparent')}
                   >
-                    <Plus size={14} className="text-gray-400" /> Registrar abono
+                    <LayoutGrid size={14} />
                   </button>
                   <button
-                    onClick={() => { setRenameVal(household.name as string); setOpenSettings(true); setHhMenuOpen(false) }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
+                    onClick={() => pickView('interactivo')}
+                    title="Vista interactiva"
+                    aria-label="Vista interactiva"
+                    className={clsx('p-1.5 rounded-md transition', viewMode === 'interactivo' ? 'bg-brand-500/20 text-brand-300 border border-brand-500/40' : 'text-[#9aa4ac] hover:text-white hover:bg-white/5 border border-transparent')}
                   >
-                    <Settings size={14} className="text-gray-400" /> Configurar hogar
-                  </button>
-                  <button
-                    onClick={copyCode}
-                    className="w-full flex items-center justify-between px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
-                  >
-                    <span className="flex items-center gap-2.5"><Copy size={14} className="text-gray-400" /> Código: {household.inviteCode as string}</span>
-                    <span className={clsx('text-[10px]', copied ? 'text-brand-500 font-semibold' : 'text-gray-400')}>
-                      {copied ? 'Copiado' : 'Copiar'}
-                    </span>
-                  </button>
-                  <div className="border-t border-gray-100 my-1" />
-                  <button
-                    onClick={() => withTransition(() => { setActiveId(null); setHhMenuOpen(false) })}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
-                  >
-                    <ArrowLeft size={14} className="text-gray-400" /> Cambiar de hogar
-                  </button>
-                  <button
-                    onClick={() => { setOpenCreate(true); setHhMenuOpen(false) }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
-                  >
-                    <PlusCircle size={14} className="text-gray-400" /> Nuevo hogar
-                  </button>
-                  <button
-                    onClick={() => { setOpenJoin(true); setHhMenuOpen(false) }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
-                  >
-                    <LogIn size={14} className="text-gray-400" /> Unirme a hogar
+                    <Sparkles size={14} />
                   </button>
                 </div>
-              )}
-            </div>
-
-            <button
-              onClick={() => setOpenExpense(true)}
-              className="notch glow-brand-hover flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 transition-all flex-shrink-0"
-            >
-              <ShoppingBag size={14} /> <span className="font-pixel text-[11px]">Gasto compartido</span>
-            </button>
-          </div>
-
-          {/* Detail view for selected debt */}
-          {selectedDebt && (
-            <div className="space-y-4 slide-up">
-              <button
-                onClick={() => withTransition(() => setSelectedDebt(null))}
-                className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-800 transition"
-              >
-                <ArrowLeft size={15} /> Volver a saldos activos
-              </button>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl">
-                <Card className="p-5 space-y-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
-                        Deuda seleccionada
-                        {selectedDebt.expenseId && (
-                          <span className="bg-brand-50 text-brand-600 px-1.5 py-0.5 rounded font-bold normal-case tracking-normal flex items-center gap-1">
-                            <ShoppingBag size={9} /> Gasto compartido
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-base font-bold text-gray-900">{selectedDebt.concept}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        {selectedDebt.debtor === user?.uid ? myName : partnerName} debe ·{' '}
-                        {format(selectedDebt.date instanceof Date ? selectedDebt.date : new Date(selectedDebt.date), 'dd MMM yyyy', { locale: es })}
-                      </p>
-                      {selectedDebt.dueDate && (() => {
-                        const dd = selectedDebt.dueDate instanceof Date ? selectedDebt.dueDate : new Date(selectedDebt.dueDate)
-                        const overdue = dd < new Date()
-                        return (
-                          <p className={clsx('text-xs mt-0.5 flex items-center gap-1', overdue ? 'text-red-500 font-semibold' : 'text-gray-400')}>
-                            <Clock size={11} /> {overdue ? 'Venció el' : 'Vence el'} {format(dd, 'dd MMM yyyy', { locale: es })}
-                          </p>
-                        )
-                      })()}
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      {(selectedDebt.crossedAmount as number) > 0 && (
-                        <p className="text-xs text-gray-300 line-through tabular-nums">{formatCOP(selectedDebt.amount)}</p>
-                      )}
-                      <p className="text-xl font-black text-gray-900 tabular-nums">
-                        {formatCOP(Math.max(0, remainingOf(selectedDebt)))}
-                      </p>
-                    </div>
-                  </div>
-                  {selectedDebt.notas && (
-                    <p className="text-xs text-gray-500 bg-gray-50 rounded-xl p-3">{selectedDebt.notas}</p>
-                  )}
-                  {selectedDebt.tipo === 'Deuda' && (selectedDebt.cruzado || remainingOf(selectedDebt) <= 0) && (
-                    <p className="text-[11px] text-brand-600 bg-brand-50 rounded-xl p-2.5 font-semibold">
-                      Esta deuda ya está liquidada.
-                    </p>
-                  )}
-                  {isPendingDebt(selectedDebt) && counterpartPendingDebts(selectedDebt).length === 0 && (
-                    <p className="text-[11px] text-gray-400 bg-gray-50 rounded-xl p-2.5">
-                      No se puede cruzar: {selectedDebt.debtor === user?.uid ? partnerName : myName} no tiene deudas pendientes.
-                    </p>
-                  )}
-                  <div className="flex gap-2">
-                    {isPendingDebt(selectedDebt) && (
-                      <>
-                        <button
-                          onClick={() => { setCrossTarget(selectedDebt); setSelectedDebt(null) }}
-                          disabled={counterpartPendingDebts(selectedDebt).length === 0}
-                          title={counterpartPendingDebts(selectedDebt).length === 0 ? 'La otra persona no tiene deudas pendientes para cruzar' : undefined}
-                          className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-700 hover:border-purple-300 hover:text-purple-700 hover:bg-purple-50 transition flex items-center justify-center gap-2 disabled:opacity-40 disabled:hover:border-gray-200 disabled:hover:text-gray-700 disabled:hover:bg-transparent disabled:cursor-not-allowed">
-                          <GitMerge size={14} /> Cruzar deuda
-                        </button>
-                        <button onClick={() => { handleSaldar(selectedDebt); setSelectedDebt(null) }}
-                          className="flex-1 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-semibold hover:bg-gray-800 transition">
-                          Saldar
-                        </button>
-                      </>
-                    )}
-                    <button onClick={async () => { await handleDelete(selectedDebt); setSelectedDebt(null) }}
-                      title="Eliminar"
-                      className="px-3 rounded-xl border border-gray-200 text-red-500 hover:border-red-300 hover:bg-red-50 transition flex items-center justify-center">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </Card>
-                <Card className="p-5 space-y-3">
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Cruces registrados</p>
-                  {crossings.filter((c: any) => c.debt1Id === selectedDebt.id || c.debt2Id === selectedDebt.id).length === 0 ? (
-                    <p className="text-xs text-gray-400 py-4 text-center">Sin cruces para esta deuda</p>
-                  ) : crossings.filter((c: any) => c.debt1Id === selectedDebt.id || c.debt2Id === selectedDebt.id).map((c: any) => (
-                    <div key={c.id} className="pb-3 border-b border-gray-50 last:border-0 last:pb-0">
-                      <div className="flex justify-between items-start">
-                        <p className="text-xs font-semibold text-purple-700">{formatCOP(c.amount)} cruzado</p>
-                        <p className="text-[10px] text-gray-400">
-                          {format(c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt), 'dd MMM yyyy', { locale: es })}
-                        </p>
-                      </div>
-                      {c.notes && <p className="text-[10px] text-gray-500 mt-0.5">{c.notes}</p>}
-                      <p className="text-[10px] text-gray-400 mt-0.5">Por {c.initiatedBy === user?.uid ? myName : partnerName}</p>
-                    </div>
-                  ))}
-                </Card>
+                <HouseholdMenu
+                  inviteCode={household.inviteCode as string}
+                  copied={copied}
+                  onSettings={() => { setRenameVal(household.name as string); setOpenSettings(true) }}
+                  onInvite={() => setOpenInvite(true)}
+                  onCopyCode={copyCode}
+                  onSwitch={() => withTransition(() => setActiveId(null))}
+                  onCreate={() => setOpenCreate(true)}
+                  onJoin={() => setOpenJoin(true)}
+                />
               </div>
             </div>
-          )}
 
-          {/* Main grid: panel combinado + historial */}
-          {!selectedDebt && viewMode === 'clasico' && (
-            <div className="grid gap-4 items-start grid-cols-1 xl:grid-cols-[1fr_280px] md:flex-1 md:min-h-0">
-
-              {/* Panel combinado: Resumen + Saldos activos */}
-              <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden flex flex-col md:h-full">
-                <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-100 flex-shrink-0">
-                  <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center">
-                      <TrendingUp size={13} className="text-brand-600" />
-                    </div>
-                    <span className="text-sm font-semibold text-gray-700">Resumen y Saldos</span>
-                  </div>
-                  <span className={clsx(
-                    'text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize',
-                    isCurrentMonth ? 'text-amber-600 bg-amber-50' : 'text-gray-500 bg-gray-100',
-                  )}>
-                    {isCurrentMonth ? 'En curso' : format(selectedMonth, 'MMMM yyyy', { locale: es })}
-                  </span>
-                </div>
-
-                <div className="flex-1 overflow-y-auto">
-                {debtsLoading ? (
-                  <div className="p-5"><SkeletonList count={3} /></div>
-                ) : (
-                  <>
-                    {/* Resumen simplificado */}
-                    <div className="p-5 space-y-4 border-b border-gray-100">
+            <div className={clsx('flex flex-col lg:flex-1 lg:min-h-0', framed)}>
+              {selectedDebt ? (
+                <CurvedScrollContainer className="lg:flex-1 lg:min-h-0" {...scrollProps}>
+                  <HouseholdDebtDetail
+                    debt={selectedDebt}
+                    debts={debts}
+                    crossings={crossings}
+                    myName={myName}
+                    partnerName={partnerName}
+                    userUid={user?.uid}
+                    canCross={counterpartPendingDebts(selectedDebt).length > 0}
+                    onBack={() => withTransition(() => setSelectedDebt(null))}
+                    onCross={() => { setCrossTarget(selectedDebt); setSelectedDebt(null) }}
+                    onAbonar={() => { handleAbonar(selectedDebt); setSelectedDebt(null) }}
+                    onDelete={async () => { await handleDelete(selectedDebt); setSelectedDebt(null) }}
+                    onDeleteAbono={handleDeleteAbono}
+                  />
+                </CurvedScrollContainer>
+              ) : viewMode === 'interactivo' ? (
+                <CurvedScrollContainer className="lg:flex-1 lg:min-h-0" {...scrollProps}>
+                  {debtsLoading ? (
+                    <SkeletonList count={3} />
+                  ) : (
+                    <FinanceExplorer
+                      householdName={household.name as string}
+                      members={expenseMembers}
+                      currentUserUid={user?.uid ?? ''}
+                      debts={debts}
+                      crossings={crossings}
+                      onOpenDebt={(d) => withTransition(() => setSelectedDebt(d))}
+                    />
+                  )}
+                </CurvedScrollContainer>
+              ) : (
+                <>
+                  <div className="flex-shrink-0 border-b border-white/10 p-5 space-y-3">
+                    <div className="flex items-end justify-between gap-3">
                       <div>
-                        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                          Total generado en {format(selectedMonth, 'MMMM', { locale: es })}
-                          <InfoTip text="Solo los gastos registrados en el mes que estás viendo arriba, antes de abonos o cruces. No incluye saldo arrastrado de meses anteriores." />
+                        <p className="font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold flex items-center gap-1.5">
+                          Generado en {monthName}
+                          <Tip text="Solo los gastos registrados en el mes que estás viendo, antes de abonos o cruces. No incluye saldo arrastrado de meses anteriores." />
                         </p>
-                        <p className="text-3xl font-black text-gray-900 tabular-nums tracking-tight leading-none">
-                          {formatCOP(totalGen)}
-                        </p>
-                        <div className="flex items-center gap-3 mt-1.5 text-[10px] text-gray-500">
-                          <span className="flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-gray-900 inline-block flex-shrink-0" />
-                            {myName} <span className="font-semibold text-gray-700 tabular-nums">{formatCOP(myMonthGen)}</span>
-                          </span>
-                          <span className="text-gray-300">+</span>
-                          <span className="flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-purple-600 inline-block flex-shrink-0" />
-                            {partnerName} <span className="font-semibold text-gray-700 tabular-nums">{formatCOP(partnerMonthGen)}</span>
-                          </span>
-                        </div>
+                        <p className="text-2xl font-bold font-mono tabular-nums text-brand-300">{formatCOP(totalGen)}</p>
                       </div>
-
-                      {/* Barra comparativa de deuda */}
-                      <div>
-                        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1">
-                          ¿Quién debe más? · saldo vigente
-                          <InfoTip text="Saldo real acumulado hasta hoy, no cambia al navegar entre meses: lo que no se saldó en un mes se arrastra al siguiente." />
-                        </p>
-                        {(myNet + partnerNet) <= 0 ? (
-                          <div className="bg-brand-50 rounded-xl py-3 text-center">
-                            <p className="text-sm font-bold text-brand-600">Nadie debe nada — cuentas al día</p>
-                          </div>
-                        ) : (
-                          <>
-                            <div className="flex h-9 rounded-xl overflow-hidden gap-0.5">
-                              {myNet > 0 && (
-                                <div
-                                  className="bg-gray-900 flex items-center justify-center transition-all duration-700 px-1"
-                                  style={{ width: `${(myNet / (myNet + partnerNet)) * 100}%` }}
-                                >
-                                  {(myNet / (myNet + partnerNet)) * 100 > 18 && (
-                                    <span className="text-[11px] text-white font-bold truncate">{formatCOP(myNet)}</span>
-                                  )}
-                                </div>
-                              )}
-                              {partnerNet > 0 && (
-                                <div
-                                  className="bg-purple-600 flex items-center justify-center transition-all duration-700 px-1"
-                                  style={{ width: `${(partnerNet / (myNet + partnerNet)) * 100}%` }}
-                                >
-                                  {(partnerNet / (myNet + partnerNet)) * 100 > 18 && (
-                                    <span className="text-[11px] text-white font-bold truncate">{formatCOP(partnerNet)}</span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex justify-between mt-1.5 text-[10px] text-gray-500 font-medium">
-                              <span className="flex items-center gap-1">
-                                <span className="w-2 h-2 rounded-full bg-gray-900 inline-block flex-shrink-0" /> {myName} {myNet === 0 && '(al día)'}
-                              </span>
-                              <span className="flex items-center gap-1">
-                                {partnerName} {partnerNet === 0 && '(al día)'} <span className="w-2 h-2 rounded-full bg-purple-600 inline-block flex-shrink-0" />
-                              </span>
-                            </div>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Cubierto vs por liquidar */}
-                      <div>
-                        <div className="flex items-center justify-between text-[10px] mb-1.5">
-                          <span className="text-gray-500 flex items-center gap-1">
-                            {formatCOP(totalAbono + totalCruzado)} cubierto ({progress}%)
-                            <InfoTip text="De lo generado en este mes: lo ya abonado o compensado. No es el saldo total — ese es el de la barra de arriba." />
-                          </span>
-                          <span className="font-bold text-amber-600">{formatCOP(Math.max(0, pendiente))} de {format(selectedMonth, 'MMMM', { locale: es })}</span>
-                        </div>
-                        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                          <div className="h-full bg-brand-500 rounded-full transition-all duration-700" style={{ width: `${progress}%` }} />
-                        </div>
-                      </div>
+                      <span className="text-xs font-mono text-[#8a929a]">{monthRows.length} {monthRows.length === 1 ? 'movimiento' : 'movimientos'}</span>
                     </div>
-
-                    {/* Mi sección */}
-                    <div className="border-b border-gray-100">
-                      <button
-                        onClick={() => setMyExpanded(!myExpanded)}
-                        className="w-full flex items-center gap-3 px-5 py-4 hover:bg-gray-50/80 transition text-left"
-                      >
-                        <Avatar name={myName} photoURL={myPhoto} size={36} color="#16a34a" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-gray-900">{myName}</p>
-                          <p className="text-[10px] text-gray-400">Responsable asignado</p>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {myNet > 0
-                            ? <span className="text-xs font-bold text-red-600 bg-red-50 px-2.5 py-1 rounded-full whitespace-nowrap">Debe {formatCOP(myNet)}</span>
-                            : <span className="text-xs font-bold text-brand-600 bg-brand-50 px-2.5 py-1 rounded-full">Al día</span>
-                          }
-                          <ChevronDown size={14} className={clsx('text-gray-400 transition-transform duration-200 flex-shrink-0', myExpanded && 'rotate-180')} />
-                        </div>
-                      </button>
-                      <ExpandSection open={myExpanded}>
-                        <div className="px-5 pb-2">
-                          <BalanceBreakdown name={myName} {...myBreakdown} />
-                          <PersonDebtGroups
-                            personDebts={myDebts}
-                            canCross={pendingDebtsOf(partnerUid).length > 0}
-                            onCross={(d) => setCrossTarget(d)}
-                            onSaldar={(d) => handleSaldar(d)}
-                            onSelect={(d) => withTransition(() => setSelectedDebt(d))}
-                          />
-                        </div>
-                      </ExpandSection>
-                    </div>
-
-                    {/* Separador */}
-                    <div className="flex items-center gap-3 px-5 py-2.5 bg-gray-50/60">
-                      <div className="flex-1 h-px bg-gray-100" />
-                      <span className="text-[10px] font-bold text-gray-300 tracking-widest uppercase whitespace-nowrap flex items-center gap-1">
-                        Compensación bilateral
-                        <InfoTip text="Debajo se cruzan gastos entre ambos para saldar sin mover dinero de uno a otro." />
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[#9aa4ac]">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#52b69a' }} />
+                        {myName} <span className="font-mono font-semibold text-[#f0fae8]">{formatCOP(myMonthGen)}</span>
                       </span>
-                      <div className="flex-1 h-px bg-gray-100" />
+                      {partnerUid && (
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#168aad' }} />
+                          {partnerName} <span className="font-mono font-semibold text-[#f0fae8]">{formatCOP(partnerMonthGen)}</span>
+                        </span>
+                      )}
                     </div>
+                    {totalGen > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-x-3 text-[11px]">
+                          <span className="text-[#9aa4ac] flex items-center gap-1.5">
+                            {formatCOP(totalAbono + totalCruzado)} cubierto ({progress}%)
+                            <Tip text="De lo generado en este mes: lo ya abonado o compensado. No es el saldo total, ese es el de la tarjeta de saldo vigente." />
+                          </span>
+                          <span className="font-mono font-bold text-amber-300">{formatCOP(Math.max(0, pendiente))} por cubrir</span>
+                        </div>
+                        <ProgressBar value={progress} size="sm" />
+                      </div>
+                    )}
+                  </div>
 
-                    {/* Sección pareja */}
-                    {partnerUid ? (
-                      <div>
-                        <button
-                          onClick={() => setPartnerExpanded(!partnerExpanded)}
-                          className="w-full flex items-center gap-3 px-5 py-4 hover:bg-gray-50/80 transition text-left"
-                        >
-                          <Avatar name={partnerName} photoURL={partnerPhoto} size={36} color="#a78bfa" />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-gray-900">{partnerName}</p>
-                            <p className="text-[10px] text-gray-400">Co-titular hogar</p>
-                          </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            {partnerNet > 0
-                              ? <span className="text-xs font-bold text-red-600 bg-red-50 px-2.5 py-1 rounded-full whitespace-nowrap">Debe {formatCOP(partnerNet)}</span>
-                              : <span className="text-xs font-bold text-brand-600 bg-brand-50 px-2.5 py-1 rounded-full">Al día</span>
-                            }
-                            <ChevronDown size={14} className={clsx('text-gray-400 transition-transform duration-200 flex-shrink-0', partnerExpanded && 'rotate-180')} />
-                          </div>
-                        </button>
-                        <ExpandSection open={partnerExpanded}>
-                          <div className="px-5 pb-2">
-                            <BalanceBreakdown name={partnerName} {...partnerBreakdown} />
-                            <PersonDebtGroups
-                              personDebts={partnerDebts}
-                              canCross={pendingDebtsOf(user?.uid).length > 0}
-                              onCross={(d) => setCrossTarget(d)}
-                              onSaldar={(d) => handleSaldar(d)}
-                              onSelect={(d) => withTransition(() => setSelectedDebt(d))}
-                            />
-                          </div>
-                        </ExpandSection>
+                  <CurvedScrollContainer className="lg:flex-1 lg:min-h-0" {...scrollProps} corners="bottom-right">
+                    {debtsLoading ? (
+                      <SkeletonList count={4} />
+                    ) : monthRows.length === 0 && !carryIn ? (
+                      <div className="text-center py-12 px-6">
+                        <EmptyMark name="housing" />
+                        <p className="text-sm font-bold text-[#f0fae8]">Sin movimientos en {monthName}</p>
+                        <p className="text-xs text-[#8a929a] mt-1">Presiona "Gasto compartido" para registrar uno.</p>
                       </div>
                     ) : (
-                      <div className="px-5 py-6 text-center">
-                        <p className="text-xs text-gray-400">Ningún co-titular unido aún.</p>
-                        <p className="text-xs text-brand-600 font-semibold mt-1">
-                          Código: {household.inviteCode as string}
-                        </p>
-                      </div>
+                      <HouseholdTimeline
+                        rows={monthRows}
+                        carryIn={carryIn}
+                        myName={myName}
+                        partnerName={partnerName}
+                        myPhoto={myPhoto}
+                        partnerPhoto={partnerPhoto}
+                        showToday={isCurrentMonth}
+                        onSelectDebt={(d) => withTransition(() => setSelectedDebt(d))}
+                      />
                     )}
-
-
-                  </>
-                )}
-                </div>
-              </div>
-
-              {/* Panel 3: Historial completo, línea de tiempo por persona (solo xl) */}
-              <div className="hidden xl:flex flex-col bg-white border border-gray-100 rounded-2xl overflow-hidden xl:h-full">
-                <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100 flex-shrink-0">
-                  <div className="flex items-center gap-2">
-                    <TrendingUp size={13} className="text-gray-400" />
-                    <span className="text-sm font-semibold text-gray-700 flex items-center gap-1">
-                      Historial
-                      <InfoTip text="Todos los movimientos desde el inicio, de ambas personas, en orden cronológico. Cada uno muestra quién lo hizo y el saldo resultante." />
-                    </span>
-                  </div>
-                  <span className="font-mono text-[10px] text-gray-400">{fullLedger.rows.length}</span>
-                </div>
-
-                {/* Saldo actual, siempre arriba */}
-                <div className="px-5 py-3 border-b border-gray-100 flex-shrink-0 bg-gray-50/60">
-                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-1">Saldo actual</p>
-                  {fullLedger.finalDiff === 0 ? (
-                    <p className="text-[13px] font-bold text-brand-600">Cuentas al día</p>
-                  ) : (
-                    <p className="text-[13px] font-black text-gray-900 tabular-nums">
-                      {fullLedger.finalDiff > 0 ? myName : partnerName} debe {formatCOP(Math.abs(fullLedger.finalDiff))}
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex-1 overflow-y-auto px-4 py-3">
-                  {fullLedger.rows.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-10 gap-2">
-                      <div className="w-8 h-8 rounded-full border-2 border-dashed border-gray-200 flex items-center justify-center">
-                        <TrendingUp size={14} className="text-gray-300" />
-                      </div>
-                      <p className="text-[11px] text-gray-400 text-center">Sin movimientos registrados aún</p>
-                    </div>
-                  ) : (
-                    <div className="relative">
-                      {/* Línea de tiempo */}
-                      <div className="absolute left-[11px] top-1 bottom-1 w-px bg-gray-100" />
-
-                      {fullLedger.rows.map((ev, idx) => {
-                        const who  = ev.isMe ? myName : partnerName
-                        const whoPhoto  = ev.isMe ? myPhoto : partnerPhoto
-                        const nodeColor = ev.isMe ? '#16a34a' : '#a78bfa'
-                        const kindLabel = ev.kind === 'deuda' ? 'debe' : ev.kind === 'abono' ? 'abonó' : 'cruzó'
-                        const owesNow = ev.diffAfter > 0 ? myName : ev.diffAfter < 0 ? partnerName : null
-                        const statusLabel = ev.kind === 'deuda' ? 'pendiente' : ev.kind === 'abono' ? 'abonado' : 'cruzado'
-                        const statusCls   = ev.kind === 'deuda'
-                          ? 'bg-amber-100 text-amber-700'
-                          : ev.kind === 'abono'
-                            ? 'bg-blue-100 text-blue-700'
-                            : 'bg-purple-100 text-purple-700'
-                        return (
-                          <div key={idx} className="relative flex gap-3 pb-3 last:pb-0">
-                            <div className="relative z-10 flex-shrink-0 mt-0.5">
-                              <Avatar name={who} photoURL={whoPhoto} size={22} color={nodeColor} className="text-[9px]" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-start justify-between gap-2">
-                                <p className="text-[11px] font-medium text-gray-700 truncate">{ev.concept}</p>
-                                <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                                  <span className={clsx(
-                                    'text-[11px] font-semibold tabular-nums',
-                                    ev.delta > 0 ? 'text-red-500' : 'text-brand-600',
-                                  )}>
-                                    {ev.delta > 0 ? '+' : '−'}{formatCOP(Math.abs(ev.delta))}
-                                  </span>
-                                  <span className={clsx('text-[8px] font-bold px-1.5 py-0.5 rounded font-mono leading-none', statusCls)}>
-                                    {statusLabel}
-                                  </span>
-                                </div>
-                              </div>
-                              <p className="text-[9px] text-gray-400 mt-0.5">
-                                {who} {kindLabel} · {format(ev.date, 'dd MMM yy', { locale: es })}
-                              </p>
-                              <p className="text-[9px] text-gray-400 mt-0.5">
-                                {owesNow ? `${owesNow} debe ${formatCOP(Math.abs(ev.diffAfter))}` : 'Cuentas al día'}
-                              </p>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-
+                  </CurvedScrollContainer>
+                </>
+              )}
             </div>
-          )}
+          </div>
+        </>
+      )}
 
-          {/* Modals */}
-          {crossTarget && (
+      {/* Create / join stay reachable from the picker (no household yet) and from the menu (one open) */}
+      <Modal open={openCreate} onClose={() => setOpenCreate(false)} title="Crear hogar">
+        <form onSubmit={hhForm.handleSubmit(onCreateHousehold)} className="space-y-4">
+          <Input label="Nombre del hogar" placeholder="ej. Casa Carlos y Alexandra" {...hhForm.register('name')} error={hhForm.formState.errors.name?.message} />
+          <div className="flex gap-2">
+            <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenCreate(false)}>Cancelar</Button>
+            <Button type="submit" notched className="flex-1" disabled={saving}>{saving ? 'Creando…' : 'Crear'}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={openJoin} onClose={() => setOpenJoin(false)} title="Unirme a un hogar">
+        <form onSubmit={joinForm.handleSubmit(onJoinHousehold)} className="space-y-4">
+          <Input label="Código de invitación" placeholder="ABC123" maxLength={6} className="uppercase" {...joinForm.register('code')} error={joinForm.formState.errors.code?.message} />
+          <div className="flex gap-2">
+            <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenJoin(false)}>Cancelar</Button>
+            <Button type="submit" notched className="flex-1" disabled={saving}>{saving ? 'Uniéndome…' : 'Unirme'}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      {household && (
+        <HouseholdSettingsModal
+          open={openSettings}
+          onClose={() => setOpenSettings(false)}
+          name={renameVal}
+          onNameChange={setRenameVal}
+          saving={saving}
+          onRename={handleRename}
+          onDelete={handleDeleteHousehold}
+        />
+      )}
+
+      {household && (
+        <InviteModal
+          open={openInvite}
+          onClose={() => setOpenInvite(false)}
+          householdId={household.id as string}
+          householdName={household.name as string}
+          inviteCode={household.inviteCode as string}
+          members={members}
+          myUid={user?.uid ?? ''}
+          myEmail={user?.email ?? ''}
+          myName={myName}
+        />
+      )}
+
+      {crossTarget && (
         <CrossingModal
           debt={crossTarget}
           counterPersonId={crossTarget.debtor === user?.uid ? (partnerUid ?? '') : (user?.uid ?? '')}
@@ -1085,484 +993,32 @@ export default function HouseholdPage() {
         />
       )}
 
-      <Modal open={openSettings} onClose={() => setOpenSettings(false)} title="Configurar hogar" dark>
-        <div className="space-y-5">
-          <div className="space-y-2">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Renombrar</p>
-            <div className="flex gap-2">
-              <input
-                className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300"
-                value={renameVal}
-                onChange={(e) => setRenameVal(e.target.value)}
-                placeholder="Nombre del hogar"
-              />
-              <Button onClick={handleRename} size="sm" disabled={saving || !renameVal.trim()}>
-                <Pencil size={14} /> Guardar
-              </Button>
-            </div>
-          </div>
-          <div className="border-t border-gray-100 pt-4 space-y-2">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Zona de peligro</p>
-            <button onClick={handleDeleteHousehold} disabled={saving}
-              className="w-full flex items-center gap-2 px-4 py-2.5 rounded-xl border border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50 transition disabled:opacity-50">
-              <Trash2 size={15} /> Eliminar hogar y todos los registros
-            </button>
-            <p className="text-[10px] text-gray-400">Esta acción no se puede deshacer.</p>
-          </div>
-        </div>
-      </Modal>
-
-      <Modal open={openDebt} onClose={() => { setOpenDebt(false); setSaldaTargetId(null) }} title="Registrar abono" dark>
-        <form onSubmit={debtForm.handleSubmit(onAddDebt)} className="space-y-4">
-          <input type="hidden" {...debtForm.register('tipo')} value="Abono" />
-          {saldaTargetId ? (
-            <p className="text-xs text-brand-600 bg-brand-50 rounded-xl p-3 font-semibold">
-              Esto va a saldar la deuda seleccionada — al guardar, deja de aparecer como pendiente.
-            </p>
-          ) : (
-            <p className="text-xs text-gray-400 bg-gray-50 rounded-xl p-3">
-              Para registrar un gasto nuevo usa "Gasto compartido" — esto es solo para anotar un pago directo contra una deuda existente.
-            </p>
-          )}
-          <Input label="Concepto" placeholder="ej. Veterinario, Mercado…" {...debtForm.register('concept')} error={debtForm.formState.errors.concept?.message} />
-          <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium text-gray-700">Monto</label>
-            <div className="currency-field has-suffix">
-              <span className="currency-affix-prefix">$</span>
-              <input
-                type="number" placeholder="0" {...debtForm.register('amount')}
-                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                aria-label="Monto en pesos colombianos"
-              />
-              <span className="currency-affix-suffix">COP</span>
-            </div>
-            {debtForm.formState.errors.amount?.message && <p className="text-xs text-red-500">{debtForm.formState.errors.amount.message}</p>}
-          </div>
-          <Select label="¿Quién abona?" options={debtorOptions} {...debtForm.register('debtor')} />
-          <Select label="Categoría" options={CAT_OPTIONS} {...debtForm.register('category')} />
-          <Input label="Fecha" type="date" {...debtForm.register('date')} />
-          <Input label="Notas (opcional)" placeholder="ej. Medicamentos" {...debtForm.register('notas')} />
-          <div className="flex gap-2">
-            <Button type="button" variant="secondary" className="flex-1" onClick={() => { setOpenDebt(false); setSaldaTargetId(null) }}>Cancelar</Button>
-            <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</Button>
-          </div>
-        </form>
-      </Modal>
-        </div>
-      )}
-
-      {/* Vista interactiva: sigue en su tema claro existente — pendiente a propósito,
-          fuera de cualquier envoltorio hh-dark para que el override nunca la toque. */}
-      {household && !selectedDebt && viewMode === 'interactivo' && (
-        debtsLoading ? (
-          <div className="bg-white border border-gray-100 rounded-2xl p-5"><SkeletonList count={3} /></div>
-        ) : (
-          <FinanceExplorer
-            householdName={household.name as string}
-            members={expenseMembers}
-            currentUserUid={user?.uid ?? ''}
-            debts={debts}
-            crossings={crossings}
-            onOpenDebt={(d) => withTransition(() => setSelectedDebt(d))}
-          />
-        )
-      )}
+      <AbonoModal
+        open={openDebt}
+        onClose={closeAbono}
+        form={debtForm}
+        onSubmit={onAddDebt}
+        debts={debts}
+        saldaTargetId={saldaTargetId}
+        selectedTargetDebtId={selectedTargetDebtId}
+        onPickTarget={setSelectedTargetDebtId}
+        userUid={user?.uid}
+        myName={myName}
+        partnerName={partnerName}
+        debtorOptions={debtorOptions}
+        saving={saving}
+      />
 
       {activeId && (
-        <div className="hh-dark">
-          <HouseholdExpenseModal
-            open={openExpense}
-            onClose={() => setOpenExpense(false)}
-            householdId={activeId}
-            members={expenseMembers}
-            currentUserUid={user?.uid ?? ''}
-            onCreated={reloadDebts}
-          />
-        </div>
+        <HouseholdExpenseModal
+          open={openExpense}
+          onClose={() => setOpenExpense(false)}
+          householdId={activeId}
+          members={expenseMembers}
+          currentUserUid={user?.uid ?? ''}
+          onCreated={reloadDebts}
+        />
       )}
     </div>
-  )
-}
-
-
-// ── Expand / collapse section (CSS grid animation) ───────────────────────────
-// ── Small hover tooltip, portaled to <body> so it's never clipped by a
-// scrolling or animated ancestor (overflow-y-auto panels, ExpandSection) ─────
-function InfoTip({ text }: { text: string }) {
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
-  const iconRef = useRef<HTMLSpanElement>(null)
-
-  function show() {
-    const rect = iconRef.current?.getBoundingClientRect()
-    if (rect) setPos({ top: rect.top - 6, left: rect.left + rect.width / 2 })
-  }
-  function hide() { setPos(null) }
-
-  return (
-    <span
-      ref={iconRef}
-      className="relative inline-flex"
-      onMouseEnter={show}
-      onMouseLeave={hide}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <Info size={11} className="text-gray-300 hover:text-gray-400 cursor-help" />
-      {pos && createPortal(
-        <span
-          className="fixed -translate-x-1/2 -translate-y-full w-44 rounded-lg bg-gray-900 text-white text-[10px] font-normal normal-case tracking-normal leading-snug px-2 py-1.5 z-[1000] text-center pointer-events-none shadow-lg"
-          style={{ top: pos.top, left: pos.left }}
-        >
-          {text}
-        </span>,
-        document.body,
-      )}
-    </span>
-  )
-}
-
-function ExpandSection({ open, children, maxHeight }: { open: boolean; children: React.ReactNode; maxHeight?: number }) {
-  return (
-    <div style={{ display: 'grid', gridTemplateRows: open ? '1fr' : '0fr', transition: 'grid-template-rows 220ms ease' }}>
-      <div style={{ overflow: 'hidden' }}>
-        <div style={maxHeight ? { maxHeight, overflowY: 'auto' } : undefined}>{children}</div>
-      </div>
-    </div>
-  )
-}
-
-// ── Groups a person's debts by status: Pendiente / Cruzado / Abonado ─────────
-// ── Step-by-step breakdown of how a person's balance was calculated ──────────
-function BalanceBreakdown({ name, deuda, abono, cruzado, saldo }: {
-  name: string; deuda: number; abono: number; cruzado: number; saldo: number
-}) {
-  return (
-    <div className="bg-gray-50 rounded-xl px-3 py-2.5 mb-3 space-y-1">
-      <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-        Cómo se calcula
-        <InfoTip text="Suma de todas sus deudas históricas, menos lo que ha abonado y lo que se le ha cruzado — nunca se resetea por mes." />
-      </p>
-      <div className="flex items-center justify-between text-[10px]">
-        <span className="text-gray-500">Deudas totales</span>
-        <span className="font-semibold text-gray-700 tabular-nums">{formatCOP(deuda)}</span>
-      </div>
-      {abono > 0 && (
-        <div className="flex items-center justify-between text-[10px]">
-          <span className="text-gray-500">− Abonos</span>
-          <span className="font-semibold text-brand-600 tabular-nums">−{formatCOP(abono)}</span>
-        </div>
-      )}
-      {cruzado > 0 && (
-        <div className="flex items-center justify-between text-[10px]">
-          <span className="text-gray-500">− Cruzado</span>
-          <span className="font-semibold text-purple-600 tabular-nums">−{formatCOP(cruzado)}</span>
-        </div>
-      )}
-      <div className="flex items-center justify-between text-[10px] pt-1.5 mt-1 border-t border-gray-200">
-        <span className="font-bold text-gray-700">= {name} debe</span>
-        <span className="font-black text-gray-900 tabular-nums">{formatCOP(Math.max(0, saldo))}</span>
-      </div>
-    </div>
-  )
-}
-
-function PersonDebtGroups({ personDebts, canCross, onCross, onSaldar, onSelect }: {
-  personDebts: any[]
-  canCross: boolean
-  onCross: (d: any) => void
-  onSaldar: (d: any) => void
-  onSelect: (d: any) => void
-}) {
-  const pendientes = personDebts.filter((d: any) => isPendingDebt(d))
-  const cruzados    = personDebts.filter((d: any) => d.tipo === 'Deuda' && d.cruzado)
-  const saldados    = personDebts.filter((d: any) => d.tipo === 'Deuda' && !d.cruzado && remainingOf(d) <= 0)
-  const abonos      = personDebts.filter((d: any) => d.tipo === 'Abono')
-
-  if (pendientes.length === 0 && cruzados.length === 0 && saldados.length === 0 && abonos.length === 0) {
-    return <p className="text-xs text-gray-400 py-3">Sin registros.</p>
-  }
-
-  return (
-    <div>
-      {pendientes.length > 0 && (
-        <div>
-          <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider pt-1 pb-0.5 flex items-center gap-1">
-            Pendiente
-            <InfoTip text="Gastos sin cubrir todavía: ni abonados ni cruzados." />
-          </p>
-          {pendientes.map((d: any) => (
-            <DebtItem key={d.id} d={d}
-              canCross={canCross}
-              onCross={() => onCross(d)}
-              onSaldar={() => onSaldar(d)}
-              onSelect={() => onSelect(d)}
-            />
-          ))}
-        </div>
-      )}
-      {cruzados.length > 0 && (
-        <div>
-          <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider pt-2 pb-0.5 flex items-center gap-1">
-            Cruzado
-            <InfoTip text="Se compensó contra un gasto de la otra persona, sin mover dinero entre ambos." />
-          </p>
-          {cruzados.map((d: any) => (
-            <StatusItem key={d.id} d={d}
-              label="Cruzado" labelCls="bg-purple-100 text-purple-700"
-              onSelect={() => onSelect(d)}
-            />
-          ))}
-        </div>
-      )}
-      {saldados.length > 0 && (
-        <div>
-          <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider pt-2 pb-0.5 flex items-center gap-1">
-            Abonado
-            <InfoTip text="Se pagó directamente, en efectivo o transferencia — ya no cuenta como pendiente." />
-          </p>
-          {saldados.map((d: any) => (
-            <StatusItem key={d.id} d={d}
-              label="Pagado" labelCls="bg-blue-100 text-blue-700"
-              onSelect={() => onSelect(d)}
-            />
-          ))}
-        </div>
-      )}
-      {abonos.length > 0 && (
-        <div>
-          <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider pt-2 pb-0.5 flex items-center gap-1">
-            Movimientos de abono
-            <InfoTip text="El historial de pagos directos registrados, en orden." />
-          </p>
-          {abonos.map((d: any) => (
-            <StatusItem key={d.id} d={d}
-              label="Abono" labelCls="bg-blue-100 text-blue-700"
-              onSelect={() => onSelect(d)}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Read-only compact row for already-settled debts/abonos ───────────────────
-function StatusItem({ d, label, labelCls, onSelect }: {
-  d: any; label: string; labelCls: string; onSelect: () => void
-}) {
-  return (
-    <button onClick={onSelect} className="w-full text-left py-2 border-b border-gray-50 last:border-0 group">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-[11px] text-gray-600 truncate group-hover:text-gray-800 transition">{d.concept}</p>
-          <p className="text-[9px] text-gray-400 mt-0.5">
-            {format(d.date instanceof Date ? d.date : new Date(d.date), 'dd MMM yyyy', { locale: es })}
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <span className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded', labelCls)}>{label}</span>
-          <span className="text-[11px] font-semibold text-gray-400 tabular-nums">{formatCOP(d.amount)}</span>
-        </div>
-      </div>
-    </button>
-  )
-}
-
-// ── Compact debt item for the new panel layout ────────────────────────────────
-function DebtItem({ d, canCross, onCross, onSaldar, onSelect }: {
-  d: any
-  canCross: boolean
-  onCross: () => void
-  onSaldar: () => void
-  onSelect: () => void
-}) {
-  const crossed   = (d.crossedAmount as number) || 0
-  const remaining = remainingOf(d)
-  const dueDate   = d.dueDate ? (d.dueDate instanceof Date ? d.dueDate : new Date(d.dueDate)) : null
-  const overdue   = dueDate ? dueDate < new Date() : false
-
-  return (
-    <div className="py-3 border-b border-gray-50 last:border-0">
-      <button onClick={onSelect} className="w-full text-left group">
-        <div className="flex items-start justify-between gap-3 mb-2">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-gray-800 truncate group-hover:text-gray-600 transition">{d.concept}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">
-              {format(d.date instanceof Date ? d.date : new Date(d.date), 'dd MMM yyyy', { locale: es })}
-              {crossed > 0 && <span className="ml-1.5 text-purple-500">· {formatCOP(crossed)} cruzado</span>}
-            </p>
-            {dueDate && (
-              <p className={clsx('text-[10px] mt-0.5 flex items-center gap-1', overdue ? 'text-red-500 font-semibold' : 'text-gray-400')}>
-                <Clock size={10} /> {overdue ? 'Venció el' : 'Vence el'} {format(dueDate, 'dd MMM yyyy', { locale: es })}
-              </p>
-            )}
-          </div>
-          <div className="text-right flex-shrink-0">
-            {crossed > 0 && (
-              <p className="text-[10px] text-gray-300 line-through tabular-nums">{formatCOP(d.amount)}</p>
-            )}
-            <p className="text-sm font-bold text-gray-900 tabular-nums">{formatCOP(remaining)}</p>
-          </div>
-        </div>
-      </button>
-      <div className="flex gap-1.5">
-        <button onClick={onCross} disabled={!canCross}
-          title={canCross ? undefined : 'La otra persona no tiene deudas pendientes para cruzar'}
-          className="flex-1 py-1.5 rounded-lg border border-gray-200 text-[11px] font-semibold text-gray-600 hover:border-purple-300 hover:text-purple-700 hover:bg-purple-50 transition flex items-center justify-center gap-1 disabled:opacity-40 disabled:hover:border-gray-200 disabled:hover:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed">
-          <GitMerge size={11} /> Cruzar
-        </button>
-        <button onClick={onSaldar}
-          className="flex-1 py-1.5 rounded-lg bg-gray-900 text-white text-[11px] font-semibold hover:bg-gray-800 transition">
-          Saldar
-        </button>
-      </div>
-    </div>
-  )
-}
-
-
-// ── Crossing modal ────────────────────────────────────────────────────────────
-// A crossing nets two real debts against each other, so it always needs a
-// specific counter-debt — "cruzar contra el saldo total" would let you net a
-// debt against someone who doesn't actually owe anything back.
-// remainingOf / allocateCrossing now live in shared/utils/householdSettlement
-// so they're testable without React — see shared/index.ts.
-
-function CrossingModal({ debt, counterPersonId, counterpartDebts, myName, partnerName, userUid, saving, onConfirm, onClose }: {
-  debt: any; counterPersonId: string; counterpartDebts: any[]
-  myName: string; partnerName: string; userUid?: string; saving: boolean
-  onConfirm: (allocations: CrossingAllocation[], counterPersonId: string, notes: string) => void
-  onClose: () => void
-}) {
-  const isMe        = debt.debtor === userUid
-  const who         = isMe ? myName : partnerName
-  const counterName = isMe ? partnerName : myName
-  const remaining   = remainingOf(debt)
-
-  // Oldest first — a partial cross settles what's been owed longest.
-  const sortedCounterDebts = [...counterpartDebts].sort((a, b) => {
-    const da = a.date instanceof Date ? a.date : new Date(a.date)
-    const db_ = b.date instanceof Date ? b.date : new Date(b.date)
-    return da.getTime() - db_.getTime()
-  })
-
-  // All of the counterpart's debts are selected by default — crossing everything
-  // possible is the common case; unchecking narrows what's eligible.
-  const [selectedIds, setSelectedIds] = useState(() => new Set(sortedCounterDebts.map((d) => d.id)))
-  const selectedDebts = sortedCounterDebts.filter((d) => selectedIds.has(d.id))
-  const selectedTotal = selectedDebts.reduce((s, d) => s + remainingOf(d), 0)
-  const maxAmount      = Math.min(remaining, selectedTotal)
-
-  const [amount, setAmount] = useState(maxAmount)
-  const [notes, setNotes]   = useState('')
-  const [err, setErr]       = useState('')
-
-  function toggle(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      const newTotal = sortedCounterDebts.filter((d) => next.has(d.id)).reduce((s, d) => s + remainingOf(d), 0)
-      setAmount(Math.min(remaining, newTotal))
-      return next
-    })
-    setErr('')
-  }
-
-  function handleConfirm() {
-    if (selectedDebts.length === 0)  { setErr(`Selecciona al menos una deuda de ${counterName}`); return }
-    if (amount <= 0)                  { setErr('El monto debe ser mayor a 0'); return }
-    if (amount > remaining)           { setErr(`Máximo ${formatCOP(remaining)} (saldo de esta deuda)`); return }
-    if (amount > selectedTotal)       { setErr(`Máximo ${formatCOP(selectedTotal)} (lo seleccionado)`); return }
-    setErr('')
-    onConfirm(allocateCrossing(amount, selectedDebts), counterPersonId, notes)
-  }
-
-  return (
-    <Modal open onClose={onClose} title="Cruzar deuda" dark>
-      <div className="space-y-4">
-        {/* Deuda origen */}
-        <div className="bg-purple-50 rounded-2xl p-3.5 space-y-0.5">
-          <p className="text-xs text-purple-500 font-semibold">Deuda a cruzar</p>
-          <p className="text-sm font-bold text-gray-800">{debt.concept}</p>
-          <p className="text-xs text-gray-500">
-            {who} debe · <span className="font-semibold text-purple-700">{formatCOP(remaining)} pendiente</span>
-          </p>
-        </div>
-
-        {sortedCounterDebts.length === 0 ? (
-          <div className="bg-gray-50 rounded-2xl p-3.5">
-            <p className="text-sm text-gray-600">{counterName} no tiene deudas pendientes — no hay nada contra qué cruzar.</p>
-          </div>
-        ) : (
-          <>
-            {/* Deudas de la contraparte a cruzar contra — selección múltiple */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-gray-600">
-                Deudas de {counterName} a cruzar {sortedCounterDebts.length > 1 && <span className="text-gray-400 font-normal">(elige una o varias)</span>}
-              </label>
-              <div className="border border-gray-200 rounded-xl divide-y divide-white/5 max-h-44 overflow-y-auto">
-                {sortedCounterDebts.map((d) => {
-                  const rem = remainingOf(d)
-                  const checked = selectedIds.has(d.id)
-                  return (
-                    <label key={d.id} className={clsx('flex items-center gap-2.5 px-3 py-2.5 cursor-pointer transition-colors', checked ? 'bg-purple-50/60' : 'hover:bg-gray-50')}>
-                      <input type="checkbox" checked={checked} onChange={() => toggle(d.id)}
-                        className="rounded border-gray-300 text-purple-600 focus:ring-purple-300 flex-shrink-0" />
-                      <span className="flex-1 min-w-0 text-sm text-gray-700 truncate">{d.concept}</span>
-                      <span className="text-sm font-semibold text-gray-800 tabular-nums flex-shrink-0">{formatCOP(rem)}</span>
-                    </label>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Monto */}
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-gray-600">Monto a cruzar</label>
-              <div className="currency-field has-suffix">
-                <span className="currency-affix-prefix">$</span>
-                <input
-                  type="number"
-                  value={amount}
-                  onChange={(e) => { setAmount(Number(e.target.value)); setErr('') }}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
-                  aria-label="Monto a cruzar en pesos colombianos"
-                />
-                <span className="currency-affix-suffix">COP</span>
-              </div>
-              <p className="text-[10px] text-gray-400">
-                Máx. {formatCOP(maxAmount)}{selectedDebts.length > 1 && ' — si es parcial, se reparte empezando por la más antigua'}
-              </p>
-            </div>
-          </>
-        )}
-
-        {/* Notas */}
-        <div className="space-y-1">
-          <label className="text-xs font-semibold text-gray-600">Notas (opcional)</label>
-          <input
-            type="text"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="ej. Acuerdo del 15 oct"
-            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
-          />
-        </div>
-
-        {err && <p className="text-xs text-red-500">{err}</p>}
-
-        <div className="flex gap-2">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
-            Cancelar
-          </button>
-          <button
-            onClick={handleConfirm}
-            disabled={saving || selectedDebts.length === 0}
-            className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700 transition disabled:opacity-50 flex items-center justify-center gap-1.5"
-          >
-            <GitMerge size={14} /> {saving ? 'Cruzando…' : 'Confirmar cruce'}
-          </button>
-        </div>
-      </div>
-    </Modal>
   )
 }

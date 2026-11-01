@@ -42,3 +42,9 @@ export function allocateCrossing(
   }
   return out;
 }
+
+/**
+ * Convenience alias for allocateCrossing — allocates an abono (payment)
+ * across pending debts oldest-first.
+ */
+export const allocateAbono = allocateCrossing;

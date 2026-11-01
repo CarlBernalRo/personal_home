@@ -18,42 +18,52 @@ export function useAuthListener() {
         return
       }
 
-      // Whitelist check before accepting the session
       try {
+        const userRef = doc(db, 'users', firebaseUser.uid)
+        const userSnap = await getDoc(userRef)
+        const existingProfile = userSnap.exists() ? userSnap.data() : null
+
+        // Whitelist check in allowedUsers (the only source of truth for access and role)
         const snap = await getDocs(query(
           collection(db, 'allowedUsers'),
-          where('email',  '==', firebaseUser.email),
-          where('active', '==', true),
+          where('email', '==', firebaseUser.email?.toLowerCase()),
         ))
 
-        if (snap.empty) {
-          // Not authorized — store error, sign out, let the null event resolve loading
-          setAuthError('Este correo no tiene acceso a la aplicación.')
+        const allowedData = !snap.empty ? snap.docs[0].data() : null
+        const hasAccess = !!allowedData && allowedData.active === true && allowedData.deleted !== true
+
+        if (!hasAccess) {
+          setAuthError(
+            allowedData
+              ? 'Tu acceso está desactivado. Contacta al administrador.'
+              : 'Este usuario no tiene acceso autorizado a la aplicación. Contacta al administrador.',
+          )
           setUser(null)
           await signOut(auth)
           return
         }
 
-        // Create profile on first login
-        const userRef = doc(db, 'users', firebaseUser.uid)
-        const userSnap = await getDoc(userRef)
+        // Create or sync profile
         if (!userSnap.exists()) {
-          const allowedData = snap.docs[0].data()
           await setDoc(userRef, {
             uid:         firebaseUser.uid,
-            email:       firebaseUser.email,
-            displayName: allowedData.name ?? firebaseUser.displayName,
+            email:       firebaseUser.email?.toLowerCase(),
+            displayName: allowedData.name ?? firebaseUser.displayName ?? 'Usuario',
             photoURL:    firebaseUser.photoURL,
+            role:        allowedData.role ?? 'integrante',
             householdId: null,
             createdAt:   serverTimestamp(),
           })
+        } else if (allowedData.role && allowedData.role !== existingProfile?.role) {
+          // Sync role changes
+          await setDoc(userRef, { role: allowedData.role }, { merge: true })
         }
 
         setUser(firebaseUser)
         const profile = await getUserProfile(firebaseUser.uid)
         setProfile(profile)
         setLoading(false)
-      } catch {
+      } catch (err: unknown) {
         setUser(null)
         setProfile(null)
         setLoading(false)
@@ -64,5 +74,7 @@ export function useAuthListener() {
 }
 
 export function useAuth() {
-  return useAuthStore()
+  const store = useAuthStore()
+  const isAdmin = store.profile?.role === 'admin'
+  return { ...store, isAdmin: Boolean(isAdmin) }
 }

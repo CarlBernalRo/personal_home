@@ -1,270 +1,354 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Trash2 } from 'lucide-react'
-import { format, isToday, isYesterday } from 'date-fns'
+import { ChevronLeft, ChevronRight, Plus, Receipt, History, RotateCcw } from 'lucide-react'
+import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { Card } from '@/components/ui/Card'
+import { clsx } from 'clsx'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 import { SkeletonList } from '@/components/ui/Skeleton'
+import { ProgressBar } from '@/components/ui/ProgressBar'
+import { MobileCollapse } from '@/components/ui/MobileCollapse'
+import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { useToast } from '@/components/ui/Toast'
-import { useAuth } from '@/hooks/useAuth'
-import { addExpense, getExpenses, deleteExpense } from '@/lib/firestore'
-import { formatCOP, PERSONAL_CATEGORIES } from '@/shared'
-import type { ExpenseType } from '@/shared'
-import { clsx } from 'clsx'
+import { useConfirm } from '@/components/ui/ConfirmDialog'
+import { SalaryPanel } from '@/components/salary/SalaryPanel'
+import { FixedOutlook } from '@/components/fixed/FixedOutlook'
+import { ExpenseTimeline, type ExpenseRow } from '@/components/expenses/ExpenseTimeline'
+import { useSalary } from '@/hooks/useSalary'
+import { useFixedData } from '@/hooks/useFixedData'
+import { usePayProjection } from '@/hooks/usePayProjection'
+import { usePeriodStore } from '@/store/period'
+import { formatCOP, monthBounds, monthKey, shiftMonth, PERSONAL_CATEGORIES } from '@/shared'
+import { AppIcon, EmptyMark } from '@/components/ui/AppIcon'
 
 const schema = z.object({
   description: z.string().min(1, 'Descripción requerida'),
   amount:      z.coerce.number().positive('Monto debe ser mayor a 0'),
   category:    z.string().min(1),
-  date:        z.string().min(1),
-  type:        z.enum(['fixed', 'variable']),
+  date:        z.string().min(1, 'Fecha requerida'),
 })
 
 type FormData = z.infer<typeof schema>
 
-const CATEGORY_OPTIONS = PERSONAL_CATEGORIES.map((c) => ({ value: c.id, label: `${c.icon} ${c.label}` }))
-const TYPE_OPTIONS     = [{ value: 'variable', label: 'Variable' }, { value: 'fixed', label: 'Fijo' }]
+const CATEGORY_OPTIONS = PERSONAL_CATEGORIES.map((c) => ({ value: c.id, label: c.label }))
 
-function groupByDate(expenses: any[]): { label: string; items: any[] }[] {
-  const today: any[]     = []
-  const yesterday: any[] = []
-  const older: any[]     = []
-
-  for (const e of expenses) {
-    const d = e.date instanceof Date ? e.date : new Date(e.date)
-    if (isToday(d))     today.push(e)
-    else if (isYesterday(d)) yesterday.push(e)
-    else older.push(e)
-  }
-
-  const groups: { label: string; items: any[] }[] = []
-  if (today.length)     groups.push({ label: 'Hoy',     items: today })
-  if (yesterday.length) groups.push({ label: 'Ayer',    items: yesterday })
-  if (older.length)     groups.push({ label: 'Anterior', items: older })
-  return groups
-}
+const toDate = (d: unknown) => (d instanceof Date ? d : new Date(d as string))
+const shortDate = (d: Date) => format(d, "d 'de' MMM", { locale: es })
 
 export default function ExpensesPage() {
-  const { user }                = useAuth()
-  const { showToast }           = useToast()
-  const [expenses, setExpenses] = useState<any[]>([])
-  const [loading, setLoading]   = useState(true)
-  const [open, setOpen]         = useState(false)
-  const [saving, setSaving]     = useState(false)
-  const [activeCategory, setActiveCategory] = useState<string>('all')
+  const { showToast } = useToast()
+  const ask = useConfirm()
+  const salary        = useSalary()
+  const fixed         = useFixedData()
+  const outlook       = usePayProjection(salary, fixed.expenses, fixed.paymentIndex)
 
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<FormData>({
-    resolver: zodResolver(schema),
-    defaultValues: {
-      date:     format(new Date(), 'yyyy-MM-dd'),
-      type:     'variable',
-      category: 'otro',
-    },
+  const [open, setOpen]     = useState(false)
+  const [accountId, setAccountId] = useState('')
+  // The spend being edited (null = a new one)
+  const [editing, setEditing] = useState<ExpenseRow | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [category, setCategory] = useState<string>('all')
+
+  // The month filter is shared with Gastos Fijos; until picked it follows the salary period
+  const currentMonth = monthKey(new Date())
+  const salaryMonth  = salary.currentPeriod ? monthKey(new Date(salary.currentPeriod.end.getTime() - 86_400_000)) : currentMonth
+  const pickedMonth  = usePeriodStore((s) => s.month)
+  const setMonth     = usePeriodStore((s) => s.setMonth)
+  const month        = pickedMonth ?? salaryMonth
+  const monthLabel   = format(new Date(Number(month.slice(0, 4)), Number(month.slice(5)) - 1, 1), 'MMMM yyyy', { locale: es })
+
+  // What the month covers: its salary period when there is one, else the calendar month
+  const bounds = useMemo(() => monthBounds(month, salary.periods), [month, salary.periods])
+
+  const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<FormData>({
+    resolver: zodResolver(schema) as any,
+    defaultValues: { date: format(new Date(), 'yyyy-MM-dd'), category: 'otro' },
   })
 
-  async function load() {
-    if (!user) return
-    const data = await getExpenses(user.uid)
-    setExpenses(data as any[])
-    setLoading(false)
+  const rows = useMemo<ExpenseRow[]>(() => {
+    const inRange = (d: Date) => d >= bounds.start && d < bounds.end
+    const own: ExpenseRow[] = salary.personal
+      .map((e): ExpenseRow => ({
+        id: e.id,
+        description: e.description,
+        amount: e.amount,
+        category: e.category,
+        date: toDate(e.date),
+        counted: Boolean(e.tracked || e.variableBudgetId),
+        household: false,
+        budget: Boolean(e.variableBudgetId),
+        accountId: e.accountId as string | undefined,
+      }))
+      .filter((r) => inRange(r.date))
+    const abonos: ExpenseRow[] = salary.spends
+      .filter((s) => s.id.startsWith('abono|') && inRange(s.date))
+      .map((s) => ({ id: s.id, description: s.concept, amount: s.amount, category: '', date: s.date, counted: true, household: true, budget: false }))
+    return [...own, ...abonos].sort((a, b) => b.date.getTime() - a.date.getTime())
+  }, [salary.personal, salary.spends, bounds])
+
+  const shown = category === 'all' ? rows : rows.filter((r) => r.category === category)
+  const countedTotal = rows.filter((r) => r.counted).reduce((s, r) => s + r.amount, 0)
+  const historyTotal = rows.filter((r) => !r.counted).reduce((s, r) => s + r.amount, 0)
+  const shownTotal   = shown.filter((r) => r.counted).reduce((s, r) => s + r.amount, 0)
+
+  const catSummary = PERSONAL_CATEGORIES.map((cat) => ({
+    ...cat,
+    total: rows.filter((r) => r.counted && r.category === cat.id).reduce((s, r) => s + r.amount, 0),
+  })).filter((c) => c.total > 0).sort((a, b) => b.total - a.total)
+  const catBase = catSummary.reduce((s, c) => s + c.total, 0)
+
+  const loading = salary.loading || fixed.loading
+
+  useEffect(() => { if (open && !editing) setAccountId(salary.pickAccount()) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function openCreate() {
+    setEditing(null)
+    reset({ date: format(new Date(), 'yyyy-MM-dd'), category: 'otro', description: '', amount: undefined as any })
+    setOpen(true)
   }
 
-  useEffect(() => { load() }, [user])
+  function openEdit(r: ExpenseRow) {
+    setEditing(r)
+    reset({ description: r.description, amount: r.amount, category: r.category || 'otro', date: format(r.date, 'yyyy-MM-dd') })
+    setAccountId(r.accountId ?? '')
+    setOpen(true)
+  }
 
   async function onSubmit(data: FormData) {
-    if (!user) return
     setSaving(true)
     try {
-      await addExpense({
-        userId:      user.uid,
-        description: data.description,
+      const values = {
+        description: data.description.trim(),
         amount:      data.amount,
         category:    data.category,
         date:        new Date(data.date + 'T12:00:00'),
-        type:        data.type as ExpenseType,
-        isRecurring: false,
-      })
-      reset()
+        accountId,
+      }
+      if (editing) {
+        await salary.editPersonalExpense(editing.id, values, { amount: editing.amount, accountId: editing.accountId })
+      } else {
+        await salary.addPersonalExpense(values)
+      }
+      salary.rememberAccount(accountId)
+      reset({ date: format(new Date(), 'yyyy-MM-dd'), category: 'otro', description: '', amount: undefined as any })
       setOpen(false)
-      load()
-      showToast('Gasto guardado', 'success')
+      setEditing(null)
+      showToast(editing ? 'Gasto adicional actualizado' : 'Gasto adicional guardado', editing ? 'edit' : 'success')
     } catch {
-      showToast('Error al guardar el gasto', 'error')
+      showToast('Error al guardar el gasto adicional', 'error')
     } finally {
       setSaving(false)
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar este gasto?')) return
-    await deleteExpense(id)
-    setExpenses((prev) => prev.filter((e) => e.id !== id))
-    showToast('Gasto eliminado', 'info')
+    if (!(await ask('¿Eliminar este gasto adicional?', { title: 'Eliminar gasto adicional' }))) return
+    try {
+      await salary.removeSpend(id)
+      showToast('Gasto adicional eliminado', 'delete')
+    } catch {
+      showToast('No se pudo eliminar el gasto adicional', 'error')
+    }
   }
 
-  const filtered = activeCategory === 'all'
-    ? expenses
-    : expenses.filter((e) => e.category === activeCategory)
-
-  const total   = filtered.reduce((s: number, e: any) => s + e.amount, 0)
-  const groups  = groupByDate(filtered)
-
-  // Category summary
-  const catSummary = PERSONAL_CATEGORIES.map((cat) => ({
-    ...cat,
-    total: expenses.filter((e) => e.category === cat.id).reduce((s: number, e: any) => s + e.amount, 0),
-  })).filter((c) => c.total > 0).sort((a, b) => b.total - a.total)
+  const framed = 'rounded-3xl border border-white/10 bg-[#0a1f2f]/50'
+  const scrollProps = {
+    contentClassName: 'max-lg:!overflow-visible space-y-5 py-3 !pl-3 !pr-3 lg:py-4 lg:!pl-4 lg:!pr-6',
+    corners: 'both' as const,
+    borderRadius: 24,
+    offset: 7,
+    variant: 'plain' as const,
+    themeColor: 'brand' as const,
+  }
 
   return (
-    <div className="space-y-4 fade-in">
-      <div className="flex items-center justify-between">
+    <div className="flex flex-col gap-5 fade-in text-[#f3f5f6] lg:flex-row lg:h-full lg:min-h-0">
+      {/* Left pane: the same salary cards as Gastos Fijos, plus where the money went */}
+      <CurvedScrollContainer
+        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed)}
+        {...scrollProps}
+      >
         <div>
-          <h1 className="text-xl font-bold text-[#0f172a]">Mis Gastos</h1>
-          <p className="text-sm text-[#64748b]">{formatCOP(total)} en total</p>
-        </div>
-        <Button onClick={() => setOpen(true)} size="sm">
-          <Plus size={16} /> Agregar
-        </Button>
-      </div>
-
-      {/* Category filter chips */}
-      <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 scrollbar-hide">
-        <button
-          onClick={() => setActiveCategory('all')}
-          className={clsx(
-            'px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all flex-shrink-0',
-            activeCategory === 'all'
-              ? 'bg-brand-600 text-white shadow-sm'
-              : 'bg-white text-gray-500 border border-gray-200',
-          )}
-        >
-          Todos
-        </button>
-        {PERSONAL_CATEGORIES.map((cat) => (
-          <button
-            key={cat.id}
-            onClick={() => setActiveCategory(cat.id)}
-            className={clsx(
-              'px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all flex-shrink-0 flex items-center gap-1',
-              activeCategory === cat.id
-                ? 'text-white shadow-sm'
-                : 'bg-white text-gray-500 border border-gray-200',
-            )}
-            style={activeCategory === cat.id ? { backgroundColor: cat.color } : undefined}
-          >
-            {cat.icon} {cat.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Category bar summary */}
-      {catSummary.length > 0 && activeCategory === 'all' && (
-        <Card className="p-4">
-          <p className="text-xs font-semibold text-[#64748b] uppercase tracking-wider mb-3">
-            Por categoría
-          </p>
-          <div className="space-y-2">
-            {catSummary.slice(0, 4).map((c) => {
-              const pct = total > 0 ? Math.round((c.total / total) * 100) : 0
-              return (
-                <div key={c.id}>
-                  <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-xs text-gray-600">{c.icon} {c.label}</span>
-                    <span className="text-xs font-semibold text-gray-700 tabular-nums">{formatCOP(c.total)}</span>
-                  </div>
-                  <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: c.color }} />
-                  </div>
-                </div>
-              )
-            })}
+          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1 notch-sm bg-white/[0.04] border border-white/[0.08]">
+            <Receipt size={11} className="text-brand-400" />
+            <span className="font-pixel text-[8px] text-brand-400 uppercase tracking-widest">Personal</span>
           </div>
-        </Card>
-      )}
-
-      {loading ? (
-        <SkeletonList count={4} />
-      ) : filtered.length === 0 ? (
-        <Card className="text-center py-12">
-          <p className="text-5xl mb-3">💸</p>
-          <p className="text-sm font-semibold text-gray-700">Sin gastos registrados</p>
-          <p className="text-xs text-gray-400 mt-1">Toca "Agregar" para añadir uno.</p>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {groups.map(({ label, items }) => (
-            <div key={label}>
-              <p className="text-xs font-semibold text-[#64748b] uppercase tracking-wider mb-2 px-1">
-                {label}
-              </p>
-              <div className="space-y-2">
-                {items.map((e: any) => {
-                  const cat = PERSONAL_CATEGORIES.find((c) => c.id === e.category)
-                  return (
-                    <Card key={e.id} className="flex items-center gap-3 p-3.5 slide-up">
-                      <div
-                        className="w-10 h-10 rounded-2xl flex items-center justify-center text-xl flex-shrink-0"
-                        style={{ backgroundColor: (cat?.color ?? '#6b7280') + '20' }}
-                      >
-                        {cat?.icon ?? '📦'}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-gray-800 truncate">{e.description}</p>
-                        <p className="text-xs text-gray-400">
-                          {format(e.date instanceof Date ? e.date : new Date(e.date), 'dd MMM', { locale: es })}
-                          {' · '}{cat?.label ?? e.category}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <span className="text-sm font-bold text-gray-900 tabular-nums">
-                          {formatCOP(e.amount)}
-                        </span>
-                        <button
-                          onClick={() => handleDelete(e.id)}
-                          className="p-1 text-gray-300 hover:text-red-500 transition"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </Card>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
+          <h1 className="text-2xl font-bold tracking-tight">Mis gastos adicionales</h1>
+          <p className="hidden lg:block text-xs text-[#9aa4ac] mt-1">Lo que gastas además de tus gastos fijos: almuerzos, compras, salidas…</p>
         </div>
-      )}
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Nuevo gasto">
+        <MobileCollapse title="Sueldo y dinero en cuenta" openWhen={!!salary.pending}>
+          <SalaryPanel salary={salary} expenses={fixed.expenses} paymentIndex={fixed.paymentIndex} />
+          {outlook && <FixedOutlook cash={outlook.cash} projection={outlook.projection} />}
+        </MobileCollapse>
+
+        {catSummary.length > 0 && (
+          <MobileCollapse title="Distribución por categoría">
+          <div className="rounded-2xl border border-white/10 bg-[#0a1f2f] p-4 sm:p-5 space-y-3 shadow-xl">
+            <p className="font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold">Distribución por categoría</p>
+            <div className="space-y-3">
+              {catSummary.map((c) => {
+                const pct = catBase > 0 ? Math.round((c.total / catBase) * 100) : 0
+                return (
+                  <div key={c.id} className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[#f0fae8] font-semibold flex items-center gap-2"><AppIcon name={c.icon} size={15} className="text-brand-300" />{c.label}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="font-bold font-mono">{formatCOP(c.total)}</span>
+                        <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-md bg-white/10 border border-white/15">{pct}%</span>
+                      </span>
+                    </div>
+                    <ProgressBar value={pct} color={c.color} size="sm" />
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+          </MobileCollapse>
+        )}
+      </CurvedScrollContainer>
+
+      {/* Right pane: month filter (shared with Fijos) and the list of spends */}
+      <div className="min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0">
+        <div className="flex flex-wrap items-center justify-center gap-3 flex-shrink-0 sm:grid sm:grid-cols-[1fr_auto_1fr]">
+          <span className="hidden sm:block" aria-hidden="true" />
+          <div className="flex items-center justify-center gap-1.5">
+            <button onClick={() => setMonth(shiftMonth(month, -1))} className="p-2 rounded-lg bg-[#0d263a] border border-white/10 hover:bg-white/10 transition" aria-label="Mes anterior">
+              <ChevronLeft size={16} />
+            </button>
+            <div className="min-w-[160px] text-center">
+              <p className="text-sm font-semibold capitalize">{monthLabel}</p>
+              {bounds.period && (
+                <p className="text-[10px] text-[#8a929a]">{shortDate(bounds.start)} al {shortDate(new Date(bounds.end.getTime() - 86_400_000))}</p>
+              )}
+              {month !== salaryMonth && (
+                <button
+                  type="button"
+                  onClick={() => setMonth(null)}
+                  className="mt-1 inline-flex items-center gap-1 rounded-full border border-brand-400/40 bg-brand-500/10 px-2 py-0.5 text-[10px] font-semibold text-brand-200 hover:bg-brand-500/20 transition"
+                >
+                  <RotateCcw size={10} aria-hidden="true" /> Volver a hoy
+                </button>
+              )}
+            </div>
+            <button onClick={() => setMonth(shiftMonth(month, 1))} className="p-2 rounded-lg bg-[#0d263a] border border-white/10 hover:bg-white/10 transition" aria-label="Mes siguiente">
+              <ChevronRight size={16} />
+            </button>
+          </div>
+          <Button onClick={openCreate} size="sm" notched className="w-full sm:w-auto sm:justify-self-end">
+            <Plus size={15} /> Nuevo gasto adicional
+          </Button>
+        </div>
+
+        {/* One card: the summary and category filter stay on top, only the list scrolls */}
+        <div className={clsx('flex flex-col lg:flex-1 lg:min-h-0', framed)}>
+          <div className="flex-shrink-0 border-b border-white/10 p-5 space-y-3">
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <p className="font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold">
+                  {category === 'all' ? 'Gastos adicionales del período' : 'Gastos adicionales de la categoría'}
+                </p>
+                <p className="text-2xl font-bold font-mono tabular-nums text-brand-300">{formatCOP(category === 'all' ? countedTotal : shownTotal)}</p>
+              </div>
+              <span className="text-xs font-mono text-[#8a929a]">{shown.length} {shown.length === 1 ? 'registro' : 'registros'}</span>
+            </div>
+            {historyTotal > 0 && (
+              <p className="flex items-center gap-1.5 text-[11px] text-[#8a929a]">
+                <History size={12} /> {formatCOP(historyTotal)} de registros anteriores no se cuentan en tus cuentas.
+              </p>
+            )}
+            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+              <button
+                onClick={() => setCategory('all')}
+                className={clsx(
+                  'rounded-xl px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0',
+                  category === 'all'
+                    ? 'bg-brand-600 text-white border border-brand-500 shadow-sm'
+                    : 'bg-[#0d263a] text-[#c7ccd1] border border-white/10 hover:bg-[#133e5f] hover:text-white',
+                )}
+              >
+                Todos ({rows.length})
+              </button>
+              {/* with this many categories, only the ones the period actually uses (and the picked one) */}
+              {PERSONAL_CATEGORIES.filter((cat) => category === cat.id || rows.some((r) => r.category === cat.id)).map((cat) => {
+                const selected = category === cat.id
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => setCategory(cat.id)}
+                    className={clsx(
+                      'rounded-xl px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 flex items-center gap-1.5',
+                      selected ? 'text-white border shadow-sm' : 'bg-[#0d263a] text-[#c7ccd1] border border-white/10 hover:bg-[#133e5f] hover:text-white',
+                    )}
+                    style={selected ? { backgroundColor: cat.color, borderColor: cat.color } : undefined}
+                  >
+                    <AppIcon name={cat.icon} size={13} />
+                    <span>{cat.label}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <CurvedScrollContainer
+            className="lg:flex-1 lg:min-h-0"
+            {...scrollProps}
+            corners="bottom-right"
+          >
+            {loading ? (
+              <SkeletonList count={4} />
+            ) : shown.length === 0 ? (
+              <div className="text-center py-12 px-6">
+                <EmptyMark name="receipt" />
+                <p className="text-sm font-bold text-[#f0fae8]">Sin gastos adicionales en este período</p>
+                <p className="text-xs text-[#8a929a] mt-1">Presiona "Nuevo gasto adicional" para registrar uno.</p>
+              </div>
+            ) : (
+              <ExpenseTimeline
+                rows={shown}
+                showToday={new Date() >= bounds.start && new Date() < bounds.end}
+                onDelete={(r) => handleDelete(r.id)}
+                onEdit={openEdit}
+              />
+            )}
+          </CurvedScrollContainer>
+        </div>
+      </div>
+
+      {/* New spend */}
+      <Modal open={open} onClose={() => { setOpen(false); setEditing(null) }} title={editing ? 'Editar gasto adicional' : 'Nuevo gasto adicional'}>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <p className="text-xs text-[#9aa4ac]">
+            Se descuenta de tu dinero en cuenta y de lo que te queda del período en que cae su fecha.
+          </p>
           <Input
             label="Descripción"
-            placeholder="ej. Almuerzo, Netflix…"
+            placeholder="ej. Almuerzo, un juego, Uber…"
             {...register('description')}
             error={errors.description?.message}
           />
           <Input
-            label="Monto (COP)"
-            type="number"
-            placeholder="0"
+            label="Monto (COP)" money
+                        placeholder="0"
             {...register('amount')}
             error={errors.amount?.message}
           />
           <Select label="Categoría" options={CATEGORY_OPTIONS} {...register('category')} />
-          <Select label="Tipo" options={TYPE_OPTIONS} {...register('type')} />
           <Input label="Fecha" type="date" {...register('date')} error={errors.date?.message} />
-          <div className="flex gap-2 pt-1">
+          <AccountSelect label="¿De qué cuenta sale el dinero?" accounts={salary.accounts} value={accountId} onChange={setAccountId} outflow={Number(watch('amount')) || 0} />
+
+          <div className="flex gap-2 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpen(false)}>
               Cancelar
             </Button>
-            <Button type="submit" className="flex-1" disabled={saving}>
-              {saving ? 'Guardando…' : 'Guardar'}
+            <Button type="submit" className="flex-1" disabled={saving} notched>
+              {saving ? 'Guardando…' : editing ? 'Guardar cambios' : 'Guardar gasto adicional'}
             </Button>
           </div>
         </form>

@@ -12,6 +12,15 @@ export interface Expense {
   isRecurring: boolean;
   recurrence?: RecurrenceType;
   notes?: string;
+  /** Set when the spend was registered against a variable budget (e.g. gasoline). */
+  variableBudgetId?: string;
+  /**
+   * Registered from Gastos once spends counted toward the balance: it lowers the money on hand and
+   * the salary period's leftover. Older records lack it and are history only.
+   */
+  tracked?: boolean;
+  /** Account the money came out of; its balance went down by `amount`. */
+  accountId?: string;
   createdAt: Date;
 }
 

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { ChevronRight, Clock, GitMerge } from 'lucide-react'
+import { Check, ChevronRight, Clock, GitMerge } from 'lucide-react'
 import { clsx } from 'clsx'
 import { calcNetBalance } from '@/lib/firestore'
 import { formatCOP, remainingOf } from '@/shared'
@@ -9,8 +9,8 @@ import { formatCOP, remainingOf } from '@/shared'
 // Colors beyond "me" follow the app's established identity (purple-600 for the
 // partner), then fall back to the dataviz categorical ramp for a 3rd+ member —
 // this household model is built for two people, but shouldn't hard-crash past that.
-const OTHER_COLORS = ['#7c3aed', '#2a78d6', '#eb6834', '#1baf7a']
-const ME_COLOR = '#111827'
+const OTHER_COLORS = ['#52b69a', '#76c893', '#d9ed92', '#1fb4e2']
+const ME_COLOR = '#168aad'
 
 type Scene = 'home' | 'member' | 'history'
 
@@ -122,24 +122,24 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
     : []
 
   return (
-    <div className="notch-lg bg-white border border-gray-100 p-5 md:p-8 min-h-[520px] flex flex-col">
+    <div className="notch bg-[#0a1f2f] border border-white/10 p-5 md:p-8 min-h-[520px] flex flex-col">
       {/* Breadcrumb — always reflects where you are, always lets you jump back */}
       <div className="flex items-center gap-1.5 text-xs font-semibold mb-6 flex-shrink-0">
-        <button onClick={backToHome} className={clsx('px-2 py-1 rounded-lg transition', scene === 'home' ? 'text-gray-900 bg-gray-100' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-50')}>
+        <button onClick={backToHome} className={clsx('px-2 py-1 rounded-lg transition', scene === 'home' ? 'text-[#f3f5f6] bg-white/10' : 'text-[#8a929a] hover:text-white hover:bg-white/5')}>
           {householdName}
         </button>
         {active && (
           <>
-            <ChevronRight size={12} className="text-gray-300" />
-            <button onClick={backToMember} className={clsx('px-2 py-1 rounded-lg transition', scene === 'member' ? 'text-gray-900 bg-gray-100' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-50')}>
+            <ChevronRight size={12} className="text-[#5f6a72]" />
+            <button onClick={backToMember} className={clsx('px-2 py-1 rounded-lg transition', scene === 'member' ? 'text-[#f3f5f6] bg-white/10' : 'text-[#8a929a] hover:text-white hover:bg-white/5')}>
               {active.name}
             </button>
           </>
         )}
         {scene === 'history' && (
           <>
-            <ChevronRight size={12} className="text-gray-300" />
-            <span className="px-2 py-1 text-gray-900 bg-gray-100 rounded-lg">Historial</span>
+            <ChevronRight size={12} className="text-[#5f6a72]" />
+            <span className="px-2 py-1 text-[#f3f5f6] bg-white/10 rounded-lg">Historial</span>
           </>
         )}
       </div>
@@ -182,7 +182,7 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
 
       {/* ── Member: the clicked bubble expands into its breakdown ──────────── */}
       {scene === 'member' && active && (
-        <div className="flex-1 flex items-start gap-5">
+        <div className="flex-1 flex flex-wrap items-start gap-5">
           <button onClick={backToHome} style={vt('vt-hogar')}
             className="glow-brand-sm w-16 h-16 rounded-full bg-brand-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0 hover:scale-105 transition-transform">
             {householdName.slice(0, 2).toUpperCase()}
@@ -249,10 +249,10 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
 
           <div className="flex-1 overflow-y-auto mt-4 pr-1">
             {memberDebts.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-10">Sin movimientos registrados.</p>
+              <p className="text-sm text-[#8a929a] text-center py-10">Sin movimientos registrados.</p>
             ) : (
               <div className="relative">
-                <div className="absolute left-[11px] top-1 bottom-1 w-px bg-gray-100" />
+                <div className="absolute left-[11px] top-1 bottom-1 w-px bg-white/15" />
                 {memberDebts.map((d: any) => {
                   const remaining = Math.max(0, remainingOf(d))
                   const dueDate   = d.dueDate ? (d.dueDate instanceof Date ? d.dueDate : new Date(d.dueDate)) : null
@@ -265,25 +265,25 @@ export function FinanceExplorer({ householdName, members, currentUserUid, debts,
                       className="relative flex gap-3 pb-4 last:pb-0 w-full text-left group"
                     >
                       <div
-                        className="relative z-10 flex-shrink-0 mt-0.5 w-[22px] h-[22px] rounded-full flex items-center justify-center ring-2 ring-white shadow-sm"
+                        className="relative z-10 flex-shrink-0 mt-0.5 w-[22px] h-[22px] rounded-full flex items-center justify-center ring-2 ring-[#0a1f2f] shadow-sm"
                         style={{ backgroundColor: active.color }}
                       >
-                        {d.tipo === 'Abono' ? <span className="text-white text-[10px]">✓</span> : <GitMerge size={10} className="text-white" />}
+                        {d.tipo === 'Abono' ? <Check size={10} className="text-white" /> : <GitMerge size={10} className="text-white" />}
                       </div>
-                      <div className="flex-1 min-w-0 border-b border-gray-50 pb-3 group-last:border-0">
+                      <div className="flex-1 min-w-0 border-b border-white/[0.06] pb-3 group-last:border-0">
                         <div className="flex items-start justify-between gap-2">
-                          <p className="text-sm font-semibold text-gray-800 truncate group-hover:text-gray-600 transition">{d.concept}</p>
-                          <p className="text-sm font-bold text-gray-900 tabular-nums flex-shrink-0">{formatCOP(remaining)}</p>
+                          <p className="text-sm font-semibold text-[#f0fae8] truncate group-hover:text-brand-300 transition">{d.concept}</p>
+                          <p className="text-sm font-bold font-mono text-amber-300 tabular-nums flex-shrink-0">{formatCOP(remaining)}</p>
                         </div>
-                        <p className="text-[11px] text-gray-400 mt-0.5">
+                        <p className="text-[11px] text-[#8a929a] mt-0.5">
                           {format(d.date instanceof Date ? d.date : new Date(d.date), 'dd MMM yyyy', { locale: es })}
                           {' · '}
-                          <span className={clsx(settled ? 'text-brand-600' : 'text-amber-600')}>
+                          <span className={clsx(settled ? 'text-brand-300' : 'text-amber-300')}>
                             {d.tipo === 'Abono' ? 'Abonado' : d.cruzado ? 'Cruzado' : 'Pendiente'}
                           </span>
                         </p>
                         {dueDate && (
-                          <p className={clsx('text-[11px] mt-0.5 flex items-center gap-1', overdue ? 'text-red-500 font-semibold' : 'text-gray-400')}>
+                          <p className={clsx('text-[11px] mt-0.5 flex items-center gap-1', overdue ? 'text-red-400 font-semibold' : 'text-[#8a929a]')}>
                             <Clock size={10} /> {overdue ? 'Venció el' : 'Vence el'} {format(dueDate, 'dd MMM yyyy', { locale: es })}
                           </p>
                         )}

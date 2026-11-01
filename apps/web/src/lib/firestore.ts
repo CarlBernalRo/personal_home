@@ -1,14 +1,14 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
   getDocs, getDoc, query, where, orderBy, Timestamp,
-  serverTimestamp, setDoc, arrayUnion, arrayRemove, writeBatch,
+  serverTimestamp, setDoc, arrayUnion, arrayRemove, writeBatch, increment, deleteField,
 } from 'firebase/firestore'
 import { db } from './firebase'
 import type {
-  NewExpense, NewAccount, NewSavingsGoal,
+  NewExpense, NewAccount, NewAccountTransfer, NewSavingsGoal,
   NewFixedExpense, NewFixedExpensePayment,
   NewIncome, NewHouseholdDebt, NewHouseholdExpense,
-  CrossingAllocation,
+  CrossingAllocation, NewStoredNotification, NewHouseholdInvite,
 } from '@/shared'
 import { resolveExpenseShares, sharesToDebtors } from '@/shared'
 
@@ -55,12 +55,18 @@ export async function updateUserProfile(
 
 // ── Variable Expenses ─────────────────────────────────────────────────────────
 
+/** Registers a spend and, in the same write, lowers the balance of the account it came out of. */
 export async function addExpense(expense: NewExpense) {
-  return addDoc(collection(db, 'expenses'), {
-    ...expense,
+  const { accountId, ...rest } = expense
+  const batch = writeBatch(db)
+  batch.set(doc(collection(db, 'expenses')), {
+    ...rest,
+    ...(accountId ? { accountId } : {}),
     date:      Timestamp.fromDate(expense.date),
     createdAt: serverTimestamp(),
   })
+  if (accountId) batch.update(doc(db, 'accounts', accountId), { balance: increment(-expense.amount) })
+  await batch.commit()
 }
 
 export async function getExpenses(userId: string) {
@@ -73,8 +79,46 @@ export async function getExpenses(userId: string) {
   return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
 }
 
+/**
+ * Edits a spend and keeps the accounts right in the same write: when the amount changes the account it came
+ * out of is charged the difference, and when the account changes the old one gets its money back and the new
+ * one is charged.
+ */
+export async function updateExpense(
+  id: string,
+  next: { description: string; amount: number; category: string; date: Date; accountId?: string },
+  prev: { amount: number; accountId?: string },
+) {
+  const batch = writeBatch(db)
+  batch.update(doc(db, 'expenses', id), {
+    description: next.description,
+    amount: next.amount,
+    category: next.category,
+    date: Timestamp.fromDate(next.date),
+    accountId: next.accountId ? next.accountId : deleteField(),
+  })
+  // the previous account may have been deleted since: then there is nothing to give back
+  const prevAccount = prev.accountId && (await getDoc(doc(db, 'accounts', prev.accountId))).exists() ? prev.accountId : undefined
+  if (prevAccount && prevAccount === next.accountId) {
+    if (prev.amount !== next.amount) batch.update(doc(db, 'accounts', prevAccount), { balance: increment(prev.amount - next.amount) })
+  } else {
+    if (prevAccount) batch.update(doc(db, 'accounts', prevAccount), { balance: increment(prev.amount) })
+    if (next.accountId) batch.update(doc(db, 'accounts', next.accountId), { balance: increment(-next.amount) })
+  }
+  await batch.commit()
+}
+
+/** Deletes a spend; the account it came out of (when it still exists) gets that money back. */
 export async function deleteExpense(id: string) {
-  return deleteDoc(doc(db, 'expenses', id))
+  const ref = doc(db, 'expenses', id)
+  const snap = await getDoc(ref)
+  const accountId = snap.exists() ? (snap.data().accountId as string | undefined) : undefined
+  const amount = snap.exists() ? (snap.data().amount as number) : 0
+  if (!accountId || !(await getDoc(doc(db, 'accounts', accountId))).exists()) return deleteDoc(ref)
+  const batch = writeBatch(db)
+  batch.delete(ref)
+  batch.update(doc(db, 'accounts', accountId), { balance: increment(amount) })
+  await batch.commit()
 }
 
 // ── Fixed Expenses ────────────────────────────────────────────────────────────
@@ -100,18 +144,35 @@ export async function updateFixedExpense(id: string, data: Partial<NewFixedExpen
   return updateDoc(doc(db, 'fixedExpenses', id), data)
 }
 
+/** Deletes the expense's configuration. Payments already registered are kept: they are real money movements. */
 export async function deleteFixedExpense(id: string) {
-  return updateDoc(doc(db, 'fixedExpenses', id), { active: false })
+  return deleteDoc(doc(db, 'fixedExpenses', id))
 }
 
 // ── Fixed Expense Payments ────────────────────────────────────────────────────
 
 export async function addFixedExpensePayment(data: NewFixedExpensePayment) {
-  return addDoc(collection(db, 'fixedExpensePayments'), {
-    ...data,
-    paymentDate: Timestamp.fromDate(data.paymentDate),
-    createdAt:   serverTimestamp(),
-  })
+  return addFixedExpensePayments([data])
+}
+
+/**
+ * Registers payments and, in the same write, lowers the balance of the account each one came out of
+ * (no account: nothing to lower). All or nothing, so a balance never drifts from its payments.
+ */
+export async function addFixedExpensePayments(items: NewFixedExpensePayment[]) {
+  const batch = writeBatch(db)
+  const spent = new Map<string, number>()
+  for (const { accountId, ...rest } of items) {
+    batch.set(doc(collection(db, 'fixedExpensePayments')), {
+      ...rest,
+      ...(accountId ? { accountId } : {}),
+      paymentDate: Timestamp.fromDate(rest.paymentDate),
+      createdAt:   serverTimestamp(),
+    })
+    if (accountId) spent.set(accountId, (spent.get(accountId) ?? 0) + rest.paidAmount)
+  }
+  spent.forEach((amount, id) => batch.update(doc(db, 'accounts', id), { balance: increment(-amount) }))
+  await batch.commit()
 }
 
 export async function getFixedExpensePayments(userId: string, month: string) {
@@ -124,18 +185,57 @@ export async function getFixedExpensePayments(userId: string, month: string) {
   return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
 }
 
-export async function deleteFixedExpensePayment(id: string) {
-  return deleteDoc(doc(db, 'fixedExpensePayments', id))
+/** Every payment ever registered by the user, for history/timeline views. */
+export async function getAllFixedExpensePayments(userId: string) {
+  const q = query(collection(db, 'fixedExpensePayments'), where('userId', '==', userId))
+  const snap = await getDocs(q)
+  return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
+}
+
+/**
+ * Stores the payments an automatic debit made by itself (they used to exist only on screen), lowering the
+ * account each one came out of. The id is fixed per expense and month, so one occurrence is stored once.
+ */
+export async function materializeAutoPayments(items: (NewFixedExpensePayment & { accountId: string })[]) {
+  const batch = writeBatch(db)
+  const spent = new Map<string, number>()
+  for (const { accountId, ...rest } of items) {
+    batch.set(doc(db, 'fixedExpensePayments', `auto_${rest.fixedExpenseId}_${rest.month}`), {
+      ...rest,
+      accountId,
+      auto: true,
+      paymentDate: Timestamp.fromDate(rest.paymentDate),
+      createdAt:   serverTimestamp(),
+    })
+    spent.set(accountId, (spent.get(accountId) ?? 0) + rest.paidAmount)
+  }
+  spent.forEach((amount, id) => batch.update(doc(db, 'accounts', id), { balance: increment(-amount) }))
+  await batch.commit()
+}
+
+/** Deletes a payment; `refund` gives the money back to the account it came out of (when that account still exists). */
+export async function deleteFixedExpensePayment(id: string, refund?: { accountId: string; amount: number }) {
+  if (!refund) return deleteDoc(doc(db, 'fixedExpensePayments', id))
+  const batch = writeBatch(db)
+  batch.delete(doc(db, 'fixedExpensePayments', id))
+  batch.update(doc(db, 'accounts', refund.accountId), { balance: increment(refund.amount) })
+  await batch.commit()
 }
 
 // ── Income ────────────────────────────────────────────────────────────────────
 
+/** Registers an income and, in the same write, raises the balance of the account it went into. */
 export async function addIncome(data: NewIncome) {
-  return addDoc(collection(db, 'incomes'), {
-    ...data,
+  const { accountId, ...rest } = data
+  const batch = writeBatch(db)
+  batch.set(doc(collection(db, 'incomes')), {
+    ...rest,
+    ...(accountId ? { accountId } : {}),
     date:      Timestamp.fromDate(data.date),
     createdAt: serverTimestamp(),
   })
+  if (accountId) batch.update(doc(db, 'accounts', accountId), { balance: increment(data.amount) })
+  await batch.commit()
 }
 
 export async function getIncomes(userId: string) {
@@ -148,8 +248,17 @@ export async function getIncomes(userId: string) {
   return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
 }
 
+/** Deletes an income; the account it went into (when it still exists) gives that money back. */
 export async function deleteIncome(id: string) {
-  return deleteDoc(doc(db, 'incomes', id))
+  const ref = doc(db, 'incomes', id)
+  const snap = await getDoc(ref)
+  const accountId = snap.exists() ? (snap.data().accountId as string | undefined) : undefined
+  const amount = snap.exists() ? (snap.data().amount as number) : 0
+  if (!accountId || !(await getDoc(doc(db, 'accounts', accountId))).exists()) return deleteDoc(ref)
+  const batch = writeBatch(db)
+  batch.delete(ref)
+  batch.update(doc(db, 'accounts', accountId), { balance: increment(-amount) })
+  await batch.commit()
 }
 
 // ── Accounts ──────────────────────────────────────────────────────────────────
@@ -173,6 +282,51 @@ export async function updateAccount(id: string, data: Partial<NewAccount>) {
 
 export async function deleteAccount(id: string) {
   return deleteDoc(doc(db, 'accounts', id))
+}
+
+/** Creates the "Cuenta default" with `balance` unless the user already has one. Returns whether it was created. */
+export async function ensureDefaultAccount(userId: string, balance: number) {
+  const existing = await getAccounts(userId)
+  if (existing.some((a) => a.isDefault)) return false
+  const created = await addDoc(collection(db, 'accounts'), {
+    userId,
+    name: 'Cuenta default',
+    type: 'checking',
+    balance: Math.round(balance),
+    currency: 'COP',
+    color: '#52b69a',
+    isDefault: true,
+    createdAt: serverTimestamp(),
+  })
+  // The incomes registered so far (salaries and extra ones) belong to this account. Its opening balance
+  // (the money on hand today) already includes them, so they are only tagged: no balance moves.
+  const incomes = await getDocs(query(collection(db, 'incomes'), where('userId', '==', userId)))
+  const untagged = incomes.docs.filter((d) => !d.data().accountId)
+  for (let i = 0; i < untagged.length; i += 400) {
+    const batch = writeBatch(db)
+    untagged.slice(i, i + 400).forEach((d) => batch.update(d.ref, { accountId: created.id }))
+    await batch.commit()
+  }
+  return true
+}
+
+/** Every move between accounts the user made. */
+export async function getAccountTransfers(userId: string) {
+  const snap = await getDocs(query(collection(db, 'accountTransfers'), where('userId', '==', userId)))
+  return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
+}
+
+/** Moves money between two accounts of the user: both balances and the record of the move change together. */
+export async function transferBetweenAccounts(t: NewAccountTransfer) {
+  const batch = writeBatch(db)
+  batch.update(doc(db, 'accounts', t.fromId), { balance: increment(-t.amount) })
+  batch.update(doc(db, 'accounts', t.toId), { balance: increment(t.amount) })
+  batch.set(doc(collection(db, 'accountTransfers')), {
+    ...t,
+    date: Timestamp.fromDate(t.date),
+    createdAt: serverTimestamp(),
+  })
+  await batch.commit()
 }
 
 // ── Savings Goals ─────────────────────────────────────────────────────────────
@@ -266,6 +420,12 @@ export async function deleteHousehold(householdId: string, userId: string) {
   const q    = query(collection(db, 'householdDebts'), where('householdId', '==', householdId))
   const snap = await getDocs(q)
   await Promise.all(snap.docs.map(d => deleteDoc(d.ref)))
+  const crossQ = query(collection(db, 'householdCrossings'), where('householdId', '==', householdId))
+  const crossSnap = await getDocs(crossQ)
+  await Promise.all(crossSnap.docs.map(d => deleteDoc(d.ref)))
+  const expQ = query(collection(db, 'householdExpenses'), where('householdId', '==', householdId))
+  const expSnap = await getDocs(expQ)
+  await Promise.all(expSnap.docs.map(d => deleteDoc(d.ref)))
   await deleteDoc(doc(db, 'households', householdId))
 }
 
@@ -486,8 +646,13 @@ export async function getHouseholdExpenses(householdId: string) {
 }
 
 /** Deletes the expense along with every debt it generated, so the ledger never keeps orphans. */
-export async function deleteHouseholdExpense(id: string) {
-  const q    = query(collection(db, 'householdDebts'), where('expenseId', '==', id))
+export async function deleteHouseholdExpense(id: string, householdId: string) {
+  // The rules only allow queries that are provably limited to the caller's household
+  const q    = query(
+    collection(db, 'householdDebts'),
+    where('householdId', '==', householdId),
+    where('expenseId', '==', id),
+  )
   const snap = await getDocs(q)
   const batch = writeBatch(db)
   snap.docs.forEach(d => batch.delete(d.ref))
@@ -504,4 +669,130 @@ export async function cruzarCuentas(householdId: string) {
     .map(d => updateDoc(d.ref, { cruzado: true }))
   await Promise.all(updates)
   return updates.length
+}
+
+// ── Allowed Users (Administración) ──────────────────────────────────────────
+
+export async function getAllowedUsers() {
+  const snap = await getDocs(collection(db, 'allowedUsers'))
+  return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
+}
+
+export async function createAllowedUser(data: {
+  email: string
+  name: string
+  role?: 'admin' | 'integrante' | 'user'
+  active?: boolean
+  permissions?: string[]
+}) {
+  const emailNorm = data.email.trim().toLowerCase()
+  const q = query(collection(db, 'allowedUsers'), where('email', '==', emailNorm))
+  const existing = await getDocs(q)
+  if (!existing.empty) {
+    throw new Error(existing.docs[0].data().deleted
+      ? 'Este correo pertenece a un usuario eliminado. Restáuralo desde la lista.'
+      : 'Ya existe un usuario autorizado con este correo electrónico')
+  }
+
+  return addDoc(collection(db, 'allowedUsers'), {
+    email: emailNorm,
+    name: data.name.trim(),
+    role: data.role ?? 'integrante',
+    active: data.active ?? true,
+    deleted: false,
+    permissions: data.permissions ?? [],
+    createdAt: serverTimestamp(),
+  })
+}
+
+export async function updateAllowedUser(
+  id: string,
+  data: Partial<{ email: string; name: string; role: 'admin' | 'integrante' | 'user'; active: boolean; deleted: boolean; permissions: string[] }>
+) {
+  const payload: Record<string, unknown> = { ...data }
+  if (data.email) payload.email = data.email.trim().toLowerCase()
+  return updateDoc(doc(db, 'allowedUsers', id), payload)
+}
+
+export async function deleteAllowedUser(id: string) {
+  return deleteDoc(doc(db, 'allowedUsers', id))
+}
+
+
+
+// ── Roles ──────────────────────────────────────────────────────────────────
+
+export async function getRoles() {
+  const snap = await getDocs(collection(db, 'roles'))
+  return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
+}
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+export async function createNotification(data: NewStoredNotification) {
+  return addDoc(collection(db, 'notifications'), { ...data, read: false, createdAt: serverTimestamp() })
+}
+
+/** Tells everyone in a household except the person who acted. */
+export async function notifyHouseholdMembers(members: string[], payload: Omit<NewStoredNotification, 'userId'>) {
+  const others = members.filter((m) => m !== payload.fromUid)
+  if (others.length === 0) return
+  const batch = writeBatch(db)
+  for (const userId of others) {
+    batch.set(doc(collection(db, 'notifications')), { ...payload, userId, read: false, createdAt: serverTimestamp() })
+  }
+  await batch.commit()
+}
+
+export async function getNotifications(userId: string) {
+  // sorted on the client: filtering on userId and ordering on another field would need a composite index
+  const snap = await getDocs(query(collection(db, 'notifications'), where('userId', '==', userId)))
+  return snap.docs
+    .map((d) => mapDoc<Record<string, unknown>>(d))
+    .sort((a, b) => toDate(b.createdAt).getTime() - toDate(a.createdAt).getTime())
+}
+
+export async function markNotificationsRead(ids: string[]) {
+  if (ids.length === 0) return
+  const batch = writeBatch(db)
+  ids.forEach((id) => batch.update(doc(db, 'notifications', id), { read: true }))
+  await batch.commit()
+}
+
+export async function markNotificationsUnread(ids: string[]) {
+  if (ids.length === 0) return
+  const batch = writeBatch(db)
+  ids.forEach((id) => batch.update(doc(db, 'notifications', id), { read: false }))
+  await batch.commit()
+}
+
+export async function deleteNotifications(ids: string[]) {
+  if (ids.length === 0) return
+  const batch = writeBatch(db)
+  ids.forEach((id) => batch.delete(doc(db, 'notifications', id)))
+  await batch.commit()
+}
+
+// ── Household invitations ─────────────────────────────────────────────────────
+
+export async function createHouseholdInvite(data: NewHouseholdInvite) {
+  return addDoc(collection(db, 'householdInvites'), { ...data, email: data.email.toLowerCase(), status: 'pending', createdAt: serverTimestamp() })
+}
+
+export async function getHouseholdInvites(householdId: string) {
+  const snap = await getDocs(query(collection(db, 'householdInvites'), where('householdId', '==', householdId)))
+  return snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))
+}
+
+export async function getMyInvites(email: string) {
+  const snap = await getDocs(query(collection(db, 'householdInvites'), where('email', '==', email.toLowerCase())))
+  return snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))
+}
+
+export async function respondToInvite(id: string, status: 'accepted' | 'declined') {
+  return updateDoc(doc(db, 'householdInvites', id), { status, respondedAt: serverTimestamp() })
+}
+
+export async function deleteHouseholdInvite(id: string) {
+  return deleteDoc(doc(db, 'householdInvites', id))
 }

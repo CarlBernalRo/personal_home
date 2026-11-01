@@ -17,6 +17,19 @@ npm-debug.log*
 examples/
 scripts/allowed-users.json
 
+# Datos personales y de apoyo local (correos, cuentas, montos reales, capturas): nunca al repo
+examples_data/
+.playwright-mcp/
+.agents/
+apps/web/scripts/
+apps/web/src/data/fixed-expenses-seed.ts
+scripts/seed-admin.mjs
+scripts/seed-fixed-expenses.mjs
+scripts/seed-household-excel.mjs
+scripts/seed-household-member.mjs
+scripts/seed-roles.mjs
+scripts/setup-admin-and-roles.mjs
+
 # Material de inspiración de diseño (snippets de terceros, no es código de la app)
 inspirations/
 

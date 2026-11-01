@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { logout } from '@/lib/auth'
 import { useAuth } from './useAuth'
 
-const SESSION_DURATION = 60 * 60 * 1000 // 1 hour in ms
+export const SESSION_DURATION = 60 * 60 * 1000 // 1 hour in ms
 const WARN_THRESHOLD   = 60 * 1000     // warn when 60s remain
 const TICK_INTERVAL    = 1000          // update every second
 

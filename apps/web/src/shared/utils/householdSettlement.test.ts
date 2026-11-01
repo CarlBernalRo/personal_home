@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { remainingOf, isPendingDebt, allocateCrossing } from './householdSettlement';
+import { remainingOf, isPendingDebt, allocateCrossing, allocateAbono } from './householdSettlement';
 
 describe('remainingOf', () => {
   it('equals the full amount when no crossedAmount/paidAbono fields exist', () => {
@@ -16,6 +16,12 @@ describe('remainingOf', () => {
 
   it('subtracts both crossedAmount and paidAbono', () => {
     expect(remainingOf({ amount: 100000, crossedAmount: 40000, paidAbono: 25000 })).toBe(35000);
+  });
+
+  it('handles partial abono correctly (user scenario: owes 483000, pays 200000, remaining 283000)', () => {
+    const debt = { amount: 483000, paidAbono: 200000 };
+    expect(remainingOf(debt)).toBe(283000);
+    expect(isPendingDebt({ tipo: 'Deuda', ...debt })).toBe(true);
   });
 });
 
@@ -46,7 +52,7 @@ describe('isPendingDebt', () => {
   });
 });
 
-describe('allocateCrossing', () => {
+describe('allocateCrossing and allocateAbono', () => {
   it('allocates once, for a partial amount, when amount < first debt remaining', () => {
     const debts = [{ id: 'd1', amount: 200000 }];
     expect(allocateCrossing(50000, debts)).toEqual([{ debtId: 'd1', amount: 50000 }]);
@@ -104,5 +110,11 @@ describe('allocateCrossing', () => {
     ]);
     // d2 never appears in the output
     expect(result.find((a) => a.debtId === 'd2')).toBeUndefined();
+  });
+
+  it('allocateAbono allocates 200000 to a 483000 debt leaving 283000', () => {
+    const debts = [{ id: 'mercadito', amount: 483000 }];
+    const allocation = allocateAbono(200000, debts);
+    expect(allocation).toEqual([{ debtId: 'mercadito', amount: 200000 }]);
   });
 });
