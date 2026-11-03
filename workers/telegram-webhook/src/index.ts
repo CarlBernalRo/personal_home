@@ -143,10 +143,16 @@ export default {
     // POST /setup (same secret header): publishes the command list so Telegram shows the "/" menu
     if (new URL(request.url).pathname === '/setup') {
       if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('forbidden', { status: 403 })
-      const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/setMyCommands`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ commands: COMMANDS }),
-      })
-      return new Response(await res.text(), { status: res.status })
+      // Telegram keeps one command list per scope AND language, and the most specific one wins. Something else may have
+      // left lists in narrower scopes, so every scope/language is cleared first, then ours is set where it matters.
+      const call = (method: string, body: Record<string, unknown>) =>
+        fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const scopes = ['default', 'all_private_chats', 'all_group_chats', 'all_chat_administrators']
+      const langs: (string | undefined)[] = [undefined, 'es', 'en', 'pt']
+      await Promise.all(scopes.flatMap((scope) => langs.map((language_code) => call('deleteMyCommands', { scope: { type: scope }, ...(language_code ? { language_code } : {}) }))))
+      const set = await Promise.all([undefined, 'es'].flatMap((language_code) =>
+        ['default', 'all_private_chats'].map(async (scope) => (await call('setMyCommands', { commands: COMMANDS, scope: { type: scope }, ...(language_code ? { language_code } : {}) })).ok)))
+      return new Response(JSON.stringify({ ok: set.every(Boolean), cleared: scopes.length * langs.length, set: set.length }), { status: set.every(Boolean) ? 200 : 502 })
     }
     // only Telegram knows this secret (it sends it in a header with every update)
     if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('forbidden', { status: 403 })
