@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import Layout from '@/components/layout/Layout'
@@ -7,10 +8,13 @@ import ExpensesPage from '@/pages/ExpensesPage'
 import FixedExpensesPage from '@/pages/FixedExpensesPage'
 import HouseholdPage from '@/pages/HouseholdPage'
 import FinancesPage from '@/pages/FinancesPage'
-import SeedPage from '@/pages/SeedPage'
 import ProfilePage from '@/pages/ProfilePage'
 import AdminUsersPage from '@/pages/AdminUsersPage'
 import NotificationsPage from '@/pages/NotificationsPage'
+
+// The seeding tool holds personal data (e-mails, account numbers, the original Excel): it exists only in development.
+// `import.meta.env.DEV` is false in a production build, so this branch, the page and its data never reach the bundle.
+const SeedPage = import.meta.env.DEV ? lazy(() => import('@/pages/SeedPage')) : null
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -58,7 +62,7 @@ export const router = createBrowserRouter([
       { path: 'fijos',        element: <FixedExpensesPage /> },
       { path: 'hogar',        element: <HouseholdPage /> },
       { path: 'finanzas',     element: <FinancesPage /> },
-      { path: 'seed',          element: <SeedPage /> },
+      ...(SeedPage ? [{ path: 'seed', element: <Suspense fallback={null}><SeedPage /></Suspense> }] : []),
       { path: 'notificaciones', element: <NotificationsPage /> },
       { path: 'perfil',        element: <ProfilePage /> },
       { path: 'usuarios',      element: <RequireAdmin><AdminUsersPage /></RequireAdmin> },
