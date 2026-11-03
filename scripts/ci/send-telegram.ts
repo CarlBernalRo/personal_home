@@ -3,10 +3,10 @@
  *
  *  1. LINK — reads what people wrote to the bot. `/start CODE` links that chat to the user whose profile holds that
  *     code (`telegramLinkCode`, generated from Perfil → Avisos); `/stop` unlinks it.
- *  2. SEND — every notification stored since the last run goes to the recipient's chat, if they linked one and kept
- *     that zone switched on. Each sent notification is marked `telegramSent`, so nothing goes out twice.
+ *  2. SEND — every notification that has no Telegram status yet goes to the recipient's chat (if they linked one and kept
+ *     that zone on), and is then marked `telegramStatus: 'sent'` (or 'skipped'), so running the job again never repeats it.
  *
- * State (last update read, last send) lives in `system/telegram`. Reads the service account from
+ * State (the last update read) lives in `system/telegram`. Reads the service account from
  * GOOGLE_APPLICATION_CREDENTIALS and the bot token from TELEGRAM_BOT_TOKEN. By default it only LISTS what it would do;
  * pass --apply to link, send and save state.
  *
@@ -89,40 +89,53 @@ async function linkChats(offset: number) {
   return next
 }
 
-/** 2. Forward the notifications created since the last run. */
-async function sendNew(since: Date) {
-  const snap = await db.collection('notifications').where('createdAt', '>', Timestamp.fromDate(since)).get()
-  const profiles = new Map<string, FirebaseFirestore.DocumentData | null>()
-  const profileOf = async (uid: string) => {
-    if (!profiles.has(uid)) profiles.set(uid, (await db.doc(`users/${uid}`).get()).data() ?? null)
-    return profiles.get(uid)!
-  }
+/** Notifications older than this are never sent: linking must not flood the chat with the whole history. */
+const MAX_AGE_DAYS = 7
+
+/**
+ * 2. Forward what has not been sent yet. Every notification carries a Telegram status: no `telegramStatus` = pending,
+ * 'sent' = delivered, 'skipped' = deliberately not sent (dismissed, zone switched off, too old). Only pending ones
+ * are looked at, so running the job again never repeats a message.
+ */
+async function sendPending() {
+  const users = await db.collection('users').where('telegramChatId', '>', '').get()
+  const cutoff = Date.now() - MAX_AGE_DAYS * 86_400_000
   let sent = 0
   let skipped = 0
-  for (const d of snap.docs) {
-    const n = d.data()
-    if (n.telegramSent) continue
-    const p = await profileOf(n.userId)
-    const zones: string[] | undefined = Array.isArray(p?.telegramZones) ? p!.telegramZones : undefined
-    if (!p?.telegramChatId || (zones && !zones.includes(n.zone))) { skipped++; continue }
-
-    const icon = n.severity === 'critical' ? '🔴' : n.severity === 'warning' ? '🟠' : n.severity === 'success' ? '🟢' : '🔵'
-    const link = n.link ? `\n<a href="${APP_URL}${n.link}">Abrir en la app</a>` : ''
-    const text = `${icon} <b>${esc(String(n.title ?? ''))}</b>\n${esc(String(n.body ?? ''))}${link}`
-    console.log(`  · ${n.userId.slice(0, 6)}… [${n.zone}] ${n.title}`)
-    if (!APPLY) { sent++; continue }
-    try {
-      await tg('sendMessage', { chat_id: p.telegramChatId, text, parse_mode: 'HTML', disable_web_page_preview: true })
-      await d.ref.update({ telegramSent: true })
-      sent++
-    } catch (e: any) {
-      console.error(`    ✗ ${e.message}`)
-      // the person blocked the bot or deleted the chat: forget it instead of failing every run
-      if (e.code === 403) await db.doc(`users/${n.userId}`).update({ telegramChatId: FieldValue.delete() })
+  for (const u of users.docs) {
+    const p = u.data()
+    const zones: string[] | undefined = Array.isArray(p.telegramZones) ? p.telegramZones : undefined
+    const mine = await db.collection('notifications').where('userId', '==', u.id).get()
+    const pending = mine.docs
+      .filter((d) => !d.get('telegramStatus') && d.get('telegramSent') !== true)
+      .sort((a, b) => (a.get('createdAt')?.toMillis?.() ?? 0) - (b.get('createdAt')?.toMillis?.() ?? 0))
+    for (const d of pending) {
+      const n = d.data()
+      const created = n.createdAt?.toMillis?.() ?? 0
+      const why = n.archived ? 'descartado' : created < cutoff ? `de hace más de ${MAX_AGE_DAYS} días` : zones && !zones.includes(n.zone) ? 'zona apagada' : ''
+      if (why) {
+        skipped++
+        if (APPLY) await d.ref.update({ telegramStatus: 'skipped', telegramAt: FieldValue.serverTimestamp() })
+        continue
+      }
+      const icon = n.severity === 'critical' ? '🔴' : n.severity === 'warning' ? '🟠' : n.severity === 'success' ? '🟢' : '🔵'
+      const link = n.link ? `\n<a href="${APP_URL}${n.link}">Abrir en la app</a>` : ''
+      const text = `${icon} <b>${esc(String(n.title ?? ''))}</b>\n${esc(String(n.body ?? ''))}${link}`
+      console.log(`  · ${u.id.slice(0, 6)}… [${n.zone}] ${n.title}`)
+      if (!APPLY) { sent++; continue }
+      try {
+        await tg('sendMessage', { chat_id: p.telegramChatId, text, parse_mode: 'HTML', disable_web_page_preview: true })
+        await d.ref.update({ telegramStatus: 'sent', telegramSent: true, telegramAt: FieldValue.serverTimestamp() })
+        sent++
+      } catch (e: any) {
+        console.error(`    ✗ ${e.message}`)
+        // the person blocked the bot or deleted the chat: forget it instead of failing every run (the rest stay pending)
+        if (e.code === 403) { await u.ref.update({ telegramChatId: FieldValue.delete() }); break }
+      }
+      await sleep(60) // Telegram allows ~30 messages per second; stay far below
     }
-    await sleep(60) // Telegram allows ~30 messages per second; stay far below
   }
-  console.log(`${snap.size} aviso(s) nuevo(s): ${sent} ${APPLY ? 'enviados' : 'por enviar'}, ${skipped} sin Telegram o con la zona apagada.`)
+  console.log(`${users.size} usuario(s) con Telegram: ${sent} ${APPLY ? 'enviados' : 'por enviar'}, ${skipped} omitidos.`)
 }
 
 async function main() {
@@ -134,12 +147,9 @@ async function main() {
 
   const offset = await linkChats(Number(state.offset ?? 0))
 
-  // first run: start from now, so the whole history is not sent
-  const since: Date = state.lastSentAt?.toDate?.() ?? started
-  await sendNew(since)
+  await sendPending()
 
-  // small overlap so a notification written while the job ran is not missed; `telegramSent` prevents repeats
-  if (APPLY) await stateRef.set({ offset, lastSentAt: Timestamp.fromMillis(started.getTime() - 2 * 60_000) }, { merge: true })
+  if (APPLY) await stateRef.set({ offset }, { merge: true })
   else console.log('\nSimulación: no se envió ni guardó nada. Agrega --apply.')
 }
 

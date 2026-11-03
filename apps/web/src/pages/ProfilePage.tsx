@@ -17,6 +17,7 @@ import { logout } from '@/lib/auth'
 import { formatCOP } from '@/shared'
 import { PayScheduleForm } from '@/components/profile/PayScheduleForm'
 import { PayAccountForm } from '@/components/profile/PayAccountForm'
+import { UserPhoto } from '@/components/ui/UserPhoto'
 import { TelegramForm } from '@/components/profile/TelegramForm'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { MobileCollapse } from '@/components/ui/MobileCollapse'
@@ -120,13 +121,7 @@ export default function ProfilePage() {
 
         {/* Avatar + name card */}
         <div className="rounded-2xl bg-[#0a1f2f] border border-white/10 p-4 sm:p-5 flex items-center gap-4 glow-brand-sm shadow-xl">
-          {user?.photoURL ? (
-            <img src={user.photoURL} alt={displayName} className="w-14 h-14 rounded-full ring-2 ring-brand-500/40 flex-shrink-0 object-cover" />
-          ) : (
-            <div className="w-14 h-14 rounded-full bg-brand-500/20 border border-brand-500/40 flex items-center justify-center text-brand-400 text-lg font-bold flex-shrink-0">
-              {initials}
-            </div>
-          )}
+          <UserPhoto name={displayName} photoURL={user?.photoURL} sizeClass="w-14 h-14" textClass="text-lg" />
           <div className="min-w-0">
             <p className="text-base font-bold text-[#f0fae8] truncate">{displayName}</p>
             {((profile as any)?.firstName || (profile as any)?.lastName) && (

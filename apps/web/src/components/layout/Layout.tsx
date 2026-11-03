@@ -1,4 +1,5 @@
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { UserPhoto } from '@/components/ui/UserPhoto'
 import { LayoutDashboard, Receipt, CalendarCheck, Home, Wallet, User, LogOut, ShieldCheck } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useRef, useState, useEffect } from 'react'
@@ -122,13 +123,7 @@ function ProfileMenu({ variant, collapsed = false }: { variant: 'sidebar' | 'mob
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open, isMobile])
 
-  const avatar = user?.photoURL ? (
-    <img src={user.photoURL} alt={displayName} className="w-8 h-8 rounded-full ring-2 ring-brand-500/40 flex-shrink-0 object-cover" />
-  ) : (
-    <div className="w-8 h-8 rounded-full bg-brand-500/20 border border-brand-500/30 flex items-center justify-center text-brand-400 text-xs font-bold flex-shrink-0">
-      {displayName.slice(0, 2).toUpperCase()}
-    </div>
-  )
+  const avatar = <UserPhoto name={displayName} photoURL={user?.photoURL} sizeClass="w-8 h-8" />
 
   const menuItems = (
     <>
