@@ -117,9 +117,20 @@ export function TelegramForm() {
       ) : code ? (
         <div className="space-y-3 rounded-xl border border-white/10 bg-[#0d263a] p-3.5">
           <ol className="list-decimal pl-4 space-y-1.5 text-xs text-[#c7ccd1]">
-            <li>Abre el bot en Telegram con el botón de abajo.</li>
-            <li>Toca <b>Iniciar</b> (o <b>Start</b>) en el chat.</li>
-            <li>En la próxima hora el bot te confirma y queda vinculado.</li>
+            <li>Abre el bot en Telegram con el botón de abajo y toca <b>Iniciar</b> (o <b>Start</b>) en el chat.</li>
+            <li>
+              Si no se abre nada (en el computador pasa cuando no tienes Telegram instalado), abre <b>@{BOT}</b> en Telegram desde tu celular o desde
+              {' '}<a href="https://web.telegram.org" target="_blank" rel="noreferrer" className="underline text-sky-200">web.telegram.org</a> y escribe este mensaje:
+              <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(`/start ${code}`).then(() => showToast('Mensaje copiado', 'success'))}
+                className="mt-1 flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#0a1f2f] px-2.5 py-1.5 font-mono text-[#f3f5f6] hover:border-sky-300/40"
+                title="Copiar el mensaje"
+              >
+                /start {code} <Copy size={11} className="text-[#8a929a]" />
+              </button>
+            </li>
+            <li>El bot te confirma con un mensaje y queda vinculado. Puede tardar hasta una hora; después toca <b>Ya le di Iniciar: comprobar</b>.</li>
           </ol>
           <a href={deepLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-sky-300/40 bg-sky-500/15 px-3 py-2 text-xs font-semibold text-sky-100 hover:bg-sky-500/25 transition">
             <ExternalLink size={13} /> Abrir el bot en Telegram
