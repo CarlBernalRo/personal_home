@@ -45,6 +45,7 @@ const say = (chatId: number | string, text: string) => (APPLY ? tg('sendMessage'
 /** 1. Chats that wrote to the bot: link or unlink them. Returns the next update offset. */
 async function linkChats(offset: number) {
   const updates: any[] = await tg('getUpdates', { offset, timeout: 0, allowed_updates: ['message'] })
+  console.log(`${updates.length} mensaje(s) nuevo(s) para el bot.`)
   let next = offset
   for (const u of updates) {
     next = Math.max(next, u.update_id + 1)
@@ -127,6 +128,8 @@ async function sendNew(since: Date) {
 async function main() {
   const started = new Date()
   console.log(`Fecha: ${started.toString()}  (${APPLY ? 'ACTÚA' : 'simulación'})`)
+  const me = await tg('getMe', {})
+  console.log(`Bot del token: @${me.username}`)
   const state = (await stateRef.get()).data() ?? {}
 
   const offset = await linkChats(Number(state.offset ?? 0))
