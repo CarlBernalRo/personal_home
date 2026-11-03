@@ -348,6 +348,8 @@ export function withAutoPayments<P extends { fixedExpenseId: string; month: stri
   expenses: (ExpenseLike & { id: string; concept?: string; userId?: string })[],
   payments: P[],
   today: Date,
+  /** Ignore occurrences of months before this one (the stored-payments task only looks at a recent window). */
+  fromMonth?: string,
 ): (P | AutoPayment)[] {
   const have = new Set(payments.map((p) => `${p.fixedExpenseId}|${p.month}`));
   const out: (P | AutoPayment)[] = [...payments];
@@ -356,7 +358,7 @@ export function withAutoPayments<P extends { fixedExpenseId: string; month: stri
 
   for (const fe of expenses) {
     if (!fe.autoDebit?.length || fe.frequency === 'ocasional') continue;
-    const first = [startMonthOf(fe, current), ...fe.autoDebit.map((r) => r.from)].sort().pop()!;
+    const first = [startMonthOf(fe, current), ...fe.autoDebit.map((r) => r.from), ...(fromMonth ? [fromMonth] : [])].sort().pop()!;
     // one month ahead: a payment moved to an earlier date can already be due
     for (const occMonth of monthRange(first, shiftMonth(current, 1))) {
       if (!isAutoDebit(fe, occMonth) || isPaused(fe, occMonth) || !isDueMonth(fe, occMonth) || have.has(`${fe.id}|${occMonth}`)) continue;
@@ -396,22 +398,31 @@ export interface PlannedAutoPayment {
  * the default one — and that fell due after that account was created (the ones before are already inside its
  * opening balance). Used by the app and by the daily server job, so both decide the same.
  */
+/** How many months back the stored-payments task looks: enough to recover from days (or weeks) without running. */
+export const AUTO_DEBIT_LOOKBACK_MONTHS = 2;
+
+/** First month the task looks at. Payments of that month on are the only ones it needs to read. */
+export const autoDebitFloor = (today: Date): string => shiftMonth(monthKey(today), -AUTO_DEBIT_LOOKBACK_MONTHS);
+
 export function planAutoPayments(
   expenses: (ExpenseLike & { id: string; concept?: string; userId?: string })[],
   payments: { fixedExpenseId: string; month: string }[],
-  accounts: { id: string; isDefault?: boolean; createdAt?: Date | null }[],
+  accounts: { id: string; isDefault?: boolean; createdAt?: Date | null; balanceSetAt?: Date | null }[],
   today: Date,
   userId: string,
 ): PlannedAutoPayment[] {
   const out: PlannedAutoPayment[] = [];
-  for (const p of withAutoPayments(expenses, payments, today)) {
+  for (const p of withAutoPayments(expenses, payments, today, autoDebitFloor(today))) {
     if (!('auto' in p) || p.auto !== true || !String(p.id).startsWith('auto|')) continue; // only the generated ones
     const fe = expenses.find((e) => e.id === p.fixedExpenseId) as (typeof expenses)[number] & { accountId?: string } | undefined;
     const account = accounts.find((a) => a.id === fe?.accountId) ?? accounts.find((a) => a.isDefault);
     const created = account?.createdAt;
     if (!account || !(created instanceof Date) || isNaN(created.getTime())) continue;
-    const endOfCreationDay = new Date(created.getFullYear(), created.getMonth(), created.getDate(), 23, 59, 59, 999);
-    if (p.paymentDate.getTime() <= endOfCreationDay.getTime()) continue;
+    // what fell due before the account existed, or before its balance was last set by hand, is already inside that balance
+    const set = account.balanceSetAt instanceof Date && !isNaN(account.balanceSetAt.getTime()) ? account.balanceSetAt : created;
+    const since = set.getTime() > created.getTime() ? set : created;
+    const endOfSinceDay = new Date(since.getFullYear(), since.getMonth(), since.getDate(), 23, 59, 59, 999);
+    if (p.paymentDate.getTime() <= endOfSinceDay.getTime()) continue;
     out.push({
       docId: `auto_${p.fixedExpenseId}_${p.month}`,
       fixedExpenseId: p.fixedExpenseId,

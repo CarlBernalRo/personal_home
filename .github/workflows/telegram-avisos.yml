@@ -1,0 +1,58 @@
+name: Avisos por Telegram
+
+# Independiente de los débitos automáticos: vincula los chats de Telegram y reenvía las notificaciones nuevas.
+# Corre cada hora (minuto 17, fuera de la hora pico de GitHub). También se puede correr a mano desde Actions.
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Vincular y enviar de verdad (si no, solo simula y lista lo que haría)'
+        type: boolean
+        default: false
+
+# one run at a time, so two never read the same updates
+concurrency:
+  group: telegram-avisos
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TZ: America/Bogota
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: scripts/ci/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: scripts/ci
+        run: npm ci
+
+      - name: Credenciales (archivo temporal, se borra al terminar)
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+      - name: Vincular chats y enviar avisos
+        working-directory: scripts/ci
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        # on a schedule it always acts; by hand it acts only when "apply" is ticked
+        run: ./node_modules/.bin/tsx send-telegram.ts ${{ (github.event_name == 'schedule' || inputs.apply) && '--apply' || '' }}
+
+      - name: Borrar credenciales
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"

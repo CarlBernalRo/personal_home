@@ -226,7 +226,7 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
                         <span className="flex items-center gap-2.5 min-w-0">
                           <AppIcon name={cat?.icon} size={16} className="text-brand-300 flex-shrink-0" />
                           <span className="min-w-0">
-                            <span className="block text-sm font-semibold text-[#f0fae8] truncate">{fe.concept}</span>
+                            <span className="block text-sm font-semibold text-[#f0fae8] truncate">{fe.concept}{fe.oneTime && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">programado</span>}</span>
                             {paidOn && <span className="block text-[10px] font-mono text-brand-400">{payment?.auto ? 'debitado' : 'pagado'} el {paidOn}{paidOffDue(entry) && entry.due ? ` · vencía el ${format(entry.due, 'd MMM', { locale: es })}` : ''}</span>}
                             <AccountChip account={accounts.find((a) => a.id === entryAccountId(entry))} planned={!payment} />
                             {hasArrears && (

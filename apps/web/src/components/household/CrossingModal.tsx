@@ -13,9 +13,7 @@ interface Props {
   debt: Rec
   counterPersonId: string
   counterpartDebts: Rec[]
-  myName: string
-  partnerName: string
-  userUid?: string
+  nameOf: (uid?: string | null) => string
   saving: boolean
   onConfirm: (allocations: CrossingAllocation[], counterPersonId: string, notes: string) => void
   onClose: () => void
@@ -25,10 +23,9 @@ interface Props {
  * A crossing nets two real debts against each other, so it always needs a specific counter-debt:
  * crossing against the counterpart's "total" would let you net a debt against someone who owes nothing.
  */
-export function CrossingModal({ debt, counterPersonId, counterpartDebts, myName, partnerName, userUid, saving, onConfirm, onClose }: Props) {
-  const isMe = debt.debtor === userUid
-  const who = isMe ? myName : partnerName
-  const counterName = isMe ? partnerName : myName
+export function CrossingModal({ debt, counterPersonId, counterpartDebts, nameOf, saving, onConfirm, onClose }: Props) {
+  const who = nameOf(debt.debtor)
+  const counterName = nameOf(counterPersonId)
   const remaining = remainingOf(debt)
 
   // Oldest first: a partial cross settles what has been owed longest

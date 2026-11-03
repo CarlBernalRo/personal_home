@@ -1,6 +1,6 @@
 /**
  * Daily job: stores, as real payments, the automatic debits that fell due, and lowers the balance of the
- * account each one came out of. The app does the same when someone opens Fijos; this makes it happen every
+ * account each one came out of. The app does the same as soon as someone opens it; this makes it happen every
  * day whether or not anyone logs in. Both use `planAutoPayments`, so they decide exactly the same.
  *
  * Safe to run any number of times: every payment has a fixed id per expense and month and is created with
@@ -16,7 +16,7 @@
 process.env.TZ ||= 'America/Bogota'
 
 import * as admin from 'firebase-admin'
-import { planAutoPayments } from '../../apps/web/src/shared/utils/fixedExpenses'
+import { autoDebitFloor, planAutoPayments } from '../../apps/web/src/shared/utils/fixedExpenses'
 
 const APPLY = process.argv.includes('--apply')
 
@@ -43,8 +43,14 @@ async function main() {
   let stored = 0
   let skipped = 0
   for (const userId of users) {
+    // only the payments of the recent window matter (older months are never looked at); without the index, read them all
+    const floor = autoDebitFloor(today)
+    const recentPayments = () =>
+      db.collection('fixedExpensePayments').where('userId', '==', userId).where('month', '>=', floor).get()
+        .catch(() => db.collection('fixedExpensePayments').where('userId', '==', userId).get())
+        .then((s) => s.docs.map(plain))
     const [payments, accounts] = await Promise.all([
-      db.collection('fixedExpensePayments').where('userId', '==', userId).get().then((s) => s.docs.map(plain)),
+      recentPayments(),
       db.collection('accounts').where('userId', '==', userId).get().then((s) => s.docs.map(plain)),
     ])
     const mine = (await db.collection('fixedExpenses').where('userId', '==', userId).get()).docs.map(plain)

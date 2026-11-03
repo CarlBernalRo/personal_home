@@ -43,6 +43,8 @@ export interface FixedExpense {
    * expense can be reactivated later.
    */
   pauses?: MonthRange[];
+  /** A one-off payment the user scheduled for a date (not a recurring or an occasional expense): it exists for a single month. */
+  oneTime?: boolean;
   /** Account this expense is paid from: automatic debits take the money from it and it is offered when paying. */
   accountId?: string;
   createdAt: Date;

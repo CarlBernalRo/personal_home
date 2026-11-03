@@ -1,25 +1,29 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Check, Mail, MailOpen, Trash2, X } from 'lucide-react'
+import { Check, CheckCircle2, Mail, MailOpen, Trash2, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { AppNotification } from '@/shared/types/notification'
 import { useNotifications } from '@/hooks/useNotifications'
 import { useToast } from '@/components/ui/Toast'
 import { Button } from '@/components/ui/Button'
 import { IconTip } from '@/components/ui/IconTip'
+import { ConfirmReceiptModal } from '@/components/household/ConfirmReceiptModal'
 import { SEVERITY_ICON, SEVERITY_LABEL, SEVERITY_STYLE, ZONE_ICON, ZONE_LABEL, relativeTime } from './meta'
 
 interface Props {
   n: AppNotification
   /** Compact: used inside the bell dropdown (no dismiss button, clamped text). */
   compact?: boolean
+  /** Shown in the history: no dismiss / read actions, and it says when it was dismissed. */
+  historical?: boolean
   /** Called after the card navigated (the dropdown closes itself). */
   onNavigate?: () => void
 }
 
 /** One notification: severity border + icons, click marks it read and follows its link; invites carry accept / decline. */
-export function NotificationCard({ n, compact = false, onNavigate }: Props) {
-  const { markRead, markUnread, remove, acceptInvite, declineInvite } = useNotifications()
+export function NotificationCard({ n, compact = false, historical = false, onNavigate }: Props) {
+  const { markRead, markUnread, remove, acceptInvite, declineInvite, refresh } = useNotifications()
+  const [confirming, setConfirming] = useState(false)
   const { showToast } = useToast()
   const navigate = useNavigate()
   const [busy, setBusy] = useState(false)
@@ -54,6 +58,7 @@ export function NotificationCard({ n, compact = false, onNavigate }: Props) {
   }
 
   const inert = isInvite && !n.link
+  const receipt = n.receipt
 
   return (
     <article
@@ -95,11 +100,12 @@ export function NotificationCard({ n, compact = false, onNavigate }: Props) {
               <span>{ZONE_LABEL[n.zone]}</span>
               <span aria-hidden="true">·</span>
               <time dateTime={n.createdAt.toISOString()} className="font-mono">{relativeTime(n.createdAt)}</time>
+              {historical && n.archived && (<><span aria-hidden="true">·</span><span>Descartada</span></>)}
             </span>
           </span>
         </button>
 
-        {!isInvite && !compact && (
+        {!isInvite && !compact && !historical && (
           <div className="flex flex-shrink-0 items-center gap-0.5">
             <IconTip text={n.read ? 'Marcar como no leída' : 'Marcar como leída'} className="inline-flex">
               <button
@@ -133,6 +139,25 @@ export function NotificationCard({ n, compact = false, onNavigate }: Props) {
           <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={decline} aria-label="Rechazar invitación">
             <X size={14} /> Rechazar
           </Button>
+        </div>
+      )}
+
+      {receipt && (
+        <div className="px-3 pb-3 pl-[3.75rem]">
+          {receipt.confirmed ? (
+            <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-300"><CheckCircle2 size={13} /> Recibido y registrado como ingreso</p>
+          ) : (
+            <Button type="button" size="sm" notched onClick={() => setConfirming(true)} aria-label={`Confirmar pago recibido de ${receipt.fromName}`}>
+              <CheckCircle2 size={14} /> Confirmar recibido
+            </Button>
+          )}
+          <ConfirmReceiptModal
+            open={confirming}
+            onClose={() => setConfirming(false)}
+            receipt={receipt}
+            notificationId={n.key}
+            onConfirmed={() => { refresh() }}
+          />
         </div>
       )}
     </article>

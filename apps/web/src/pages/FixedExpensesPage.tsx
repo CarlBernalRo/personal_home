@@ -2,22 +2,27 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { ChevronLeft, ChevronRight, CalendarCheck, Check, RotateCcw, Settings, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CalendarCheck, CalendarCog, CalendarPlus, CalendarX2, Check, Pencil, RotateCcw, Settings, Trash2, X } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
 import { MoneyInput } from '@/components/ui/MoneyInput'
+import { AccountSelect } from '@/components/ui/AccountSelect'
+import { IconTip } from '@/components/ui/IconTip'
+import { IconActionButton } from '@/components/ui/IconActionButton'
+import { ProgramExpenseModal } from '@/components/fixed/ProgramExpenseModal'
 import { Select } from '@/components/ui/Select'
-import { NotesEditor } from '@/components/fixed/NotesEditor'
+import { NotesCard, PaymentComment } from '@/components/fixed/NotesCard'
 import { SkeletonList } from '@/components/ui/Skeleton'
 import { SegmentedBar } from '@/components/ui/SegmentedBar'
 import { useToast } from '@/components/ui/Toast'
+import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/hooks/useAuth'
 import {
   getFixedExpenses, getAllFixedExpensePayments, updateFixedExpense,
-  addFixedExpensePayments, deleteFixedExpensePayment, materializeAutoPayments,
+  addFixedExpensePayments, deleteFixedExpensePayment, deleteFixedExpense, materializeAutoPayments, updateFixedExpensePayment,
 } from '@/lib/firestore'
 import {
   formatCOP, getStatus, indexPayments, paymentKey,
@@ -31,6 +36,7 @@ import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { useSalary } from '@/hooks/useSalary'
 import { usePayProjection } from '@/hooks/usePayProjection'
 import { useDefaultAccount } from '@/hooks/useDefaultAccount'
+import { FIXED_DATA_CHANGED } from '@/hooks/useAutoDebits'
 import { FixedOutlook } from '@/components/fixed/FixedOutlook'
 import { AutoManualCard } from '@/components/fixed/AutoManualCard'
 import { PausedNotesCard } from '@/components/fixed/PausedNotesCard'
@@ -63,6 +69,7 @@ const monthLabelOf = (m: string) => {
 export default function FixedExpensesPage() {
   const { user }      = useAuth()
   const { showToast } = useToast()
+  const ask           = useConfirm()
   const salary        = useSalary()
 
   const [params]                = useSearchParams()
@@ -76,13 +83,20 @@ export default function FixedExpensesPage() {
   const [lines, setLines]       = useState<OwedLine[]>([])
   const [checked, setChecked]   = useState<string[]>([])
   const [lineError, setLineError] = useState<string | null>(null)
+  // Fixing a payment that was registered wrong (null = not editing)
+  const [editPay, setEditPay] = useState<{ amount: string; date: string; accountId: string; comment: string } | null>(null)
+  const [savingPay, setSavingPay] = useState(false)
   // State picked in the progress bar: the history shows only those payments (null = all)
   const [statusFilter, setStatusFilter] = useState<StatusKey | null>(null)
   // Account picked as a filter: the history shows only the payments that went through it (null = all)
   const [accountFilter, setAccountFilter] = useState<string | null>(null)
+  // The dialog that schedules a one-off payment (editing = the scheduled one being changed)
+  const [programming, setProgramming] = useState<{ editing: any | null } | null>(null)
   // Bank accounts the user can pay from, and the one picked for this payment ('' = none)
   const accounts = salary.accounts
   const [accountId, setAccountId] = useState('')
+  // Comment left on the payment being registered (the expense's annotations are configured elsewhere)
+  const [comment, setComment] = useState('')
 
   const today        = new Date()
   const currentMonth = monthKey(today)
@@ -113,6 +127,11 @@ export default function FixedExpensesPage() {
   }
 
   useEffect(() => { load() }, [user])
+  // automatic debits saved by the app-wide task while this page is open
+  useEffect(() => {
+    window.addEventListener(FIXED_DATA_CHANGED, load)
+    return () => window.removeEventListener(FIXED_DATA_CHANGED, load)
+  }, [user])
 
   // Real payments plus the ones automatic debits made by themselves on their due date
   const paymentIndex = useMemo(() => indexPayments(withAutoPayments(expenses, payments, new Date())), [expenses, payments])
@@ -181,11 +200,24 @@ export default function FixedExpensesPage() {
       setLines(owed.map((l) => ({ ...l })))
       setChecked(owed.map((l) => l.occMonth))
       setLineError(null)
+      setComment('')
       // The expense's own account, else the one used last time, else where the salary goes
       setAccountId(salary.pickAccount(fe.accountId))
     }
     setSelected({ fe, month: hostMonth, owed })
   }
+
+  // For a scheduled (one-off) expense: change the schedule itself, or remove it
+  const scheduledIcons = selected?.fe.oneTime ? (
+    <>
+      <span className="w-px h-6 bg-white/15" aria-hidden="true" />
+      <IconActionButton icon={CalendarCog} tone="edit" label="Editar el gasto programado: concepto, fecha, monto o cuenta" onClick={() => { const fe = selected.fe; setSelected(null); setProgramming({ editing: fe }) }} />
+      <IconActionButton icon={CalendarX2} tone="danger" label="Eliminar el gasto programado (si ya lo pagaste, el pago se conserva)" onClick={() => deleteScheduled(selected.fe)} />
+    </>
+  ) : null
+
+  // closing or switching payment leaves the correction form
+  useEffect(() => { setEditPay(null) }, [selected])
 
   const selectedPayment = selected ? paymentIndex.get(paymentKey(selected.fe.id, selected.month)) : undefined
 
@@ -212,7 +244,7 @@ export default function FixedExpensesPage() {
         ...(accountId ? { accountId } : {}),
         month:          l.occMonth,
         paymentDate:    new Date(y, m - 1, d),
-        notes:          '',
+        notes:          comment.trim(),
       })))
       salary.rememberAccount(accountId)
       setSelected(null)
@@ -242,14 +274,54 @@ export default function FixedExpensesPage() {
     }
   }
 
-  async function handleSaveNotes(fe: any, notes: string) {
+  // A scheduled payment can be removed from its own dialog; what was already paid stays registered
+  async function deleteScheduled(fe: any) {
+    const wasPaid = [...paymentIndex.keys()].some((k) => k.startsWith(`${fe.id}|`))
+    const ok = await ask(
+      `¿Eliminar el gasto programado "${fe.concept}"?${wasPaid ? ' El pago que ya registraste se conserva.' : ''}`,
+      { title: 'Eliminar gasto programado', confirmLabel: 'Eliminar' },
+    )
+    if (!ok) return
     try {
-      await updateFixedExpense(fe.id, { notes })
+      await deleteFixedExpense(fe.id)
+      setSelected(null)
       await load()
-      showToast('Anotación guardada', 'edit')
-    } catch (err) {
-      showToast('Error al guardar la anotación', 'error')
-      throw err
+      showToast('Gasto programado eliminado', 'delete')
+    } catch {
+      showToast('No se pudo eliminar el gasto programado', 'error')
+    }
+  }
+
+  // The payment is real (stored) unless it is an automatic debit that has not been stored yet
+  const canEditPayment = !!selectedPayment && !String((selectedPayment as any).id ?? '').startsWith('auto|')
+
+  function startEditPayment() {
+    if (!selectedPayment) return
+    const when = selectedPayment.paymentDate instanceof Date ? selectedPayment.paymentDate : new Date(selectedPayment.paymentDate)
+    setEditPay({ amount: String(selectedPayment.paidAmount), date: format(when, 'yyyy-MM-dd'), accountId: ((selectedPayment as any).accountId as string | undefined) ?? '', comment: (selectedPayment as any).notes ?? '' })
+  }
+
+  async function saveEditPayment() {
+    if (!selectedPayment || !editPay) return
+    const amount = Number(editPay.amount)
+    if (!(amount > 0)) { showToast('Escribe un monto mayor a 0', 'error'); return }
+    if (!editPay.date) { showToast('Elige la fecha de pago', 'error'); return }
+    const [y, m, d] = editPay.date.split('-').map(Number)
+    setSavingPay(true)
+    try {
+      await updateFixedExpensePayment(
+        (selectedPayment as any).id,
+        { paidAmount: amount, paymentDate: new Date(y, m - 1, d), accountId: editPay.accountId || undefined, notes: editPay.comment.trim() },
+        { paidAmount: selectedPayment.paidAmount, accountId: (selectedPayment as any).accountId },
+      )
+      setEditPay(null)
+      setSelected(null)
+      await load()
+      showToast('Pago corregido', 'edit')
+    } catch {
+      showToast('No se pudo corregir el pago', 'error')
+    } finally {
+      setSavingPay(false)
     }
   }
 
@@ -353,6 +425,17 @@ export default function FixedExpensesPage() {
                 </>
               </div>
             ) : <span className="hidden sm:block" />}
+              <div className="flex items-center gap-2 sm:justify-self-end">
+              <IconTip text="Programar un gasto: un pago de una sola vez en una fecha (matrícula, cuota anual…)" className="inline-flex">
+                <button
+                  type="button"
+                  onClick={() => setProgramming({ editing: null })}
+                  aria-label="Programar un gasto"
+                  className="p-2 rounded-lg border bg-[#0d263a] border-white/10 text-[#c7ccd1] hover:bg-white/10 hover:text-white transition"
+                >
+                  <CalendarPlus size={16} />
+                </button>
+              </IconTip>
               <button
                 onClick={() => setTab(tab === 'config' ? 'mes' : 'config')}
                 title="Configuración de gastos"
@@ -365,6 +448,7 @@ export default function FixedExpensesPage() {
               >
                 <Settings size={16} />
               </button>
+              </div>
           </div>
 
           {/* One card: the month progress stays fixed on top; only the content below scrolls */}
@@ -472,7 +556,7 @@ export default function FixedExpensesPage() {
 
           {tab === 'config' && user && (
             <>
-              <FixedConfigPanel userId={user.uid} expenses={expenses} paymentIndex={paymentIndex} salary={salary} onChanged={load} />
+              <FixedConfigPanel userId={user.uid} expenses={expenses} paymentIndex={paymentIndex} salary={salary} onChanged={load} onProgram={(fe) => setProgramming({ editing: fe ?? null })} />
             </>
           )}
         </>
@@ -483,6 +567,17 @@ export default function FixedExpensesPage() {
         </div>
       </div>
 
+      <ProgramExpenseModal
+        open={!!programming}
+        onClose={() => setProgramming(null)}
+        userId={user?.uid ?? ''}
+        editing={programming?.editing ?? null}
+        accounts={accounts}
+        defaultAccount={salary.pickAccount()}
+        paid={!!programming?.editing && [...paymentIndex.keys()].some((k) => k.startsWith(`${programming.editing.id}|`))}
+        onSaved={load}
+      />
+
       {/* Pay / detail modal */}
       <Modal
         open={!!selected}
@@ -491,18 +586,52 @@ export default function FixedExpensesPage() {
       >
         {selected && selected.owed.length === 0 && selectedPayment ? (
           <div className="space-y-4">
-            <div className="flex items-center gap-2 text-brand-300 text-sm font-semibold">
-              <Check size={16} /> {(selectedPayment as any).auto ? 'Pagado automáticamente' : 'Pagado'}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-brand-300 text-sm font-semibold">
+                <Check size={16} /> {(selectedPayment as any).auto ? 'Pagado automáticamente' : 'Pagado'}
+              </div>
+              <div className="flex items-center gap-2">
+                {canEditPayment && !editPay && <IconActionButton icon={Pencil} tone="edit" label="Editar este pago: corregir monto, fecha o cuenta" onClick={startEditPayment} />}
+                {!(selectedPayment as any).auto && !editPay && <IconActionButton icon={Trash2} tone="danger" label="Eliminar este pago: vuelve a quedar pendiente y la cuenta recupera el dinero" onClick={handleUnpay} />}
+                {scheduledIcons}
+              </div>
             </div>
             {(selectedPayment as any).auto && (
               <p className="text-xs text-cyan-200">
                 Este gasto se debita automáticamente de tu cuenta: se marcó como pagado el día de pago.
               </p>
             )}
-            <p className="text-sm font-mono">
-              {formatCOP(selectedPayment.paidAmount)} el{' '}
-              {format(selectedPayment.paymentDate instanceof Date ? selectedPayment.paymentDate : new Date(selectedPayment.paymentDate), "d 'de' MMMM yyyy", { locale: es })}
-            </p>
+            {editPay ? (
+              <div className="space-y-3 rounded-xl border border-brand-400/30 bg-brand-500/5 p-3">
+                <p className="text-xs font-semibold text-brand-200">Corregir este pago</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Input label="Monto pagado (COP)" money value={editPay.amount} onChange={(e) => setEditPay({ ...editPay, amount: e.target.value })} />
+                  <Input label="Fecha de pago" type="date" value={editPay.date} onChange={(e) => setEditPay({ ...editPay, date: e.target.value })} />
+                </div>
+                <AccountSelect label="Cuenta de la que salió" accounts={accounts} value={editPay.accountId} onChange={(id) => setEditPay({ ...editPay, accountId: id })} noneLabel="Sin cuenta" />
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-[#9aa4ac] block">Comentario del pago</label>
+                  <textarea
+                    value={editPay.comment}
+                    onChange={(e) => setEditPay({ ...editPay, comment: e.target.value })}
+                    rows={2}
+                    maxLength={500}
+                    placeholder="Opcional"
+                    className="w-full bg-[#0d263a] border border-white/10 rounded-xl px-3 py-2 text-sm text-[#f3f5f6] placeholder-[#5f6a72] outline-none focus:border-brand-400 transition resize-y"
+                  />
+                </div>
+                <p className="text-[10px] text-[#8a929a]">El saldo de las cuentas se ajusta solo: si cambias el monto o la cuenta, la anterior recupera lo que corresponde y la nueva lo paga.</p>
+                <div className="flex items-center justify-end gap-2">
+                  <IconActionButton icon={X} tone="warning" label="Cancelar: no cambiar el pago" onClick={() => setEditPay(null)} disabled={savingPay} />
+                  <IconActionButton icon={Check} tone="success" label={savingPay ? 'Guardando…' : 'Guardar la corrección del pago'} onClick={saveEditPayment} disabled={savingPay} />
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm font-mono">
+                {formatCOP(selectedPayment.paidAmount)} el{' '}
+                {format(selectedPayment.paymentDate instanceof Date ? selectedPayment.paymentDate : new Date(selectedPayment.paymentDate), "d 'de' MMMM yyyy", { locale: es })}
+              </p>
+            )}
             <p className="text-xs text-[#9aa4ac]">
               Estimado: <span className="font-mono">{formatCOP(amountFor(selected.fe, selected.month))}</span>
             </p>
@@ -511,20 +640,15 @@ export default function FixedExpensesPage() {
                 Pagado desde: <span className="font-semibold text-[#f3f5f6]">{accounts.find((a) => a.id === (selectedPayment as any).accountId)?.name ?? 'una cuenta que ya no existe'}</span>
               </p>
             )}
-            <NotesEditor
-              key={selected.fe.id}
-              value={(expenses.find((e) => e.id === selected.fe.id) ?? selected.fe).notes ?? ''}
-              onSave={(text) => handleSaveNotes(selected.fe, text)}
-            />
+            <NotesCard notes={(expenses.find((e) => e.id === selected.fe.id) ?? selected.fe).notes} />
+            {!editPay && <PaymentComment comment={(selectedPayment as any).notes} />}
             <div className="flex gap-2 pt-2">
               <Button type="button" variant="secondary" className="flex-1" onClick={() => setSelected(null)}>Cerrar</Button>
-              {!(selectedPayment as any).auto && (
-                <Button type="button" variant="secondary" className="flex-1" onClick={handleUnpay}>Deshacer pago</Button>
-              )}
             </div>
           </div>
         ) : selected ? (
           <form onSubmit={payForm.handleSubmit(onPay)} className="space-y-4">
+            {selected.fe.oneTime && <div className="flex items-center justify-end gap-2">{scheduledIcons}</div>}
             <div className="space-y-2">
               <p className="text-xs text-[#9aa4ac]">
                 {lines.length > 1 ? 'Marca los pagos que vas a registrar como pagados:' : 'Se registrará este pago:'}
@@ -609,11 +733,18 @@ export default function FixedExpensesPage() {
               {...payForm.register('paymentDate')}
               error={payForm.formState.errors.paymentDate?.message}
             />
-            <NotesEditor
-              key={selected.fe.id}
-              value={(expenses.find((e) => e.id === selected.fe.id) ?? selected.fe).notes ?? ''}
-              onSave={(text) => handleSaveNotes(selected.fe, text)}
-            />
+            <NotesCard notes={(expenses.find((e) => e.id === selected.fe.id) ?? selected.fe).notes} />
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-[#9aa4ac] block">Comentario del pago <span className="font-normal text-[#5f6a72]">(opcional)</span></label>
+              <textarea
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                rows={2}
+                maxLength={500}
+                placeholder="ej. pagué con retraso, referencia del recibo…"
+                className="w-full bg-[#0d263a] border border-white/10 rounded-xl px-3 py-2 text-sm text-[#f3f5f6] placeholder-[#5f6a72] outline-none focus:border-brand-400 transition resize-y"
+              />
+            </div>
             <div className="flex gap-2 pt-2">
               <Button type="button" variant="secondary" className="flex-1" onClick={() => setSelected(null)}>Cancelar</Button>
               <Button type="submit" className="flex-1" disabled={saving} notched>{saving ? 'Confirmando…' : checked.length > 1 ? 'Pagar seleccionados' : 'Confirmar pago'}</Button>

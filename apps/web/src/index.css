@@ -147,6 +147,21 @@ input[type="date"],
 input[type="month"],
 input[type="time"] {
   color-scheme: dark;
+  /* Mobile browsers give these a native look with an intrinsic width and centred/right text:
+     keep them inside their column and aligned to the left like every other field */
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 2.6rem;
+  text-align: left;
+}
+input[type="date"]::-webkit-date-and-time-value,
+input[type="month"]::-webkit-date-and-time-value,
+input[type="time"]::-webkit-date-and-time-value {
+  text-align: left;
+  margin: 0;
 }
 input[type="date"]::-webkit-calendar-picker-indicator,
 input[type="month"]::-webkit-calendar-picker-indicator,

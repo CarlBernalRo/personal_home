@@ -72,7 +72,7 @@ export default function AccountsPage() {
     if (!user) return
     setSaving(true)
     if (editItem) {
-      await updateAccount(editItem.id, data)
+      await updateAccount(editItem.id, data, editItem.balance as number)
     } else {
       await addAccount({ ...data, userId: user.uid, currency: 'COP' })
     }

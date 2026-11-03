@@ -32,16 +32,19 @@ const EMPTY_TEXT: Record<Filter, string> = {
 }
 
 export default function NotificationsPage() {
-  const { notifications, unread, unreadByZone, loading, markAllRead, clearAll, hiddenCount, restoreHidden } = useNotifications()
+  const { notifications, history, unread, unreadByZone, loading, markAllRead, clearAll, hiddenCount, restoreHidden } = useNotifications()
   const { showToast } = useToast()
   const ask = useConfirm()
   const [filter, setFilter] = useState<Filter>('all')
+  // what is active now, or everything that was ever generated
+  const [view, setView] = useState<'active' | 'history'>('active')
+  const source = view === 'history' ? history : notifications
 
   const visible = useMemo(
-    () => notifications
+    () => source
       .filter((n) => filter === 'all' || n.zone === filter)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
-    [notifications, filter],
+    [source, filter],
   )
 
   const grouped = useMemo(() => {
@@ -56,7 +59,7 @@ export default function NotificationsPage() {
   }
 
   async function handleClear() {
-    const ok = await ask('Se descartarán todas tus notificaciones (las invitaciones pendientes se conservan). ¿Continuar?', {
+    const ok = await ask('Se descartarán todas tus notificaciones activas (las invitaciones pendientes se conservan y todo queda en el Historial). ¿Continuar?', {
       title: 'Limpiar notificaciones', confirmLabel: 'Limpiar',
     })
     if (!ok) return
@@ -82,13 +85,26 @@ export default function NotificationsPage() {
           </div>
           <h1 className="text-2xl font-bold tracking-tight">Notificaciones</h1>
           <p className="text-xs text-[#8a929a] mt-1" aria-live="polite">
-            {unread > 0 ? `${unread} sin leer` : 'Estás al día'}
+            {view === 'history' ? `${history.length} en el historial` : unread > 0 ? `${unread} sin leer` : 'Estás al día'}
           </p>
+        </div>
+
+        <div role="tablist" aria-label="Vista" className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-[#0d263a] border border-white/10">
+          {([['active', 'Activas'], ['history', 'Historial']] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={view === id}
+              onClick={() => setView(id)}
+              className={clsx('rounded-lg py-1.5 text-xs font-bold transition', view === id ? 'bg-brand-500/20 text-brand-300' : 'text-[#9aa4ac] hover:text-white')}
+            >{label}</button>
+          ))}
         </div>
 
         <nav aria-label="Filtrar por zona" className="grid grid-cols-2 gap-2 lg:grid-cols-1">
           {FILTERS.map(({ id, label }) => {
-            const count = id === 'all' ? unread : unreadByZone[id]
+            const count = view === 'history' ? 0 : id === 'all' ? unread : unreadByZone[id]
             const Icon = id === 'all' ? Bell : ZONE_ICON[id]
             const active = filter === id
             return (
@@ -117,6 +133,7 @@ export default function NotificationsPage() {
           })}
         </nav>
 
+        {view === 'active' && (
         <div className="flex flex-col gap-2">
           <Button type="button" variant="secondary" size="sm" disabled={unread === 0} onClick={handleMarkAll}>
             <CheckCheck size={14} /> Marcar todo como leído
@@ -130,6 +147,7 @@ export default function NotificationsPage() {
             </Button>
           )}
         </div>
+        )}
       </CurvedScrollContainer>
 
       <CurvedScrollContainer
@@ -147,7 +165,7 @@ export default function NotificationsPage() {
           <div className="notch bg-[#0a1f2f] border border-white/10 text-center py-12 px-6">
             <BellOff size={34} className="mx-auto text-[#6f7a83] mb-3" aria-hidden="true" />
             <p className="text-sm font-bold text-[#f0fae8]">
-              {filter === 'all' ? 'Todo en orden' : `Sin avisos de ${ZONE_LABEL[filter]}`}
+              {view === 'history' ? 'Aún no hay historial' : filter === 'all' ? 'Todo en orden' : `Sin avisos de ${ZONE_LABEL[filter]}`}
             </p>
             <p className="text-xs text-[#8a929a] mt-1 max-w-sm mx-auto">{EMPTY_TEXT[filter]}</p>
           </div>
@@ -155,7 +173,7 @@ export default function NotificationsPage() {
           GROUPS.filter((g) => grouped[g].length > 0).map((g) => (
             <section key={g} aria-label={g} className="space-y-2">
               <h2 className="font-pixel text-[9px] uppercase tracking-widest text-brand-400">{g}</h2>
-              {grouped[g].map((n) => <NotificationCard key={n.key} n={n} />)}
+              {grouped[g].map((n) => <NotificationCard key={n.key} n={n} historical={view === 'history'} />)}
             </section>
           ))
         )}

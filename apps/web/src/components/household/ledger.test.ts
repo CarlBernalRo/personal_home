@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { balanceBreakdown, buildLedger, splitByMonth, statusOf } from './ledger'
+import { balanceBreakdown, buildLedger, nestByDebt, splitByMonth, statusOf } from './ledger'
 
 const d = (y: number, m: number, day: number) => new Date(y, m - 1, day)
 
@@ -109,7 +109,7 @@ describe('splitByMonth', () => {
 describe('statusOf', () => {
   it('reads the state of a debt from what is left to pay', () => {
     expect(statusOf({ kind: 'deuda', debt: debt('a', ME, 100, d(2026, 10, 1)) })).toBe('pending')
-    expect(statusOf({ kind: 'deuda', debt: debt('a', ME, 100, d(2026, 10, 1), { paidAbono: 40 }) })).toBe('partial')
+    expect(statusOf({ kind: 'deuda', debt: debt('a', ME, 100, d(2026, 10, 1), { paidAbono: 40 }) })).toBe('pending') // partly paid keeps the state of what is left
     expect(statusOf({ kind: 'deuda', debt: debt('a', ME, 100, d(2026, 10, 1), { paidAbono: 100 }) })).toBe('settled')
   })
 
@@ -117,5 +117,83 @@ describe('statusOf', () => {
     expect(statusOf({ kind: 'deuda', debt: debt('a', ME, 100, d(2026, 10, 1), { crossedAmount: 100, cruzado: true }) })).toBe('crossed')
     expect(statusOf({ kind: 'abono' })).toBe('abono')
     expect(statusOf({ kind: 'cruce' })).toBe('crossed')
+  })
+})
+
+describe('same-day order and several people', () => {
+  it('keeps the order things happened in within one day: debts (by installment) before the abonos that pay them', () => {
+    const day = d(2026, 11, 2)
+    const t = (n: number) => new Date(2026, 10, 2, 9, 0, n)
+    const rows = buildLedger([
+      abono('ab1', AL, 100, day),
+      debt('c3', AL, 300, day, { installment: 3, createdAt: t(1) }),
+      debt('c1', AL, 300, day, { installment: 1, createdAt: t(1) }),
+      debt('c2', AL, 300, day, { installment: 2, createdAt: t(1) }),
+    ], [], ME, AL).rows
+    expect(rows.map((r) => r.concept)).toEqual(['c1', 'c2', 'c3', 'ab1'])
+    expect(rows.map((r) => r.totals[AL])).toEqual([300, 600, 900, 800])
+  })
+
+  it('tracks each person of a household of five on their own', () => {
+    const day = d(2026, 11, 2)
+    const rows = buildLedger([
+      debt('x', 'b', 100, day, { createdAt: new Date(2026, 10, 2, 9) }),
+      debt('y', 'c', 50, day, { createdAt: new Date(2026, 10, 2, 10) }),
+      abono('p', 'b', 40, day),
+    ], [], ME, 'b').rows
+    const last = rows[rows.length - 1]
+    expect(last.totals).toEqual({ b: 60, c: 50 })
+    expect(last.totalOwed).toBe(110)
+  })
+})
+
+describe('one row per debt and per payment', () => {
+  const day = d(2026, 11, 2)
+  const t = (n: number) => new Date(2026, 10, 2, 9, 0, n)
+  const debts = (): any[] => [
+    debt('c1', AL, 333_333, day, { installment: 1, createdAt: t(0) }),
+    debt('c2', AL, 333_333, day, { installment: 2, createdAt: t(0) }),
+    { ...abono('a1', AL, 333_333, d(2026, 11, 3)), saldaId: 'c1', paymentId: 'p1', createdAt: t(30) },
+    { ...abono('a2', AL, 166_667, d(2026, 11, 3)), saldaId: 'c2', paymentId: 'p1', createdAt: t(31) },
+  ]
+
+  it('a payment split across debts is one row with the total and its distribution', () => {
+    const top = nestByDebt(buildLedger(debts(), [], ME, AL).rows)
+    const pays = top.filter((r) => r.kind === 'abono')
+    expect(pays).toHaveLength(1)
+    expect(pays[0].delta).toBe(-500_000)
+    expect(pays[0].children?.map((k) => [k.target?.id, Math.abs(k.delta)])).toEqual([['c1', 333_333], ['c2', 166_667]])
+  })
+
+  it('each debt keeps its own abono inside, knowing it was part of the bigger payment', () => {
+    const top = nestByDebt(buildLedger(debts(), [], ME, AL).rows)
+    const c1 = top.find((r) => r.debt?.id === 'c1')!
+    expect(c1.children).toHaveLength(1)
+    expect(c1.children![0].payTotal).toBe(500_000)
+    expect(top.filter((r) => r.kind === 'deuda')).toHaveLength(2)
+  })
+
+  it('abonos written without a payment id are grouped when made together', () => {
+    const list = debts().map((x: any) => { const { paymentId, ...rest } = x; return rest })
+    const top = nestByDebt(buildLedger(list, [], ME, AL).rows)
+    expect(top.filter((r) => r.kind === 'abono')).toHaveLength(1)
+  })
+})
+
+describe('state by due date, like Gastos fijos', () => {
+  const today = d(2026, 11, 2)
+  const st = (dueDate: Date | null, extra: object = {}) => statusOf({ kind: 'deuda', debt: debt('a', AL, 100, d(2026, 10, 1), { dueDate, ...extra }) }, today)
+
+  it('is red only after the date has passed', () => {
+    expect(st(d(2026, 11, 1))).toBe('overdue')
+    expect(st(d(2026, 11, 2))).toBe('due-soon') // due today is not overdue yet
+  })
+  it('is amber within three days and pending beyond that or without a date', () => {
+    expect(st(d(2026, 11, 5))).toBe('due-soon')
+    expect(st(d(2026, 11, 6))).toBe('pending')
+    expect(st(null)).toBe('pending')
+  })
+  it('a paid debt is never overdue', () => {
+    expect(st(d(2026, 10, 1), { paidAbono: 100 })).toBe('settled')
   })
 })

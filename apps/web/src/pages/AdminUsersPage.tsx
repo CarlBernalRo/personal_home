@@ -335,7 +335,7 @@ export default function AdminUsersPage() {
 
           <Input
             label="Nombre completo"
-            placeholder="ej. Alexandra Pérez"
+            placeholder="ej. Nombre y apellido"
             {...register('name')}
             error={errors.name?.message}
           />

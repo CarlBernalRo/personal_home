@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { remainingOf, isPendingDebt, allocateCrossing, allocateAbono } from './householdSettlement';
+import { remainingOf, isPendingDebt, allocateCrossing, allocateAbono, inPaymentOrder } from './householdSettlement';
 
 describe('remainingOf', () => {
   it('equals the full amount when no crossedAmount/paidAbono fields exist', () => {
@@ -116,5 +116,23 @@ describe('allocateCrossing and allocateAbono', () => {
     const debts = [{ id: 'mercadito', amount: 483000 }];
     const allocation = allocateAbono(200000, debts);
     expect(allocation).toEqual([{ debtId: 'mercadito', amount: 200000 }]);
+  });
+});
+
+describe('inPaymentOrder (what an abono pays first)', () => {
+  const d = (y: number, m: number, day: number) => new Date(y, m - 1, day);
+  const loan = (n: number, due: Date | null) => ({ id: `c${n}`, amount: 333_333, tipo: 'Deuda', date: d(2026, 11, 1), dueDate: due, crossedAmount: 0 });
+
+  it('pays the installments of a loan in their order, even if they arrive newest first', () => {
+    const cuotas = [loan(3, d(2027, 2, 1)), loan(1, d(2026, 12, 1)), loan(2, d(2027, 1, 1))];
+    const allocation = allocateAbono(500_000, inPaymentOrder(cuotas) as any);
+    expect(allocation).toEqual([{ debtId: 'c1', amount: 333_333 }, { debtId: 'c2', amount: 166_667 }]);
+  });
+
+  it('puts the debts with an agreed date before the ones without, then the oldest first', () => {
+    const open1 = { id: 'o1', date: d(2026, 10, 1), dueDate: null };
+    const open2 = { id: 'o2', date: d(2026, 9, 1), dueDate: null };
+    const dated = { id: 'dated', date: d(2026, 11, 20), dueDate: d(2026, 12, 5) };
+    expect(inPaymentOrder([open1, dated, open2]).map((x) => x.id)).toEqual(['dated', 'o2', 'o1']);
   });
 });

@@ -19,7 +19,7 @@ export function PausedNotesCard({ expenses, onManage }: Props) {
   const current = monthKey(new Date())
 
   const paused = useMemo(
-    () => expenses.flatMap((e) => {
+    () => expenses.filter((e) => !e.oneTime).flatMap((e) => { // a scheduled payment is switched off after its month by design
       const ranges: { from: string; until?: string }[] = e.pauses ?? []
       // the range that is active now, else the next one that starts later
       const range = ranges.find((r) => r.from <= current && (!r.until || current < r.until))

@@ -5,7 +5,7 @@ import { ChevronDown, Clock, Coins, GitMerge, Info } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Avatar } from '@/components/ui/Avatar'
 import { IconTip } from '@/components/ui/IconTip'
-import { formatCOP, remainingOf, isPendingDebt } from '@/shared'
+import { formatCOP, remainingOf, isPendingDebt, inPaymentOrder } from '@/shared'
 import { toDate, type Rec } from './ledger'
 
 /** Small info icon with a themed tooltip, used next to micro-labels. */
@@ -79,8 +79,8 @@ function StatusItem({ d, label, chip, onSelect }: { d: Rec; label: string; chip:
 }
 
 // ── Open debt with its progress and the Cruzar / Abonar actions ──────────────
-function DebtItem({ d, canCross, onCross, onAbonar, onSelect }: {
-  d: Rec; canCross: boolean; onCross: () => void; onAbonar: () => void; onSelect: () => void
+function DebtItem({ d, canCross, canAbonar, creditor, onCross, onAbonar, onSelect }: {
+  d: Rec; canCross: boolean; creditor: string | null; canAbonar: boolean; onCross: () => void; onAbonar: () => void; onSelect: () => void
 }) {
   const crossed = (d.crossedAmount as number) || 0
   const paidAbono = (d.paidAbono as number) || 0
@@ -94,9 +94,14 @@ function DebtItem({ d, canCross, onCross, onAbonar, onSelect }: {
       <button onClick={onSelect} className="w-full text-left group">
         <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3 mb-2">
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-[#f0fae8] truncate group-hover:text-brand-300 transition">{d.concept}</p>
+            <p className="text-sm font-semibold text-[#f0fae8] truncate group-hover:text-brand-300 transition">
+              {d.concept}
+              {d.loanId && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-amber-300 border border-amber-400/40 rounded px-1 py-0.5">préstamo</span>}
+              {d.expenseId && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">gasto compartido</span>}
+            </p>
             <div className="flex items-center gap-1.5 text-[10px] font-mono text-[#8a929a] mt-0.5 flex-wrap">
               <span>{format(toDate(d.date), 'dd MMM yyyy', { locale: es })}</span>
+              {creditor && <span className="text-[#c7ccd1]">· a {creditor}</span>}
               {crossed > 0 && <span className="text-sky-300">· {formatCOP(crossed)} cruzado</span>}
               {paidAbono > 0 && <span className="text-brand-300">· {formatCOP(paidAbono)} abonado</span>}
             </div>
@@ -124,30 +129,35 @@ function DebtItem({ d, canCross, onCross, onAbonar, onSelect }: {
         <button
           onClick={onCross}
           disabled={!canCross}
-          title={canCross ? undefined : 'La otra persona no tiene deudas pendientes para cruzar'}
+          title={canCross ? undefined : 'No hay deudas pendientes de la otra persona para cruzar'}
           className="flex-1 py-1.5 rounded-lg border border-white/10 bg-white/[0.03] text-[11px] font-semibold text-[#dcf1eb] hover:border-brand-400/50 hover:text-white hover:bg-brand-500/10 transition flex items-center justify-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <GitMerge size={11} /> Cruzar
         </button>
-        <button
-          onClick={onAbonar}
-          className="flex-1 py-1.5 rounded-lg bg-brand-500 text-[#051018] hover:bg-brand-400 text-[11px] font-semibold transition flex items-center justify-center gap-1 interactive-press"
-        >
-          <Coins size={12} /> Abonar
-        </button>
+        {canAbonar && (
+          <button
+            onClick={onAbonar}
+            className="flex-1 py-1.5 rounded-lg bg-brand-500 text-[#051018] hover:bg-brand-400 text-[11px] font-semibold transition flex items-center justify-center gap-1 interactive-press"
+          >
+            <Coins size={12} /> Abonar
+          </button>
+        )}
       </div>
     </div>
   )
 }
 
 // ── A person's debts grouped by state: Pendiente / Cruzado / Pagado / Abonos ─
-function PersonDebtGroups({ personDebts, canCross, onCross, onAbonar, onSelect }: {
-  personDebts: Rec[]; canCross: boolean; onCross: (d: Rec) => void; onAbonar: (d: Rec) => void; onSelect: (d: Rec) => void
+function PersonDebtGroups({ personDebts, canCross, canAbonar, creditorName, onCross, onAbonar, onSelect }: {
+  personDebts: Rec[]; canCross: boolean | ((d: Rec) => boolean); creditorName?: (d: Rec) => string | null; canAbonar: boolean; onCross: (d: Rec) => void; onAbonar: (d: Rec) => void; onSelect: (d: Rec) => void
 }) {
-  const pendientes = personDebts.filter((d) => isPendingDebt(d))
-  const cruzados = personDebts.filter((d) => d.tipo === 'Deuda' && d.cruzado)
-  const saldados = personDebts.filter((d) => d.tipo === 'Deuda' && !d.cruzado && remainingOf(d) <= 0)
-  const abonos = personDebts.filter((d) => d.tipo === 'Abono')
+  // Pending ones in the order they will be paid (the earliest due first, so a loan's installments read 1, 2, 3);
+  // what is already settled, crossed or abonado, newest first
+  const newestFirst = (a: Rec, b: Rec) => toDate(b.date).getTime() - toDate(a.date).getTime()
+  const pendientes = inPaymentOrder(personDebts.filter((d) => isPendingDebt(d)))
+  const cruzados = personDebts.filter((d) => d.tipo === 'Deuda' && d.cruzado).sort(newestFirst)
+  const saldados = personDebts.filter((d) => d.tipo === 'Deuda' && !d.cruzado && remainingOf(d) <= 0).sort(newestFirst)
+  const abonos = personDebts.filter((d) => d.tipo === 'Abono').sort(newestFirst)
 
   if (pendientes.length + cruzados.length + saldados.length + abonos.length === 0) {
     return <p className="text-xs text-[#8a929a] py-3">Sin registros.</p>
@@ -165,7 +175,7 @@ function PersonDebtGroups({ personDebts, canCross, onCross, onAbonar, onSelect }
       {pendientes.length > 0 && (
         <Group title="Pendiente" tip="Gastos sin cubrir todavía: ni abonados ni cruzados.">
           {pendientes.map((d) => (
-            <DebtItem key={d.id} d={d} canCross={canCross} onCross={() => onCross(d)} onAbonar={() => onAbonar(d)} onSelect={() => onSelect(d)} />
+            <DebtItem key={d.id} d={d} canCross={typeof canCross === 'function' ? canCross(d) : canCross} creditor={creditorName?.(d) ?? null} canAbonar={canAbonar} onCross={() => onCross(d)} onAbonar={() => onAbonar(d)} onSelect={() => onSelect(d)} />
           ))}
         </Group>
       )}
@@ -196,7 +206,12 @@ interface PersonCardProps {
   net: number
   breakdown: { deuda: number; abono: number; cruzado: number; saldo: number }
   debts: Rec[]
-  canCross: boolean
+  /** One value for the whole card, or decided per debt (each debt may be owed to a different person). */
+  canCross: boolean | ((d: Rec) => boolean)
+  /** Whom a debt is owed to, shown next to it when the household has several people. */
+  creditorName?: (d: Rec) => string | null
+  /** Only the person themselves registers abonos to their own debts. */
+  canAbonar: boolean
   expanded: boolean
   onToggle: () => void
   onAbonarAll: () => void
@@ -206,7 +221,7 @@ interface PersonCardProps {
 }
 
 /** One member of the household: balance chip on top, breakdown and debts when expanded. */
-export function PersonCard({ name, role, photoURL, color, net, breakdown, debts, canCross, expanded, onToggle, onAbonarAll, onCross, onAbonar, onSelect }: PersonCardProps) {
+export function PersonCard({ name, role, photoURL, color, net, breakdown, debts, canCross, creditorName, canAbonar, expanded, onToggle, onAbonarAll, onCross, onAbonar, onSelect }: PersonCardProps) {
   return (
     <div className="rounded-2xl border border-white/10 bg-[#0a1f2f] shadow-xl overflow-hidden">
       <div
@@ -231,7 +246,7 @@ export function PersonCard({ name, role, photoURL, color, net, breakdown, debts,
         </div>
       </div>
 
-      {net > 0 && (
+      {net > 0 && canAbonar && (
         <div className="px-4 pb-3 -mt-1">
           <button
             onClick={onAbonarAll}
@@ -246,7 +261,7 @@ export function PersonCard({ name, role, photoURL, color, net, breakdown, debts,
       <ExpandSection open={expanded}>
         <div className="px-4 pb-3 border-t border-white/10 pt-3">
           <BalanceBreakdown name={name} {...breakdown} />
-          <PersonDebtGroups personDebts={debts} canCross={canCross} onCross={onCross} onAbonar={onAbonar} onSelect={onSelect} />
+          <PersonDebtGroups personDebts={debts} canCross={canCross} creditorName={creditorName} canAbonar={canAbonar} onCross={onCross} onAbonar={onAbonar} onSelect={onSelect} />
         </div>
       </ExpandSection>
     </div>

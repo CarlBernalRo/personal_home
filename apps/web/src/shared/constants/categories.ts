@@ -51,6 +51,7 @@ export const FIXED_EXPENSE_CATEGORIES = [
 
 /** Gastos compartidos de un hogar. */
 export const HOUSEHOLD_DEBT_CATEGORIES = [
+  { id: 'prestamo',       label: 'Préstamo',               icon: 'money',     color: '#e0b84c' },
   { id: 'alimentacion',    label: 'Comidas y restaurantes', icon: 'food',      color: '#f97316' },
   { id: 'mercado',         label: 'Mercado',                icon: 'market',    color: '#52b69a' },
   { id: 'hogar',           label: 'Hogar y muebles',        icon: 'sofa',      color: '#d97706' },

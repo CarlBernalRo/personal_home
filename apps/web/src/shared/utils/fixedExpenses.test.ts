@@ -370,3 +370,47 @@ describe('planAutoPayments (what the daily server job stores)', () => {
     expect(planAutoPayments([card], [], accounts, new Date(2026, 10, 10), 'u1')).toHaveLength(1); // the day it falls due
   });
 });
+
+describe('a scheduled (one-off) payment', () => {
+  // the university on 20 Nov: a fixed expense that exists for November only
+  const uni = { id: 'uni', concept: 'Universidad', estimatedAmount: 2_500_000, paymentDay: 20, frequency: 'fijo' as const, startMonth: '2026-11', pauses: [{ from: '2026-12' }], oneTime: true };
+  const today = new Date(2026, 10, 2);
+
+  it('falls due once, on its date, and nowhere else', () => {
+    expect(['2026-10', '2026-11', '2026-12', '2027-11'].map((m) => getStatus(uni, m, undefined, today))).toEqual(['na', 'pending', 'na', 'na']);
+    const nov = monthEntries([uni], '2026-11', new Map(), today);
+    expect(nov).toHaveLength(1);
+    expect(nov[0].due?.getDate()).toBe(20);
+    expect(nov[0].total).toBe(2_500_000);
+    expect(monthEntries([uni], '2026-12', new Map(), today)).toEqual([]);
+  });
+
+  it('warns as it nears and stays owed after its date until paid', () => {
+    expect(getStatus(uni, '2026-11', undefined, new Date(2026, 10, 18))).toBe('due-soon');
+    const late = monthEntries([uni], '2026-12', new Map(), new Date(2026, 11, 5));
+    expect(late[0].owed.map((l) => l.occMonth)).toEqual(['2026-11']); // still owed in December
+    const paid = new Map([['uni|2026-11', { paidAmount: 2_500_000 }]]);
+    expect(monthEntries([uni], '2026-12', paid, new Date(2026, 11, 5))).toEqual([]);
+  });
+});
+
+describe('planAutoPayments: what it never stores', () => {
+  const card = { id: 'card', concept: 'Tarjeta', estimatedAmount: 100_000, paymentDay: 10, frequency: 'fijo' as const, startMonth: '2025-01', autoDebit: [{ from: '2025-01' }] };
+  const old = { id: 'main', isDefault: true, createdAt: new Date(2025, 0, 1) };
+  const today = new Date(2026, 10, 12); // 12 Nov 2026
+
+  it('only looks at the last two months, not at every month since the debit began', () => {
+    const plan = planAutoPayments([card], [], [old], today, 'u1');
+    expect(plan.map((p) => p.month)).toEqual(['2026-09', '2026-10', '2026-11']); // nothing before Sept: not walked, not stored
+  });
+
+  it('skips what fell due before the balance was last set by hand', () => {
+    const matched = { ...old, balanceSetAt: new Date(2026, 9, 20, 9) }; // 20 Oct: the bank balance was typed in
+    expect(planAutoPayments([card], [], [matched], today, 'u1').map((p) => p.month)).toEqual(['2026-11']);
+  });
+
+  it('a balance set the very day of a debit counts that debit as included', () => {
+    const matched = { ...old, balanceSetAt: new Date(2026, 10, 10, 8) }; // 10 Nov, the day it fell due
+    expect(planAutoPayments([card], [], [matched], today, 'u1')).toEqual([]);
+  });
+});

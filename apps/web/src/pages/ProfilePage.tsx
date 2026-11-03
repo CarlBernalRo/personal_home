@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { User, Mail, AtSign, LogOut, BadgeCheck, Shield, Wallet, Landmark, CalendarRange, CreditCard } from 'lucide-react'
+import { User, Mail, AtSign, LogOut, BadgeCheck, Shield, Wallet, Landmark, CalendarRange, CreditCard, Send } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { FormActions } from '@/components/ui/FormActions'
@@ -17,6 +17,7 @@ import { logout } from '@/lib/auth'
 import { formatCOP } from '@/shared'
 import { PayScheduleForm } from '@/components/profile/PayScheduleForm'
 import { PayAccountForm } from '@/components/profile/PayAccountForm'
+import { TelegramForm } from '@/components/profile/TelegramForm'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { MobileCollapse } from '@/components/ui/MobileCollapse'
 
@@ -27,12 +28,13 @@ const schema = z.object({
 })
 type FormData = z.infer<typeof schema>
 
-type Tab = 'datos' | 'sueldo' | 'pagos'
+type Tab = 'datos' | 'sueldo' | 'pagos' | 'avisos'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'datos',  label: 'Datos personales' },
   { id: 'sueldo', label: 'Sueldo y períodos' },
   { id: 'pagos',  label: 'Cuenta para pagos' },
+  { id: 'avisos', label: 'Avisos' },
 ]
 
 export default function ProfilePage() {
@@ -44,7 +46,7 @@ export default function ProfilePage() {
   const salary             = useSalary()
   const [params]           = useSearchParams()
   const [saving, setSaving] = useState(false)
-  const [tab, setTab]      = useState<Tab>((['datos', 'sueldo', 'pagos'] as const).find((t) => t === params.get('tab')) ?? 'datos')
+  const [tab, setTab]      = useState<Tab>((['datos', 'sueldo', 'pagos', 'avisos'] as const).find((t) => t === params.get('tab')) ?? 'datos')
 
   const householdId = (profile as any)?.householdId as string | undefined
 
@@ -93,6 +95,7 @@ export default function ProfilePage() {
     { icon: CalendarRange, label: 'Períodos', value: salary.periodMode === 'calendar' ? 'Por mes calendario' : 'Por fecha de pago', to: 'sueldo' },
     { icon: Landmark, label: 'Cuenta del sueldo', value: accountName(salary.depositAccountId) ?? 'Ninguna', to: 'sueldo' },
     { icon: CreditCard, label: 'Cuenta para pagos', value: accountName((profile as any)?.payAccountId) ?? 'La del último pago', to: 'pagos' },
+    { icon: Send, label: 'Avisos por Telegram', value: (profile as any)?.telegramChatId ? 'Vinculado' : 'Sin vincular', to: 'avisos' },
   ]
 
   return (
@@ -267,6 +270,7 @@ export default function ProfilePage() {
 
           {tab === 'sueldo' && <PayScheduleForm />}
           {tab === 'pagos' && <PayAccountForm />}
+          {tab === 'avisos' && <TelegramForm />}
         </CurvedScrollContainer>
       </div>
     </div>

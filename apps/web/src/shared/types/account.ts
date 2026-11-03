@@ -10,6 +10,8 @@ export interface Account {
   color: string;
   /** The account created for people who had payments set up before accounts existed. */
   isDefault?: boolean;
+  /** Last time the balance was typed by hand (matched to the bank): debits due before it are already inside it. */
+  balanceSetAt?: Date;
   createdAt: Date;
 }
 

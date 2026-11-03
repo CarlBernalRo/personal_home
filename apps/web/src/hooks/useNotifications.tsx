@@ -1,11 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useSalary } from '@/hooks/useSalary'
 import { useFixedData } from '@/hooks/useFixedData'
 import { useAuthStore } from '@/store/auth'
 import {
-  deleteNotifications, getHousehold, getHouseholdIds, getMyInvites, getNotifications, joinHousehold, markNotificationsRead, markNotificationsUnread,
+  archiveNotifications, saveDerivedNotifications, getHousehold, getHouseholdIds, getMyInvites, getNotifications, joinHousehold, markNotificationsRead, markNotificationsUnread,
   notifyHouseholdMembers, respondToInvite,
 } from '@/lib/firestore'
 import {
@@ -26,6 +26,8 @@ const toDate = (v: unknown): Date => {
 
 interface NotificationsValue {
   notifications: AppNotification[]
+  /** Everything that was ever generated for the person, newest first: active, dismissed and already solved. */
+  history: AppNotification[]
   unread: number
   /** Unread count per zone, for the badges of the filter tabs. */
   unreadByZone: Record<NotificationZone, number>
@@ -45,7 +47,7 @@ interface NotificationsValue {
 }
 
 const EMPTY: NotificationsValue = {
-  notifications: [], unread: 0, unreadByZone: { sueldo: 0, fijos: 0, gastos: 0, hogar: 0 }, loading: false,
+  notifications: [], history: [], unread: 0, unreadByZone: { sueldo: 0, fijos: 0, gastos: 0, hogar: 0 }, loading: false,
   refresh: async () => {}, markRead: async () => {}, markUnread: async () => {}, markAllRead: async () => {}, remove: async () => {}, clearAll: async () => {}, hiddenCount: 0, restoreHidden: () => {},
   acceptInvite: async () => {}, declineInvite: async () => {},
 }
@@ -96,7 +98,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       ])
       setStored(docs.map((d: any): AppNotification => ({
         key: d.id, source: 'stored', zone: d.zone, severity: d.severity, title: d.title, body: d.body, link: d.link,
-        read: !!d.read, createdAt: toDate(d.createdAt),
+        read: !!d.read, createdAt: toDate(d.createdAt), receipt: d.receipt, archived: !!d.archived, derivedKey: d.derivedKey,
       })))
       setInvites(
         (invs as any[])
@@ -148,11 +150,37 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     const hidden = new Set(local.hidden)
     const read = new Set(local.read)
     const fromDerived = derived.filter((n) => !hidden.has(n.key)).map((n) => ({ ...n, read: read.has(n.key) }))
-    return [...invites, ...fromDerived, ...stored].sort((a, b) => {
+    // saved copies of derived alerts and dismissed ones only live in the history
+    const active = stored.filter((n) => !n.archived && !n.derivedKey)
+    return [...invites, ...fromDerived, ...active].sort((a, b) => {
       if (a.read !== b.read) return a.read ? 1 : -1
       return b.createdAt.getTime() - a.createdAt.getTime()
     })
   }, [invites, derived, stored, local])
+
+  // the history: every stored notification (events from others, saved copies of alerts, dismissed ones), newest first
+  // a saved copy of an alert is the same notification as the live one: it shows what was read or dismissed there
+  const history = useMemo(() => {
+    const read = new Set(local.read)
+    const hidden = new Set(local.hidden)
+    return stored
+      .map((n) => (n.derivedKey ? { ...n, read: n.read || read.has(n.derivedKey), archived: n.archived || hidden.has(n.derivedKey) } : n))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+  }, [stored, local])
+  const copiesOf = useCallback((keys: string[]) => stored.filter((n) => n.derivedKey && keys.includes(n.derivedKey)).map((n) => n.key), [stored])
+
+  // every alert that shows up is kept once, so it is still there after it is solved or dismissed
+  const savedKeys = useRef(new Set<string>())
+  useEffect(() => {
+    if (!uid || loading) return
+    const known = new Set(stored.map((n) => n.derivedKey).filter(Boolean) as string[])
+    const fresh = derived.filter((n) => !known.has(n.key) && !savedKeys.current.has(n.key))
+    if (fresh.length === 0) return
+    fresh.forEach((n) => savedKeys.current.add(n.key))
+    saveDerivedNotifications(uid, fresh)
+      .then(() => refresh())
+      .catch(() => fresh.forEach((n) => savedKeys.current.delete(n.key)))
+  }, [uid, loading, derived, stored, refresh])
 
   // how many of the alerts that apply right now were dismissed here
   const hiddenCount = useMemo(() => {
@@ -172,21 +200,34 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     if (n.read || n.source === 'invite') return
     if (n.source === 'stored') {
       setStored((prev) => prev.map((x) => (x.key === n.key ? { ...x, read: true } : x)))
+      // read from the history: the live alert it copies is read too
+      if (n.derivedKey) saveLocal({ ...local, read: [...new Set([...local.read, n.derivedKey])] })
       await markNotificationsRead([n.key]).catch(() => {})
     } else {
       saveLocal({ ...local, read: [...local.read, n.key] })
+      const copies = copiesOf([n.key])
+      if (copies.length) {
+        setStored((prev) => prev.map((x) => (copies.includes(x.key) ? { ...x, read: true } : x)))
+        await markNotificationsRead(copies).catch(() => {})
+      }
     }
-  }, [local, saveLocal])
+  }, [local, saveLocal, copiesOf])
 
   const markUnread = useCallback(async (n: AppNotification) => {
     if (!n.read || n.source === 'invite') return
     if (n.source === 'stored') {
       setStored((prev) => prev.map((x) => (x.key === n.key ? { ...x, read: false } : x)))
+      if (n.derivedKey) saveLocal({ ...local, read: local.read.filter((k) => k !== n.derivedKey) })
       await markNotificationsUnread([n.key]).catch(() => {})
     } else {
       saveLocal({ ...local, read: local.read.filter((k) => k !== n.key) })
+      const copies = copiesOf([n.key])
+      if (copies.length) {
+        setStored((prev) => prev.map((x) => (copies.includes(x.key) ? { ...x, read: false } : x)))
+        await markNotificationsUnread(copies).catch(() => {})
+      }
     }
-  }, [local, saveLocal])
+  }, [local, saveLocal, copiesOf])
 
   const markAllRead = useCallback(async () => {
     const storedIds = stored.filter((n) => !n.read).map((n) => n.key)
@@ -198,19 +239,24 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const remove = useCallback(async (n: AppNotification) => {
     if (n.source === 'invite') return
     if (n.source === 'stored') {
-      setStored((prev) => prev.filter((x) => x.key !== n.key))
-      await deleteNotifications([n.key]).catch(() => {})
+      setStored((prev) => prev.map((x) => (x.key === n.key ? { ...x, archived: true, read: true } : x)))
+      await archiveNotifications([n.key]).catch(() => {})
     } else {
       saveLocal({ ...local, hidden: [...local.hidden, n.key] })
+      const copies = copiesOf([n.key])
+      if (copies.length) {
+        setStored((prev) => prev.map((x) => (copies.includes(x.key) ? { ...x, archived: true, read: true } : x)))
+        await archiveNotifications(copies).catch(() => {})
+      }
     }
-  }, [local, saveLocal])
+  }, [local, saveLocal, copiesOf])
 
   const clearAll = useCallback(async () => {
-    const ids = stored.map((n) => n.key)
-    setStored([])
+    const ids = [...stored.filter((n) => !n.archived && !n.derivedKey).map((n) => n.key), ...copiesOf(derived.map((n) => n.key))]
+    setStored((prev) => prev.map((x) => (ids.includes(x.key) ? { ...x, archived: true, read: true } : x)))
     saveLocal({ ...local, hidden: [...new Set([...local.hidden, ...derived.map((n) => n.key)])] })
-    await deleteNotifications(ids).catch(() => {})
-  }, [stored, derived, local, saveLocal])
+    await archiveNotifications(ids).catch(() => {})
+  }, [stored, derived, local, saveLocal, copiesOf])
 
   // ── invitations ────────────────────────────────────────────────────────────
   const acceptInvite = useCallback(async (n: AppNotification) => {
@@ -238,8 +284,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   }, [refresh])
 
   const value = useMemo<NotificationsValue>(
-    () => ({ notifications, unread, unreadByZone, loading, refresh, markRead, markUnread, markAllRead, remove, clearAll, hiddenCount, restoreHidden, acceptInvite, declineInvite }),
-    [notifications, unread, unreadByZone, loading, refresh, markRead, markUnread, markAllRead, remove, clearAll, hiddenCount, restoreHidden, acceptInvite, declineInvite],
+    () => ({ notifications, history, unread, unreadByZone, loading, refresh, markRead, markUnread, markAllRead, remove, clearAll, hiddenCount, restoreHidden, acceptInvite, declineInvite }),
+    [notifications, history, unread, unreadByZone, loading, refresh, markRead, markUnread, markAllRead, remove, clearAll, hiddenCount, restoreHidden, acceptInvite, declineInvite],
   )
   return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>
 }

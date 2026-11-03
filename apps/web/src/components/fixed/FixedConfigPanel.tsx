@@ -3,6 +3,9 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { clsx } from 'clsx'
+import { format } from 'date-fns'
+import { es } from 'date-fns/locale'
+import { scheduledDate } from './ProgramExpenseModal'
 import { Plus, Pencil, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
@@ -58,9 +61,11 @@ interface Props {
   /** Provides the occasional expenses (stored with the salary data) and their create/edit actions. */
   salary: SalaryState
   onChanged: () => void
+  /** Opens the dialog that schedules a one-off payment (or edits the given scheduled one). */
+  onProgram: (fe?: any) => void
 }
 
-export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onChanged }: Props) {
+export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onChanged, onProgram }: Props) {
   const { showToast } = useToast()
   const ask = useConfirm()
   const [modalOpen, setModalOpen] = useState(false)
@@ -86,6 +91,8 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
   }
 
   function openEdit(fe: any) {
+    // a scheduled payment has its own, simpler dialog
+    if (fe.oneTime) { onProgram(fe); return }
     setEditing(fe)
     form.reset({
       concept: fe.concept,
@@ -249,7 +256,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
         >
           <span className={clsx('inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform', on ? 'translate-x-[18px]' : 'translate-x-[2px]')} />
         </button>
-        {open && (
+        {open && !item.oneTime && (
           <p className="text-[9px] text-amber-300 mt-0.5 whitespace-nowrap">
             {open.from <= currentMonth ? `Inactivo desde ${open.from}` : `Se desactiva ${open.from}`}
           </p>
@@ -258,7 +265,8 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
     )
   }
   // What the fixed expenses cost per month on average: one paid every N months counts as 1/N of its bill
-  const fixedOnly = expenses.filter((e) => e.frequency !== 'ocasional')
+  const fixedOnly = expenses.filter((e) => e.frequency !== 'ocasional' && !e.oneTime)
+  const scheduledCount = expenses.filter((e) => e.oneTime).length
   const total = fixedOnly.reduce((s, e) => s + e.estimatedAmount / (e.everyMonths ?? 1), 0)
   const hasSpread = fixedOnly.some((e) => (e.everyMonths ?? 1) > 1)
   const ocasionales = salary.budgets.filter((b) => b.active)
@@ -273,7 +281,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-xs text-[#9aa4ac]">
-          {expenses.length} fijos · {hasSpread ? 'equivalente mensual' : 'estimado mensual'}{' '}
+          {fixedOnly.length} fijos{scheduledCount > 0 ? ` · ${scheduledCount} programado${scheduledCount === 1 ? '' : 's'}` : ''} · {hasSpread ? 'equivalente mensual' : 'estimado mensual'}{' '}
           <span className="font-mono font-bold text-[#f0fae8]">{formatCOP(Math.round(total))}</span>
           {hasSpread && <span className="text-[#8a929a]"> (los que se pagan cada varios meses se prorratean)</span>}
           {ocasionales.length > 0 && (
@@ -289,6 +297,9 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
           </Button>
           <Button size="sm" notched onClick={() => setOcasional({ editing: null })}>
             <Plus size={15} /> Nuevo gasto ocasional
+          </Button>
+          <Button size="sm" notched onClick={() => onProgram()}>
+            <Plus size={15} /> Programar gasto
           </Button>
         </div>
       </div>
@@ -345,7 +356,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
                 .map((fe) => {
                   const cat = FIXED_EXPENSE_CATEGORIES.find((c) => c.id === fe.category)
                   return (
-                    <tr key={fe.id} className={clsx('border-t border-white/[0.06] hover:bg-white/[0.03]', switchOff(fe) && 'opacity-60')}>
+                    <tr key={fe.id} className={clsx('border-t border-white/[0.06] hover:bg-white/[0.03]', switchOff(fe) && !fe.oneTime && 'opacity-60')}>
                       <td className="w-10 pl-3 py-2">
                         <input type="checkbox" aria-label={`Seleccionar ${fe.concept}`} checked={selected.includes(`fixed|${fe.id}`)} onChange={() => toggleRow(`fixed|${fe.id}`)} className="cursor-pointer" />
                       </td>
@@ -357,7 +368,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
                       <td className="px-2 py-2 text-right font-mono tabular-nums">{formatCOP(fe.estimatedAmount)}</td>
                       <td className="px-2 py-2 text-center font-mono">{fe.paymentDay ?? '—'}</td>
                       <td className="hidden sm:table-cell px-2 py-2 text-center text-[10px] text-[#9aa4ac]">
-                        {fe.frequency === 'ocasional' ? 'Ocasional' : fe.isVariable ? 'Fijo · monto variable' : 'Fijo'}{(fe.everyMonths ?? 1) > 1 ? ` · ${everyLabel(fe.everyMonths)}` : ''}{hasOpenAutoDebit(fe) ? ' · automático' : ''}
+                        {fe.oneTime ? `Programado · ${format(scheduledDate(fe), "d 'de' MMM yyyy", { locale: es })}` : fe.frequency === 'ocasional' ? 'Ocasional' : fe.isVariable ? 'Fijo · monto variable' : 'Fijo'}{(fe.everyMonths ?? 1) > 1 ? ` · ${everyLabel(fe.everyMonths)}` : ''}{hasOpenAutoDebit(fe) ? ' · automático' : ''}
                       </td>
                       {accountCell(fe)}
                       {activeCell('fixed', fe)}

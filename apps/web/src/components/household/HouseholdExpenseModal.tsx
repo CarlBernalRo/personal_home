@@ -1,4 +1,4 @@
-﻿import { useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -57,8 +57,10 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
 }) {
   const { showToast } = useToast()
   const [saving, setSaving] = useState(false)
+  // who shares the expense (everyone by default); the payer always takes part
+  const [excluded, setExcluded] = useState<Set<string>>(new Set())
 
-  const { register, handleSubmit, watch, reset, formState: { errors } } = useForm<FormValues>({
+  const { register, handleSubmit, watch, reset, setValue, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
       date:       format(new Date(), 'yyyy-MM-dd'),
@@ -73,9 +75,17 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
   const paidBy     = watch('paidBy')
   const amount     = watch('amount')
   const hasDueDate = watch('hasDueDate')
-  const other      = members.find((m) => m.uid !== paidBy)
+  const participants = members.filter((m) => m.uid === paidBy || !excluded.has(m.uid))
+  // percentage / fixed amounts only make sense between two people
+  const other      = participants.length === 2 ? participants.find((m) => m.uid !== paidBy) : undefined
+  const splitOptions = participants.length === 2 ? SPLIT_OPTIONS : SPLIT_OPTIONS.filter((o) => o.value === 'equal')
+  const effectiveMode: SplitMode = participants.length === 2 ? splitMode : 'equal'
+  const toggleMember = (uid: string) => setExcluded((prev) => { const n = new Set(prev); n.has(uid) ? n.delete(uid) : n.add(uid); return n })
+
+  useEffect(() => { if (participants.length !== 2 && splitMode !== 'equal') setValue('splitMode', 'equal') }, [participants.length, splitMode])
 
   function resetForm() {
+    setExcluded(new Set())
     reset({
       date: format(new Date(), 'yyyy-MM-dd'), paidBy: currentUserUid,
       splitMode: 'equal', category: HOUSEHOLD_DEBT_CATEGORIES[0].id, hasDueDate: false,
@@ -87,13 +97,18 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
       showToast('Necesitas que tu pareja se una al hogar antes de dividir un gasto', 'error')
       return
     }
-    const payer       = members.find((m) => m.uid === data.paidBy)!
-    const counterpart = members.find((m) => m.uid !== data.paidBy)!
+    if (participants.length < 2) {
+      showToast('Elige al menos a otra persona con quien dividir el gasto', 'error')
+      return
+    }
+    const payer       = participants.find((m) => m.uid === data.paidBy)!
+    const counterpart = participants.find((m) => m.uid !== data.paidBy)!
     const otherShare   = data.partnerShareInput ?? 0
 
-    const shareInputs: ExpenseShareInput[] = data.splitMode === 'equal'
-      ? members.map((m) => ({ memberId: m.uid }))
-      : data.splitMode === 'percentage'
+    const mode: SplitMode = participants.length === 2 ? data.splitMode : 'equal'
+    const shareInputs: ExpenseShareInput[] = mode === 'equal'
+      ? participants.map((m) => ({ memberId: m.uid }))
+      : mode === 'percentage'
         ? [
             { memberId: counterpart.uid, percentage: otherShare },
             { memberId: payer.uid,       percentage: 100 - otherShare },
@@ -112,7 +127,7 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
         category:     data.category,
         date:         new Date(data.date + 'T12:00:00'),
         paidBy:       data.paidBy,
-        splitMode:    data.splitMode,
+        splitMode:    mode,
         shareInputs,
         dueDate:      data.hasDueDate && data.dueDate ? new Date(data.dueDate + 'T12:00:00') : null,
         notes:        data.notes ?? '',
@@ -123,7 +138,7 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
       onCreated()
       showToast('Gasto compartido registrado', 'success')
       const me = members.find((m) => m.uid === currentUserUid)?.name || 'Alguien'
-      notifyHouseholdMembers(members.map((m) => m.uid), {
+      notifyHouseholdMembers(participants.map((m) => m.uid), {
         fromUid: currentUserUid, zone: 'hogar', severity: 'info',
         title: `${me} registró un gasto compartido`, body: `${data.description} · ${formatCOP(data.amount)}.`, link: `/hogar?id=${householdId}`,
       }).catch(() => { /* never undo what was saved */ })
@@ -136,7 +151,7 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
 
   const otherPreview = (() => {
     if (!amount || !other) return null
-    if (splitMode === 'equal') return amount / members.length
+    if (effectiveMode === 'equal') return amount / participants.length
     if (watch('partnerShareInput') === undefined) return null
     const v = watch('partnerShareInput') as number
     return splitMode === 'percentage' ? (amount * v) / 100 : v
@@ -166,9 +181,32 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
         <Select label="Categoría" options={CAT_OPTIONS} {...register('category')} />
         <Input label="Fecha del gasto" type="date" {...register('date')} />
 
-        <Select label="¿Cómo se divide?" options={SPLIT_OPTIONS} {...register('splitMode')} />
+        {members.length > 2 && (
+          <fieldset className="space-y-1.5">
+            <legend className="text-sm font-medium text-[#dcf1eb]">¿Entre quiénes se divide?</legend>
+            <div className="flex flex-wrap gap-2">
+              {members.map((m) => {
+                const isPayer = m.uid === paidBy
+                const on = isPayer || !excluded.has(m.uid)
+                return (
+                  <button
+                    key={m.uid}
+                    type="button"
+                    disabled={isPayer}
+                    aria-pressed={on}
+                    onClick={() => toggleMember(m.uid)}
+                    className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition ${on ? 'border-brand-400/70 bg-brand-500/15 text-brand-300' : 'border-white/10 text-[#8a929a] hover:border-white/25'} ${isPayer ? 'cursor-default' : ''}`}
+                    title={isPayer ? 'Quien pagó siempre participa' : undefined}
+                  >{m.name}</button>
+                )
+              })}
+            </div>
+          </fieldset>
+        )}
 
-        {splitMode !== 'equal' && other && (
+        <Select label="¿Cómo se divide?" options={splitOptions} {...register('splitMode')} />
+
+        {effectiveMode !== 'equal' && other && (
           <div className="flex flex-col gap-1">
             <label className="text-sm font-medium text-[#dcf1eb]">
               {splitMode === 'percentage' ? `Porcentaje que le corresponde a ${other.name}` : `Monto que le corresponde a ${other.name}`}
@@ -203,6 +241,11 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
         {otherPreview !== null && other && (
           <p className="text-xs text-[#9aa4ac] bg-[#0d263a] border border-white/10 rounded-xl p-3">
             {other.name} quedará debiendo <span className="font-semibold font-mono text-amber-300">{formatCOP(Math.round(otherPreview))}</span>
+          </p>
+        )}
+        {participants.length > 2 && !!amount && (
+          <p className="text-xs text-[#9aa4ac] bg-[#0d263a] border border-white/10 rounded-xl p-3">
+            Cada uno de los otros {participants.length - 1} le debe a {members.find((m) => m.uid === paidBy)?.name} <span className="font-semibold font-mono text-amber-300">{formatCOP(Math.floor(amount / participants.length))}</span>
           </p>
         )}
 

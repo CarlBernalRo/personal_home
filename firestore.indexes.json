@@ -55,6 +55,14 @@
         { "fieldPath": "userId", "order": "ASCENDING" },
         { "fieldPath": "month",  "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "fixedExpensePayments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "month",  "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

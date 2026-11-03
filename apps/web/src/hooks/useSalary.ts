@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { FIXED_DATA_CHANGED } from '@/hooks/useAutoDebits'
 import { useAuth } from '@/hooks/useAuth'
 import { addExpense, addIncome, deleteExpense, deleteIncome, getAccounts, getExpenses, getIncomes, updateExpense, updateUserProfile } from '@/lib/firestore'
 import { useAuthStore } from '@/store/auth'
@@ -42,6 +43,12 @@ export function useSalary() {
     try { setAccounts((await getAccounts(user.uid)) as any[]) } catch { /* keep what we had */ }
     setAccountsLoaded(true)
   }, [user])
+
+  // automatic debits saved elsewhere lowered some account
+  useEffect(() => {
+    window.addEventListener(FIXED_DATA_CHANGED, reloadAccounts)
+    return () => window.removeEventListener(FIXED_DATA_CHANGED, reloadAccounts)
+  }, [reloadAccounts])
 
   const load = useCallback(async () => {
     if (!user) return

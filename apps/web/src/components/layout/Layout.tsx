@@ -14,6 +14,7 @@ import { SideTip } from '@/components/ui/SideTip'
 import { SessionClock, SESSION_STATES, sessionStateOf } from '@/components/layout/SessionClock'
 import { ConfirmProvider } from '@/components/ui/ConfirmDialog'
 import { NotificationsProvider } from '@/hooks/useNotifications'
+import { useAutoDebits } from '@/hooks/useAutoDebits'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 
 interface NavItemDef {
@@ -239,6 +240,8 @@ function ProfileMenu({ variant, collapsed = false }: { variant: 'sidebar' | 'mob
 
 export default function Layout() {
   const { isAdmin } = useAuth()
+  // due automatic debits are saved as soon as the person is in the app, whichever screen they land on
+  useAutoDebits()
   const wideScreen = ['/', '/fijos', '/gastos', '/hogar', '/notificaciones', '/perfil', '/finanzas'].includes(useLocation().pathname)
   // The sidebar is icons only: sections are named by their tooltips, and it never expands
   const collapsed = true

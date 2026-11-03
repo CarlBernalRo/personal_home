@@ -10,8 +10,9 @@ interface Props {
   debt: Rec
   debts: Rec[]
   crossings: Rec[]
-  myName: string
-  partnerName: string
+  nameOf: (uid?: string | null) => string
+  /** Whom this debt is owed to (null when it can't be told). */
+  creditorId: string | null
   userUid?: string
   /** the other person has pending debts to cross against */
   canCross: boolean
@@ -23,17 +24,44 @@ interface Props {
 }
 
 const fmt = (d: unknown) => format(toDate(d), 'dd MMM yyyy', { locale: es })
+const STATUS_CHIP = {
+  open: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  partial: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  done: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+} as const
 const sectionTitle = 'font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold'
 
 /** Detail of one debt: what is left, its abonos and its crossings. Lives in the right pane. */
-export function HouseholdDebtDetail({ debt, debts, crossings, myName, partnerName, userUid, canCross, onBack, onCross, onAbonar, onDelete, onDeleteAbono }: Props) {
+export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId, userUid, canCross, onBack, onCross, onAbonar, onDelete, onDeleteAbono }: Props) {
   const abonos = debts.filter((a) => a.tipo === 'Abono' && a.saldaId === debt.id)
   const crosses = crossings.filter((c) => c.debt1Id === debt.id || c.debt2Id === debt.id)
   const dueDate = debt.dueDate ? toDate(debt.dueDate) : null
   const overdue = dueDate ? dueDate < new Date() : false
   const pending = isPendingDebt(debt)
-  const debtorName = debt.debtor === userUid ? myName : partnerName
-  const otherName = debt.debtor === userUid ? partnerName : myName
+  const debtorName = nameOf(debt.debtor)
+  const creditorName = creditorId ? nameOf(creditorId) : 'la otra persona'
+  const byName = (uid?: string) => nameOf(uid)
+
+  // What happened to this debt, in date order, with the balance left after each movement
+  const moves = [
+    ...abonos.map((a) => ({ id: `ab|${a.id}`, kind: 'abono' as const, date: toDate(a.date), amount: a.amount as number, by: byName(a.registeredBy), note: (a.notas as string) || '', onDelete: () => onDeleteAbono(a) })),
+    ...crosses.map((c) => ({ id: `cr|${c.id}`, kind: 'cruce' as const, date: toDate(c.createdAt), amount: c.amount as number, by: byName(c.initiatedBy), note: (c.notes as string) || '', onDelete: undefined as (() => void) | undefined })),
+  ].sort((a, b) => a.date.getTime() - b.date.getTime())
+  let running = debt.amount as number
+  const steps = [
+    { id: 'registro', label: 'Deuda registrada', color: '#f59e0b', date: toDate(debt.date), by: byName(debt.registeredBy), note: '', delta: debt.amount as number, balance: running, onDelete: undefined as (() => void) | undefined },
+    ...moves.map((m) => {
+      running -= m.amount
+      return { id: m.id, label: m.kind === 'abono' ? `Abono a ${creditorName}` : `Cruce con una deuda de ${creditorName}`, color: m.kind === 'abono' ? '#52b69a' : '#38bdf8', date: m.date, by: m.by, note: m.note, delta: -m.amount, balance: running, onDelete: m.onDelete }
+    }),
+  ]
+  const remainingNow = remainingOf(debt)
+  const status = remainingNow <= 0
+    ? { key: 'done' as const, label: debt.cruzado ? 'Cruzada' : 'Saldada' }
+    : remainingNow < (debt.amount as number)
+      ? { key: 'partial' as const, label: 'Abonada parcialmente' }
+      : { key: 'open' as const, label: 'Pendiente' }
+  const otherName = creditorName
 
   return (
     <div className="space-y-4 slide-up">
@@ -47,6 +75,11 @@ export function HouseholdDebtDetail({ debt, debts, crossings, myName, partnerNam
             <div className="min-w-0">
               <p className={clsx(sectionTitle, 'mb-1 flex items-center gap-2 flex-wrap')}>
                 Deuda seleccionada
+                {debt.loanId && (
+                  <span className="bg-amber-500/15 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded-md font-sans text-[9px] normal-case tracking-normal">
+                    Préstamo{debt.installments && debt.installments > 1 ? ` · cuota ${debt.installment}/${debt.installments}` : ''}
+                  </span>
+                )}
                 {debt.expenseId && (
                   <span className="bg-sky-500/15 text-sky-300 border border-sky-500/30 px-1.5 py-0.5 rounded-md font-sans text-[9px] normal-case tracking-normal flex items-center gap-1">
                     <ShoppingBag size={9} /> Gasto compartido
@@ -54,7 +87,9 @@ export function HouseholdDebtDetail({ debt, debts, crossings, myName, partnerNam
                 )}
               </p>
               <p className="text-base font-bold text-[#f3f5f6] break-words">{debt.concept}</p>
-              <p className="text-xs text-[#9aa4ac] mt-0.5">{debtorName} debe · {fmt(debt.date)}</p>
+              <p className="text-xs text-[#9aa4ac] mt-0.5">
+                {debt.loanId && debt.lender ? `${nameOf(debt.lender)} le prestó a ${debtorName} · ` : `${debtorName} le debe a ${creditorName} · `}{fmt(debt.date)}
+              </p>
               {dueDate && (
                 <p className={clsx('text-xs mt-0.5 flex items-center gap-1', overdue ? 'text-red-400 font-semibold' : 'text-[#9aa4ac]')}>
                   <Clock size={11} /> {overdue ? 'Venció el' : 'Vence el'} {fmt(dueDate)}
@@ -73,7 +108,7 @@ export function HouseholdDebtDetail({ debt, debts, crossings, myName, partnerNam
           )}
           {pending && !canCross && (
             <p className="text-[11px] text-[#9aa4ac] bg-[#0d263a] border border-white/10 rounded-xl p-2.5">
-              No se puede cruzar: {otherName} no tiene deudas pendientes.
+              No se puede cruzar: {otherName} no tiene deudas pendientes con {debtorName}.
             </p>
           )}
 
@@ -81,12 +116,16 @@ export function HouseholdDebtDetail({ debt, debts, crossings, myName, partnerNam
             {pending && (
               <>
                 <Button variant="secondary" notched className="flex-1" onClick={onCross} disabled={!canCross}
-                  title={canCross ? undefined : 'La otra persona no tiene deudas pendientes para cruzar'}>
+                  title={canCross ? undefined : `${otherName} no tiene deudas pendientes con ${debtorName} para cruzar`}>
                   <GitMerge size={14} /> Cruzar deuda
                 </Button>
-                <Button notched className="flex-1" onClick={onAbonar}>
-                  <Coins size={14} /> Abonar
-                </Button>
+                {debt.debtor === userUid ? (
+                  <Button notched className="flex-1" onClick={onAbonar}>
+                    <Coins size={14} /> Abonar
+                  </Button>
+                ) : (
+                  <p className="flex-1 self-center text-[11px] text-[#9aa4ac]">Solo {debtorName} puede abonar a esta deuda, desde su propia cuenta.</p>
+                )}
               </>
             )}
             <button onClick={onDelete} title="Eliminar" aria-label="Eliminar"
@@ -98,37 +137,40 @@ export function HouseholdDebtDetail({ debt, debts, crossings, myName, partnerNam
 
         <div className="space-y-4">
           <div className="notch bg-[#0a1f2f] border border-white/10 p-5 space-y-3">
-            <p className={sectionTitle}>Abonos realizados a esta deuda</p>
-            {abonos.length === 0 ? (
-              <p className="text-xs text-[#8a929a] py-3 text-center">Sin abonos para esta deuda</p>
-            ) : abonos.map((a) => (
-              <div key={a.id} className="pb-3 border-b border-white/[0.06] last:border-0 last:pb-0 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold text-brand-300 font-mono">{formatCOP(a.amount)} abonado</p>
-                  <p className="text-[10px] text-[#8a929a] truncate">{fmt(a.date)}{a.notas && ` · ${a.notas}`}</p>
-                </div>
-                <button onClick={() => onDeleteAbono(a)} title="Eliminar abono" aria-label="Eliminar abono"
-                  className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/15 transition">
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ))}
-          </div>
+            <div className="flex items-center justify-between gap-2">
+              <p className={sectionTitle}>Movimientos de esta deuda</p>
+              <span className={clsx('text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md border', STATUS_CHIP[status.key])}>{status.label}</span>
+            </div>
+            <p className="text-[11px] text-[#9aa4ac]">Cada movimiento que cambió lo que se debe, en orden, con el saldo que dejó. El estado de la deuda sale de estos movimientos.</p>
 
-          <div className="notch bg-[#0a1f2f] border border-white/10 p-5 space-y-3">
-            <p className={sectionTitle}>Cruces registrados</p>
-            {crosses.length === 0 ? (
-              <p className="text-xs text-[#8a929a] py-3 text-center">Sin cruces para esta deuda</p>
-            ) : crosses.map((c) => (
-              <div key={c.id} className="pb-3 border-b border-white/[0.06] last:border-0 last:pb-0">
-                <div className="flex justify-between items-start gap-2">
-                  <p className="text-xs font-semibold text-sky-300 font-mono">{formatCOP(c.amount)} cruzado</p>
-                  <p className="text-[10px] text-[#8a929a]">{fmt(c.createdAt)}</p>
-                </div>
-                {c.notes && <p className="text-[10px] text-[#dcf1eb] mt-0.5">{c.notes}</p>}
-                <p className="text-[10px] text-[#8a929a] mt-0.5">Por {c.initiatedBy === userUid ? myName : partnerName}</p>
-              </div>
-            ))}
+            <ol className="relative space-y-3 pl-5">
+              <span className="absolute left-[5px] top-1.5 bottom-1.5 w-px bg-white/15" aria-hidden />
+              {steps.map((st) => (
+                <li key={st.id} className="relative">
+                  <span className="absolute -left-5 top-1 w-2.5 h-2.5 rounded-full ring-2 ring-[#0a1f2f]" style={{ backgroundColor: st.color }} aria-hidden />
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold" style={{ color: st.color }}>{st.label}</p>
+                      <p className="text-[10px] text-[#8a929a]">{fmt(st.date)}{st.by ? ` · ${st.by}` : ''}{st.note ? ` · ${st.note}` : ''}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-xs font-mono font-bold text-[#f3f5f6]">{st.delta > 0 ? '+' : '−'}{formatCOP(Math.abs(st.delta))}</p>
+                      <p className="text-[10px] font-mono text-[#8a929a]">saldo {formatCOP(Math.max(0, st.balance))}</p>
+                    </div>
+                    {st.onDelete && (
+                      <button onClick={st.onDelete} title="Eliminar abono" aria-label="Eliminar abono" className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/15 transition flex-shrink-0">
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+
+            <p className="flex justify-between gap-3 border-t border-white/10 pt-2 text-xs font-mono">
+              <span className="text-[#9aa4ac]">Saldo actual</span>
+              <span className={clsx('font-bold', remainingOf(debt) > 0 ? 'text-amber-300' : 'text-emerald-300')}>{formatCOP(Math.max(0, remainingOf(debt)))}</span>
+            </p>
           </div>
         </div>
       </div>

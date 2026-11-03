@@ -8,6 +8,17 @@ export interface HouseholdDebt {
   tipo: DebtTipo;
   amount: number;
   debtor: string;
+  /** Whom it is owed to (who paid the expense / lent the money / receives the abono). Old records lack it. */
+  creditor?: string | null;
+  /** Abonos made by one payment share this id (a payment of $500.000 split across several debts). */
+  paymentId?: string | null;
+  /** Account the abono was paid from (its balance went down by the amount). */
+  accountId?: string | null;
+  /** For an abono paid to another member: 'pending' until they confirm they received it. */
+  receiptStatus?: 'pending' | 'confirmed' | null;
+  /** The receiver's account the money landed in, and the income that was registered for it. */
+  receivedAccountId?: string | null;
+  incomeId?: string | null;
   category: string;
   date: Date;
   registeredBy: string;
@@ -19,6 +30,13 @@ export interface HouseholdDebt {
   expenseId?: string | null;
   /** Agreed payment deadline for this debt. Omitted/null = open-ended, no fixed date. */
   dueDate?: Date | null;
+  /** A loan: every installment of the same loan shares this id. */
+  loanId?: string | null;
+  /** Who lent the money (the debtor is who received it). */
+  lender?: string | null;
+  /** Position of this installment in its loan, and how many there are. */
+  installment?: number | null;
+  installments?: number | null;
   createdAt: Date;
 }
 

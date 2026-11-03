@@ -23,6 +23,20 @@ export function isPendingDebt(d: { tipo: string; cruzado?: boolean } & Settleabl
   return d.tipo === 'Deuda' && !d.cruzado && remainingOf(d) > 0;
 }
 
+const asTime = (d: unknown): number => (d instanceof Date ? d.getTime() : d ? new Date(d as any).getTime() : NaN);
+
+/**
+ * The order a payment is applied to pending debts: the one that falls due first, then the oldest. A debt with
+ * an agreed date goes before one without, so the installments of a loan are paid in their order.
+ */
+export function inPaymentOrder<T extends { dueDate?: unknown; date?: unknown; createdAt?: unknown }>(debts: T[]): T[] {
+  const key = (t: number) => (isNaN(t) ? Infinity : t);
+  return [...debts].sort((a, b) =>
+    key(asTime(a.dueDate)) - key(asTime(b.dueDate))
+    || key(asTime(a.date)) - key(asTime(b.date))
+    || key(asTime(a.createdAt)) - key(asTime(b.createdAt)));
+}
+
 /**
  * Fills each debt's remaining balance in order until the amount runs out —
  * oldest-first by convention of the `debts` order passed in, so a partial
