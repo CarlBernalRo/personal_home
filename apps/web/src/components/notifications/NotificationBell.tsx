@@ -48,8 +48,13 @@ export function NotificationBell({ variant }: Props) {
 
   useEffect(() => {
     if (!open) return
+    // Phones: the Modal closes itself (backdrop / swipe). This "tap outside" listener is for the floating panel only; on a
+    // phone the sheet lives outside panelRef, so it would close the sheet on touchstart, before a tap on "Ver todas" or on a
+    // card could turn into a click.
+    const floating = !isMobile
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close() }
     function onDown(e: MouseEvent | TouchEvent) {
+      if (!floating) return
       const t = e.target as Node
       if (panelRef.current?.contains(t) || btnRef.current?.contains(t)) return
       setOpen(false)
@@ -64,7 +69,7 @@ export function NotificationBell({ variant }: Props) {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('touchstart', onDown)
     }
-  }, [open, close, place])
+  }, [open, close, place, isMobile])
 
   // how urgent the unread ones are decides the colour and speed of the bell
   const unreadList = notifications.filter((n) => !n.read)

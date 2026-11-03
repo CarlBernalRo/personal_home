@@ -13,6 +13,9 @@
  * FIREBASE_SERVICE_ACCOUNT (the JSON of a service account allowed to use Firestore).
  */
 
+import { createDb } from './db'
+import { COMMANDS, HELP, runCommand } from './commands'
+
 interface Env {
   TELEGRAM_BOT_TOKEN: string
   WEBHOOK_SECRET: string
@@ -96,9 +99,25 @@ async function handle(env: Env, msg: any) {
     return
   }
 
+  // read-only commands (/saldo, /proximos…): only for a chat that is linked to a profile
+  if (/^\/(?!start\b|stop\b)\w+/i.test(text)) {
+    const owner = (await usersWhere(env, 'telegramChatId', String(chatId)))[0]
+    if (!owner) {
+      await say(env, chatId, 'Primero vincula tu cuenta: entra a la app → <b>Perfil → Avisos</b> y toca <b>Vincular Telegram</b>.')
+      return
+    }
+    const sa = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT)
+    const db = createDb(sa.project_id, () => accessToken(sa))
+    let answer: string | null
+    try { answer = await runCommand(db, owner.name.split('/').pop()!, text) } catch (e) { console.error(e); answer = 'No pude consultar tus datos ahora. Intenta de nuevo en un momento.' }
+    await say(env, chatId, answer ?? `No conozco ese comando.\n\n${HELP}`)
+    return
+  }
+
   const code = text.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9]{6,32})$/i)?.[1]?.toUpperCase()
   if (!code) {
-    await say(env, chatId, 'Hola 👋 Para recibir tus avisos, entra a la app → <b>Perfil → Avisos</b>, toca <b>Vincular Telegram</b> y abre el enlace que te muestra.')
+    const known = (await usersWhere(env, 'telegramChatId', String(chatId)))[0]
+    await say(env, chatId, known ? `Hola 👋 Tu cuenta ya está vinculada.\n\n${HELP}` : 'Hola 👋 Para recibir tus avisos, entra a la app → <b>Perfil → Avisos</b>, toca <b>Vincular Telegram</b> y abre el enlace que te muestra.')
     return
   }
 
@@ -115,12 +134,20 @@ async function handle(env: Env, msg: any) {
     telegramChatId: { stringValue: String(chatId) },
     telegramLinkedAt: { timestampValue: new Date().toISOString() },
   })
-  await say(env, chatId, '✅ <b>Telegram vinculado.</b> Aquí te llegarán tus avisos de Gastos Hogar. Escribe /stop para dejar de recibirlos.')
+  await say(env, chatId, `✅ <b>Telegram vinculado.</b> Aquí te llegarán tus avisos de Gastos Hogar.\n\n${HELP}`)
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') return new Response('ok')
+    // POST /setup (same secret header): publishes the command list so Telegram shows the "/" menu
+    if (new URL(request.url).pathname === '/setup') {
+      if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('forbidden', { status: 403 })
+      const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/setMyCommands`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ commands: COMMANDS }),
+      })
+      return new Response(await res.text(), { status: res.status })
+    }
     // only Telegram knows this secret (it sends it in a header with every update)
     if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('forbidden', { status: 403 })
     try {

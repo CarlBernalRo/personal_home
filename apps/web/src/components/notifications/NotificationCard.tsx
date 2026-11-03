@@ -12,7 +12,7 @@ import { SEVERITY_ICON, SEVERITY_LABEL, SEVERITY_STYLE, ZONE_ICON, ZONE_LABEL, r
 
 interface Props {
   n: AppNotification
-  /** Compact: used inside the bell dropdown (no dismiss button, clamped text). */
+  /** Compact: used inside the bell dropdown and the phone sheet (read toggle only, no dismiss button, clamped text). */
   compact?: boolean
   /** Shown in the history: no dismiss / read actions, and it says when it was dismissed. */
   historical?: boolean
@@ -105,7 +105,7 @@ export function NotificationCard({ n, compact = false, historical = false, onNav
           </span>
         </button>
 
-        {!isInvite && !compact && !historical && (
+        {!isInvite && !historical && (
           <div className="flex flex-shrink-0 items-center gap-0.5">
             <IconTip text={n.read ? 'Marcar como no leída' : 'Marcar como leída'} className="inline-flex">
               <button
@@ -117,16 +117,18 @@ export function NotificationCard({ n, compact = false, historical = false, onNav
                 {n.read ? <Mail size={14} /> : <MailOpen size={14} />}
               </button>
             </IconTip>
-            <IconTip text="Descartar notificación" className="inline-flex">
-              <button
-                type="button"
-                onClick={() => remove(n)}
-                aria-label={`Descartar: ${n.title}`}
-                className="p-1.5 rounded-lg text-[#6f7a83] hover:text-red-300 hover:bg-red-500/10 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400"
-              >
-                <Trash2 size={14} />
-              </button>
-            </IconTip>
+            {!compact && (
+              <IconTip text="Descartar notificación" className="inline-flex">
+                <button
+                  type="button"
+                  onClick={() => remove(n)}
+                  aria-label={`Descartar: ${n.title}`}
+                  className="p-1.5 rounded-lg text-[#6f7a83] hover:text-red-300 hover:bg-red-500/10 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </IconTip>
+            )}
           </div>
         )}
       </div>
