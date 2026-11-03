@@ -99,10 +99,11 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
   // Drawn on <body>: an ancestor with a transform or overflow (animated pages, scroll panes) would clip a fixed overlay
   return createPortal(
     <div
-      className="fixed inset-x-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 fade-in overscroll-contain"
+      className="fixed inset-x-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 overscroll-contain"
       style={box ? { top: box.top, height: box.height } : { top: 0, bottom: 0 }}
     >
-      <div className="absolute inset-0 bg-black/75 backdrop-blur-md transition-opacity touch-none" onClick={onClose} />
+      {/* The backdrop animates its own tint and blur: fading the whole overlay would stop the blur from showing until the end */}
+      <div className="absolute inset-0 modal-backdrop touch-none" onClick={onClose} />
       <div
         ref={sheetRef}
         role="dialog"

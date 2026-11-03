@@ -14,6 +14,7 @@ import { TrendChart } from '@/components/dashboard/TrendChart'
 import { BalanceChart } from '@/components/dashboard/BalanceChart'
 import { FixedZone } from '@/components/dashboard/FixedZone'
 import { ExpensesZone } from '@/components/dashboard/ExpensesZone'
+import { ExpensesSchedule } from '@/components/dashboard/ExpensesSchedule'
 import { AccountsZone } from '@/components/dashboard/AccountsZone'
 import { HouseholdZone } from '@/components/dashboard/HouseholdZone'
 import { GoalsCard } from '@/components/dashboard/GoalsCard'
@@ -68,7 +69,7 @@ export default function DashboardPage() {
         <div className="min-w-0">
           <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 mb-1.5 notch-sm bg-brand-500/10 border border-brand-500/30 text-brand-400 font-pixel text-[8px] uppercase tracking-wider glow-brand-sm">
             <Sparkles size={10} aria-hidden="true" />
-            <span>Período de sueldo</span>
+            <span>{data.salary.periodMode === 'calendar' ? 'Mes calendario' : 'Período de sueldo'}</span>
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-[#f0fae8] capitalize truncate">{monthLabel} <span className="text-brand-400">{y}</span></h1>
           <p className="mt-1.5 inline-flex items-center gap-2 notch-sm px-3 py-1.5 bg-brand-500/10 border border-brand-500/30 text-sm font-mono font-semibold text-brand-200">
@@ -98,6 +99,10 @@ export default function DashboardPage() {
         <CurvedScrollContainer className={`lg:flex-1 lg:min-h-0 ${framed}`} {...scrollProps}>
           <MobileCollapse title="Cronograma de períodos">
             <ScheduleTimeline salary={data.salary} expenses={data.fixed.expenses} paymentIndex={data.fixed.paymentIndex} />
+          </MobileCollapse>
+
+          <MobileCollapse title="Cronograma de gastos">
+            <ExpensesSchedule data={data} />
           </MobileCollapse>
 
           <MobileCollapse title="Tendencias y saldo proyectado">

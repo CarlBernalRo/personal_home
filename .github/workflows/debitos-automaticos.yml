@@ -1,0 +1,56 @@
+name: Débitos automáticos
+
+# Guarda cada día, como pagos reales, los débitos automáticos que ya vencieron y descuenta de su cuenta.
+# 11:00 UTC = 6:00 a.m. en Colombia. También se puede correr a mano desde la pestaña Actions.
+on:
+  schedule:
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Escribir en la base (si no, solo simula y lista lo que haría)'
+        type: boolean
+        default: false
+
+# one run at a time, so two never overlap
+concurrency:
+  group: debitos-automaticos
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TZ: America/Bogota
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: scripts/ci/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: scripts/ci
+        run: npm ci
+
+      - name: Credenciales (archivo temporal, se borra al terminar)
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+      - name: Guardar los débitos automáticos vencidos
+        working-directory: scripts/ci
+        # on a schedule it always writes; by hand it writes only when "apply" is ticked
+        run: ./node_modules/.bin/tsx materialize-auto-debits.ts ${{ (github.event_name == 'schedule' || inputs.apply) && '--apply' || '' }}
+
+      - name: Borrar credenciales
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"

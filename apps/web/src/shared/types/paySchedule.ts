@@ -12,4 +12,11 @@ export interface PaySchedule {
   weekendAdjust: WeekendAdjust;
   /** Account where the salary is deposited when it is confirmed. */
   accountId?: string;
+  /**
+   * How the user counts their periods: 'salary' (default) from one pay day to the next, or 'calendar' by
+   * calendar month, whatever day they are paid.
+   */
+  periodMode?: PeriodMode;
 }
+
+export type PeriodMode = 'salary' | 'calendar';

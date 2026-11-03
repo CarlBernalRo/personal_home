@@ -1,0 +1,9 @@
+{
+  "name": "gastos-hogar-jobs",
+  "private": true,
+  "description": "Tareas programadas que corren en GitHub Actions (no forman parte de la app web)",
+  "dependencies": {
+    "firebase-admin": "12.7.0",
+    "tsx": "4.19.2"
+  }
+}

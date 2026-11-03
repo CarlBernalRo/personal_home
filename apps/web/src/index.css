@@ -46,6 +46,20 @@
 .fade-in { animation: fadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
 .slide-up { animation: slideUp 0.28s cubic-bezier(0.16, 1, 0.3, 1); }
 .scale-in { animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+/* Dialog backdrop: tint and blur grow together, so the page behind softens smoothly while the dialog opens.
+   (Fading the whole overlay in would hide the blur until the fade ended and then make it pop in.) */
+.modal-backdrop {
+  background-color: rgba(0, 0, 0, 0.75);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  animation: backdropIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes backdropIn {
+  from { background-color: rgba(0, 0, 0, 0); -webkit-backdrop-filter: blur(0px); backdrop-filter: blur(0px); }
+  to   { background-color: rgba(0, 0, 0, 0.75); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+}
+@media (prefers-reduced-motion: reduce) { .modal-backdrop { animation: none; } }
+
 /* Phones: dialogs rise from the bottom like a sheet; from sm up the card keeps its scale-in */
 .sheet-in { animation: sheetIn 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
 @media (min-width: 640px) { .sheet-in { animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1); } }
@@ -62,6 +76,13 @@
   textarea {
     font-size: 16px !important;
   }
+}
+
+/* Keyboard focus: every control gets a visible ring when it is reached with the keyboard. :where() keeps the
+   specificity at zero, so a component's own focus style still wins. */
+:where(button, a[href], summary, [role='button'], [role='tab'], [role='radio'], [role='option'], [tabindex]:not([tabindex='-1'])):focus-visible {
+  outline: 2px solid #52b69a;
+  outline-offset: 2px;
 }
 
 @keyframes fadeIn {

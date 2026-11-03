@@ -1,12 +1,18 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { addMonths, format, startOfMonth } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { CalendarRange, CircleCheck, TriangleAlert } from 'lucide-react'
+import { CalendarRange, Download, TriangleAlert } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { SalaryState } from '@/hooks/useSalary'
+import { useFocusToday } from '@/hooks/useFocusToday'
 import { Modal } from '@/components/ui/Modal'
+import { entryDisplayDate } from '@/components/fixed/status'
+import { Button } from '@/components/ui/Button'
+import { useToast } from '@/components/ui/Toast'
+import { useDisplayName } from '@/hooks/useDisplayName'
+import { downloadPeriodReport } from '@/lib/periodReport'
 import {
-  entryKey, formatCOP, monthEntries, monthKey, monthRange, payDatesBetween, salaryLedgers, PERSONAL_CATEGORIES,
+  entryKey, formatCOP, monthEntries, monthKey, monthRange, payDatesBetween, salaryLedgers, PERSONAL_CATEGORIES, FIXED_EXPENSE_CATEGORIES,
   type PeriodLedger, type SalaryPeriod,
 } from '@/shared'
 import { compactCOP, DashCard, EmptyNote, SERIES } from './shared'
@@ -87,34 +93,49 @@ export function ScheduleTimeline({ salary, expenses, paymentIndex }: Props) {
 
     // the pay schedule says when the next ones fall; they get no breakdown until the salary is paid
     const lastEnd = [...confirmed].sort((a, b) => b.end.getTime() - a.end.getTime())[0]?.end
-    const pays = salary.schedule && lastEnd ? payDatesBetween(salary.schedule, lastEnd, to) : []
-    const upcoming = pays.map((p, i): Block => {
+    // by calendar month the next periods are the coming months, with the salary the schedule expects in each
+    const calendarNext: { date: Date; amount: number; end: Date }[] = []
+    if (salary.periodMode === 'calendar' && salary.schedule && lastEnd) {
+      for (let s = new Date(lastEnd.getFullYear(), lastEnd.getMonth(), 1); s.getTime() < to.getTime(); s = new Date(s.getFullYear(), s.getMonth() + 1, 1)) {
+        const e = new Date(s.getFullYear(), s.getMonth() + 1, 1)
+        const amount = payDatesBetween(salary.schedule, s, lastDay(e)).reduce((sum, x) => sum + x.amount, 0)
+        if (amount > 0) calendarNext.push({ date: s, amount, end: e })
+      }
+    }
+    const pays = salary.periodMode === 'calendar' ? [] : salary.schedule && lastEnd ? payDatesBetween(salary.schedule, lastEnd, to) : []
+    const upcoming = [...calendarNext.map((c): Block => ({
+      id: `next|${c.date.getTime()}`, start: c.date, end: c.end, amount: c.amount, upcoming: true, current: false,
+      parts: [], whole: 0, overrun: 0, period: { id: `next|${c.date.getTime()}`, start: c.date, end: c.end, amount: c.amount }, ledger: null,
+    })), ...pays.map((p, i): Block => {
       const end = pays[i + 1]?.date ?? new Date(p.date.getTime() + 30 * DAY_MS)
       return {
         id: `next|${p.date.getTime()}`, start: p.date, end, amount: p.amount, upcoming: true, current: false,
         parts: [], whole: 0, overrun: 0, period: { id: `next|${p.date.getTime()}`, start: p.date, end, amount: p.amount }, ledger: null,
       }
-    })
+    })]
     return [...done, ...upcoming]
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [salary.periods, salary.schedule, salary.extras, salary.variable, expenses, paymentIndex, from.getTime()])
+  }, [salary.periods, salary.schedule, salary.periodMode, salary.extras, salary.variable, expenses, paymentIndex, from.getTime()])
 
   const months = Array.from({ length: MONTHS_SHOWN }, (_, i) => addMonths(from, i))
   const todayPct = pct(today)
   const hasDone = blocks.some((b) => !b.upcoming)
+  // on a narrow screen the timeline scrolls sideways: open it with today in the middle
+  const scroller = useRef<HTMLDivElement>(null)
+  useFocusToday(scroller, () => (scroller.current ? (scroller.current.scrollWidth * todayPct) / 100 : null), hasDone)
 
   return (
     <DashCard
-      title="Cronograma por período"
+      title={salary.periodMode === 'calendar' ? 'Cronograma por mes' : 'Cronograma por período'}
       eyebrow="Snapshot mensual"
       icon={CalendarRange}
       tone={SERIES.fixed}
-      info="Cada bloque es un período de sueldo ya pagado, repartido en colores según a dónde fue el dinero. Haz clic en uno para ver el detalle. Los punteados son los próximos pagos según tu calendario: solo muestran fechas y sueldo esperado."
+      info="Cada bloque es un período ya iniciado (de pago a pago, o un mes calendario según lo que elegiste en tu perfil), repartido en colores según a dónde fue el dinero. Haz clic en uno para ver el detalle. Los punteados son los próximos pagos según tu calendario: solo muestran fechas y sueldo esperado."
     >
       {!hasDone ? (
         <EmptyNote icon={CalendarRange}>Confirma tu sueldo para ver el cronograma de tus períodos.</EmptyNote>
       ) : (
-        <div className="overflow-x-auto scrollbar-none -mx-1 px-1">
+        <div ref={scroller} className="overflow-x-auto scrollbar-none -mx-1 px-1">
           <div className="min-w-[560px]">
             {/* month axis */}
             <div className="relative h-4 border-b border-white/10 mb-2">
@@ -244,7 +265,7 @@ function PeriodDetail({ block, salary, expenses, paymentIndex, onClose }: {
       .sort((a, b) => a.e.due!.getTime() - b.e.due!.getTime())
     const additional = salary.personal
       .filter((x) => x.tracked && !x.variableBudgetId)
-      .map((x) => ({ id: x.id as string, concept: x.description as string, category: x.category as string, amount: x.amount as number, date: (x.date instanceof Date ? x.date : new Date(x.date)) as Date }))
+      .map((x) => ({ id: x.id as string, concept: x.description as string, category: x.category as string, amount: x.amount as number, accountId: x.accountId as string | undefined, date: (x.date instanceof Date ? x.date : new Date(x.date)) as Date }))
       .filter((x) => inPeriod(x.date, p))
       .sort((a, b) => a.date.getTime() - b.date.getTime())
     const occasional = salary.spends
@@ -254,77 +275,93 @@ function PeriodDetail({ block, salary, expenses, paymentIndex, onClose }: {
     return { fixed, additional, occasional, extras }
   }, [block, salary.personal, salary.spends, salary.extras, expenses, paymentIndex])
 
+  const userName = useDisplayName()
+  const { showToast } = useToast()
+  const [downloading, setDownloading] = useState(false)
+
   if (!block || !block.ledger || !detail) return null
   const { period: p, ledger: l } = block
   const day = (d: Date) => format(d, "d 'de' MMM", { locale: es })
   const available = p.amount + l.extraTotal + l.carryIn
+  const used = l.committed + l.additionalSpent + l.variableSpent + l.variableReserved
+  const pctUsed = available > 0 ? Math.round((used / available) * 100) : 0
 
-  const Line = ({ label, value, tone }: { label: string; value: string; tone?: string }) => (
-    <p className="flex justify-between gap-3 text-xs"><span className="text-[#9aa4ac]">{label}</span><span className={clsx('font-mono font-semibold', tone ?? 'text-[#f0fae8]')}>{value}</span></p>
-  )
-  const Item = ({ left, sub, right }: { left: string; sub?: string; right: string }) => (
-    <li className="flex items-start justify-between gap-3 text-xs">
-      <span className="min-w-0"><span className="block truncate text-[#f0fae8]">{left}</span>{sub && <span className="block text-[10px] text-[#8a929a]">{sub}</span>}</span>
-      <span className="font-mono text-[#c7ccd1] flex-shrink-0">{right}</span>
-    </li>
-  )
-  const Section = ({ color, title: t, total, children }: { color: string; title: string; total: number; children: React.ReactNode }) => (
-    <div className="space-y-1.5">
-      <p className="flex items-center justify-between gap-2 text-[11px] font-semibold text-[#9aa4ac]">
-        <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-[3px]" style={{ backgroundColor: color }} aria-hidden="true" />{t}</span>
-        <span className="font-mono text-[#f0fae8]">{formatCOP(total)}</span>
-      </p>
-      <ul className="space-y-1.5 pl-4">{children}</ul>
-    </div>
-  )
+  async function download() {
+    if (!block || !block.ledger || !detail) return
+    setDownloading(true)
+    try {
+      const accountName = (id?: string) => (id ? (salary.accounts.find((a: any) => a.id === id)?.name as string | undefined) : undefined) ?? ''
+      await downloadPeriodReport({
+        userName,
+        generatedAt: new Date(),
+        start: p.start,
+        end: lastDay(p.end),
+        salary: p.amount,
+        extras: detail.extras.map((x) => ({ concept: x.concept, date: x.date, amount: x.amount })),
+        extraTotal: l.extraTotal,
+        carryIn: l.carryIn,
+        available,
+        totals: { fixed: l.committed, additional: l.additionalSpent, occasional: l.variableSpent, reserved: l.variableReserved },
+        remaining: l.remaining,
+        fixed: detail.fixed.map(({ e, amount }) => ({
+          concept: e.fe.concept as string,
+          category: FIXED_EXPENSE_CATEGORIES.find((c) => c.id === e.fe.category)?.label ?? (e.fe.category as string),
+          // a paid payment goes on the day it was paid
+          due: entryDisplayDate(e),
+          amount,
+          state: e.owed.length === 0 ? 'Pagado' : e.arrears.length > 0 || e.status === 'overdue' ? 'Vencido' : 'Por pagar',
+          paidOn: e.owed.length === 0 && e.payment?.paymentDate ? (e.payment.paymentDate instanceof Date ? e.payment.paymentDate : new Date(e.payment.paymentDate)) : null,
+        })),
+        additional: detail.additional.map((x) => ({
+          concept: x.concept,
+          category: PERSONAL_CATEGORIES.find((c) => c.id === x.category)?.label ?? x.category,
+          date: x.date,
+          amount: x.amount,
+          account: accountName(x.accountId),
+        })),
+        occasional: detail.occasional.map((x) => ({ concept: x.concept, date: x.date, amount: x.amount })),
+        accounts: salary.accounts.map((a: any) => ({ name: a.name as string, balance: a.balance as number })),
+      })
+    } catch {
+      showToast('No se pudo generar el reporte', 'error')
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   return (
     <Modal open onClose={onClose} title={`Período ${day(p.start)} – ${day(lastDay(p.end))}`}>
       <div className="space-y-4">
-        <div className="space-y-1.5">
-          <Line label="Sueldo" value={formatCOP(p.amount)} />
-          {l.extraTotal > 0 && <Line label="Ingresos adicionales" value={`+${formatCOP(l.extraTotal)}`} tone="text-violet-300" />}
-          {l.carryIn !== 0 && <Line label={l.carryIn > 0 ? 'Sobrante anterior' : 'Faltante anterior'} value={`${l.carryIn > 0 ? '+' : '−'}${formatCOP(Math.abs(l.carryIn))}`} tone={l.carryIn > 0 ? 'text-sky-300' : 'text-red-300'} />}
-          <Line label="Disponible" value={formatCOP(available)} />
-          <div className="flex h-3 gap-px" aria-hidden="true">
-            {block.parts.map((x) => <div key={x.key} className="h-full rounded-[2px]" style={{ width: `${(x.value / block.whole) * 100}%`, backgroundColor: x.color }} />)}
-          </div>
-          <Line label={l.remaining < 0 ? 'Faltante del período' : 'Te queda'} value={formatCOP(l.remaining)} tone={l.remaining < 0 ? 'text-red-300' : 'text-brand-300'} />
+        <p className="text-sm text-[#c7ccd1] leading-relaxed">
+          {l.remaining < 0
+            ? <>Los gastos de este período superan lo disponible por <span className="font-mono font-semibold text-red-300">{formatCOP(-l.remaining)}</span>.</>
+            : <>De <span className="font-mono font-semibold text-[#f0fae8]">{formatCOP(available)}</span> disponibles ya hay comprometido el <span className="font-semibold text-[#f0fae8]">{pctUsed}%</span>. Te quedan <span className="font-mono font-semibold text-brand-300">{formatCOP(l.remaining)}</span>.</>}
+        </p>
+
+        <div className="flex h-3 gap-px" aria-hidden="true">
+          {block.parts.map((x) => <div key={x.key} className="h-full rounded-[2px]" style={{ width: `${(x.value / block.whole) * 100}%`, backgroundColor: x.color }} />)}
         </div>
 
-        {detail.fixed.length > 0 && (
-          <Section color={SERIES.fixed} title="Gastos fijos" total={l.committed}>
-            {detail.fixed.map(({ e, amount }) => (
-              <Item key={entryKey(e)} left={e.fe.concept} sub={`${day(e.due!)}${e.owed.length === 0 ? ' · pagado' : ''}`} right={formatCOP(amount)} />
-            ))}
-          </Section>
-        )}
-        {detail.additional.length > 0 && (
-          <Section color={SERIES.additional} title="Gastos adicionales" total={l.additionalSpent}>
-            {detail.additional.map((x) => <Item key={x.id} left={x.concept} sub={`${day(x.date)} · ${PERSONAL_CATEGORIES.find((c) => c.id === x.category)?.label ?? x.category}`} right={formatCOP(x.amount)} />)}
-          </Section>
-        )}
-        {detail.occasional.length > 0 && (
-          <Section color={SERIES.occasional} title="Gastos ocasionales" total={l.variableSpent}>
-            {detail.occasional.map((x) => <Item key={x.id} left={x.concept} sub={day(x.date)} right={formatCOP(x.amount)} />)}
-          </Section>
-        )}
-        {l.variableReserved > 0 && (
-          <Section color={SERIES.reserved} title="Reservado para ocasionales" total={l.variableReserved}>
-            <li className="text-[11px] text-[#8a929a]">Lo que aún no gastas de tus presupuestos ocasionales; sigue disponible hasta que cierre el período.</li>
-          </Section>
-        )}
-        {detail.extras.length > 0 && (
-          <div className="space-y-1.5">
-            <p className="text-[11px] font-semibold text-violet-300">Ingresos adicionales</p>
-            <ul className="space-y-1.5 pl-4">
-              {detail.extras.map((x) => <Item key={x.id} left={x.concept} sub={day(x.date)} right={`+${formatCOP(x.amount)}`} />)}
-            </ul>
-          </div>
-        )}
-        {detail.fixed.length + detail.additional.length + detail.occasional.length === 0 && (
-          <p className="flex items-center gap-2 text-xs text-[#8a929a]"><CircleCheck size={14} aria-hidden="true" /> Este período aún no tiene gastos registrados.</p>
-        )}
+        <ul className="grid grid-cols-2 gap-x-4 gap-y-2">
+          {block.parts.filter((x) => x.value > 0).map((x) => (
+            <li key={x.key} className="flex items-center gap-2 min-w-0 text-xs">
+              <span className="w-2.5 h-2.5 rounded-[3px] flex-shrink-0" style={{ backgroundColor: x.color }} aria-hidden="true" />
+              <span className="min-w-0">
+                <span className="block text-[#9aa4ac] truncate">{x.label}</span>
+                <span className="block font-mono font-semibold text-[#f0fae8]">{formatCOP(x.value)}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        <div className="rounded-xl border border-white/10 bg-[#0d263a] p-3 space-y-2">
+          <p className="text-xs text-[#9aa4ac] leading-relaxed">
+            El reporte en PDF explica el período paso a paso: de dónde vino el dinero, a dónde se fue y el detalle de cada gasto fijo, adicional y ocasional.
+          </p>
+          <Button type="button" className="w-full" notched onClick={download} disabled={downloading}>
+            <Download size={15} aria-hidden="true" /> {downloading ? 'Generando reporte…' : 'Descargar reporte (PDF)'}
+          </Button>
+        </div>
       </div>
     </Modal>
   )

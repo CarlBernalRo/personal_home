@@ -5,6 +5,7 @@ import { clsx } from 'clsx'
 import { Home, Pencil, Trash2 } from 'lucide-react'
 import { PERSONAL_CATEGORIES, formatCOP } from '@/shared'
 import { AppIcon } from '@/components/ui/AppIcon'
+import { AccountChip, type AccountLite } from '@/components/ui/AccountChip'
 
 export interface ExpenseRow {
   id: string
@@ -26,8 +27,11 @@ interface Props {
   rows: ExpenseRow[]
   /** The period being viewed contains today, so the "Hoy" marker is drawn. */
   showToday: boolean
-  onDelete: (row: ExpenseRow) => void
-  onEdit: (row: ExpenseRow) => void
+  /** Without them the rows are read-only (the home shows the history without managing it). */
+  onDelete?: (row: ExpenseRow) => void
+  onEdit?: (row: ExpenseRow) => void
+  /** The user's accounts: names for the account tag on each spend. */
+  accounts?: AccountLite[]
 }
 
 type Kind = 'additional' | 'budget' | 'household' | 'history'
@@ -42,7 +46,7 @@ const KIND: Record<Kind, { label: string; chip: string; border: string; node: st
 const kindOf = (r: ExpenseRow): Kind => (!r.counted ? 'history' : r.household ? 'household' : r.budget ? 'budget' : 'additional')
 
 /** Vertical timeline of the period, like the one in Gastos Fijos: each day is a node with its spends under it. */
-export function ExpenseTimeline({ rows, showToday, onDelete, onEdit }: Props) {
+export function ExpenseTimeline({ rows, showToday, onDelete, onEdit, accounts = [] }: Props) {
   const today = startOfDay(new Date())
 
   const byDay = new Map<number, ExpenseRow[]>()
@@ -112,6 +116,7 @@ export function ExpenseTimeline({ rows, showToday, onDelete, onEdit }: Props) {
                           <span className="min-w-0">
                             <span className="block text-sm font-semibold text-[#f0fae8] truncate">{r.description}</span>
                             <span className="block text-[10px] font-mono text-[#8a929a]">{r.household ? 'Abono en el hogar' : (cat?.label ?? r.category)}</span>
+                            <AccountChip account={accounts.find((a) => a.id === r.accountId)} />
                           </span>
                         </span>
                         <span className="flex items-center gap-3 flex-shrink-0">
@@ -120,7 +125,7 @@ export function ExpenseTimeline({ rows, showToday, onDelete, onEdit }: Props) {
                           <span className={clsx('hidden sm:block sm:w-[11.5rem] text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', KIND[kind].chip)}>
                             {KIND[kind].label}
                           </span>
-                          {r.household ? (
+                          {r.household || !onDelete || !onEdit ? (
                             <span className="w-[3.5rem]" />
                           ) : (
                             <span className="flex items-center">

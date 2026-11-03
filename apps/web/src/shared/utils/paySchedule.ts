@@ -1,4 +1,4 @@
-import type { PayRule, PaySchedule, WeekendAdjust } from '../types/paySchedule';
+import type { PayRule, PaySchedule, PeriodMode, WeekendAdjust } from '../types/paySchedule';
 import type { VariableData } from '../types/variableBudget';
 import { dueDateFor, getStatus, isPaused, monthEntries, monthKey, monthRange } from './fixedExpenses';
 import type { MonthEntry, OwedLine } from './fixedExpenses';
@@ -94,14 +94,49 @@ export function buildSalaryPeriods(
   });
 }
 
+/** How the user counts their periods (from pay day to pay day unless they chose calendar months). */
+export const periodModeOf = (schedule: PaySchedule | null | undefined): PeriodMode => schedule?.periodMode ?? 'salary';
+
+/**
+ * Calendar-month periods: one per month from the first confirmed salary to the current one (or the last
+ * salary's month), each holding the salaries confirmed inside it, whatever day they were paid. A month
+ * with no salary yet is still a period (it lives on what the previous one left over).
+ */
+export function buildCalendarPeriods(salaries: { id: string; date: Date; amount: number }[], today: Date = new Date()): SalaryPeriod[] {
+  if (salaries.length === 0) return [];
+  const sorted = [...salaries].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const first = sorted[0].date;
+  const last = sorted[sorted.length - 1].date;
+  const lastMonth = new Date(Math.max(new Date(today.getFullYear(), today.getMonth(), 1).getTime(), new Date(last.getFullYear(), last.getMonth(), 1).getTime()));
+  const out: SalaryPeriod[] = [];
+  for (let start = new Date(first.getFullYear(), first.getMonth(), 1); start.getTime() <= lastMonth.getTime(); start = new Date(start.getFullYear(), start.getMonth() + 1, 1)) {
+    const end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+    const amount = sorted.filter((s) => s.date.getTime() >= start.getTime() && s.date.getTime() < end.getTime()).reduce((sum, s) => sum + s.amount, 0);
+    out.push({ id: `cal|${monthKey(start)}`, start, end, amount });
+  }
+  return out;
+}
+
 /**
  * Span a month filter covers: the salary period that belongs to the month (the one whose last day
  * falls in it, so 30 Oct–29 Nov is November) when there is one, else the calendar month.
  * `end` is exclusive.
+ *
+ * With the pay `schedule`, a month whose salary isn't confirmed yet still gets the span the schedule
+ * predicts (the period after the last confirmed one starts on the pay day that closes it). Without that,
+ * a payment due on the first day of the next period (the 30th, with salary paid on the 30th) would fall
+ * in neither the confirmed period nor the calendar month, and show nowhere.
  */
-export function monthBounds(month: string, periods: SalaryPeriod[]): { start: Date; end: Date; period?: SalaryPeriod } {
+export function monthBounds(month: string, periods: SalaryPeriod[], schedule?: PaySchedule | null): { start: Date; end: Date; period?: SalaryPeriod } {
   const period = periods.find((p) => monthKey(new Date(p.end.getTime() - DAY_MS)) === month);
   if (period) return { start: period.start, end: period.end, period };
+  const last = [...periods].sort((a, b) => b.end.getTime() - a.end.getTime())[0];
+  if (schedule && last) {
+    const pays = payDatesBetween(schedule, last.end, new Date(last.end.getFullYear() + 2, last.end.getMonth(), 1));
+    for (let i = 0; i + 1 < pays.length; i++) {
+      if (monthKey(new Date(pays[i + 1].date.getTime() - DAY_MS)) === month) return { start: pays[i].date, end: pays[i + 1].date };
+    }
+  }
   const [y, m] = month.split('-').map(Number);
   return { start: new Date(y, m - 1, 1), end: new Date(y, m, 1) };
 }

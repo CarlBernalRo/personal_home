@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildSalaryPeriods, monthBounds, periodEntries, lastBusinessDay, latestPayDate, nextPayDate, payDatesBetween, periodAt, periodLedger, salaryLedgers, cashOnHand,
+  buildSalaryPeriods, buildCalendarPeriods, periodModeOf, monthBounds, periodEntries, lastBusinessDay, latestPayDate, nextPayDate, payDatesBetween, periodAt, periodLedger, salaryLedgers, cashOnHand,
 } from './paySchedule';
 import type { PaySchedule } from '../types/paySchedule';
 
@@ -359,5 +359,87 @@ describe('periodEntries', () => {
     const list = periodEntries([fe('A', 31, 100), fe('A2', 1, 50)], '2026-11', bounds, new Map(), d(2026, 11, 20));
     const lines = list.flatMap((e) => e.owed.map((l) => `${e.fe.id}|${l.occMonth}`));
     expect(new Set(lines).size).toBe(lines.length);
+  });
+});
+
+describe('monthBounds with the pay schedule', () => {
+  // salary on the last business day: Fri 30 Oct, Mon 30 Nov, Thu 31 Dec
+  const schedule: PaySchedule = { rules: [{ kind: 'last-business-day', amount: 2_895_169 }], weekendAdjust: 'before' };
+  const periods = buildSalaryPeriods([{ id: 's', date: new Date(2026, 9, 30), amount: 2_895_169 }], schedule);
+
+  it('keeps the confirmed period for its own month', () => {
+    const b = monthBounds('2026-11', periods, schedule);
+    expect([b.start.getDate(), b.start.getMonth()]).toEqual([30, 9]);
+    expect(b.end.getTime()).toBe(new Date(2026, 10, 30).getTime()); // exclusive: the 30 Nov belongs to the next period
+  });
+
+  it('predicts the next month from the schedule, so a payment due on the 30th shows there', () => {
+    const b = monthBounds('2026-12', periods, schedule);
+    expect(b.start.getTime()).toBe(new Date(2026, 10, 30).getTime());
+    expect(b.end.getTime()).toBe(new Date(2026, 11, 31).getTime());
+    expect(b.period).toBeUndefined(); // not confirmed
+    // the calendar fallback would have started on 1 Dec and left the 30 Nov out
+    expect(monthBounds('2026-12', periods).start.getTime()).toBe(new Date(2026, 11, 1).getTime());
+  });
+});
+
+describe('periods counted by calendar month', () => {
+  const rent = { id: 'rent', concept: 'Arriendo', estimatedAmount: 500_000, paymentDay: 5, frequency: 'fijo' as const, startMonth: '2026-10' };
+  const bill = { id: 'bill', concept: 'Cuota', estimatedAmount: 300_000, paymentDay: 30, frequency: 'fijo' as const, startMonth: '2026-10' };
+  const paidOn20 = [
+    { id: 'a', date: new Date(2026, 9, 20), amount: 2_000_000 },
+    { id: 'b', date: new Date(2026, 10, 20), amount: 2_000_000 },
+  ];
+  const today = new Date(2026, 10, 25); // 25 Nov
+
+  it('is salary mode unless the user chose calendar', () => {
+    expect(periodModeOf(null)).toBe('salary');
+    expect(periodModeOf({ rules: [], weekendAdjust: 'before' })).toBe('salary');
+    expect(periodModeOf({ rules: [], weekendAdjust: 'before', periodMode: 'calendar' })).toBe('calendar');
+  });
+
+  it('builds one period per month up to the current one, whatever day the salary arrives', () => {
+    const periods = buildCalendarPeriods(paidOn20, today);
+    expect(periods.map((p) => [p.id, p.start.getDate(), p.end.getDate(), p.amount])).toEqual([
+      ['cal|2026-10', 1, 1, 2_000_000],
+      ['cal|2026-11', 1, 1, 2_000_000],
+    ]);
+    expect(periodAt(periods, new Date(2026, 10, 30))?.id).toBe('cal|2026-11'); // the 30th is still November
+  });
+
+  it('adds the salaries paid inside a month (twice a month)', () => {
+    const periods = buildCalendarPeriods([
+      { id: 'q1', date: new Date(2026, 10, 15), amount: 1_000_000 },
+      { id: 'q2', date: new Date(2026, 10, 30), amount: 1_200_000 },
+    ], today);
+    expect(periods).toHaveLength(1);
+    expect(periods[0].amount).toBe(2_200_000);
+  });
+
+  it('a month with no salary yet is still a period that lives on the previous leftover', () => {
+    const periods = buildCalendarPeriods([{ id: 'a', date: new Date(2026, 9, 20), amount: 2_000_000 }], new Date(2026, 11, 3));
+    expect(periods.map((p) => [p.id, p.amount])).toEqual([['cal|2026-10', 2_000_000], ['cal|2026-11', 0], ['cal|2026-12', 0]]);
+  });
+
+  it('charges each expense to the month it falls in and carries what is left from month to month', () => {
+    const periods = buildCalendarPeriods(paidOn20, today);
+    const ledgers = salaryLedgers(periods, [rent, bill], new Map(), today);
+    const oct = ledgers.get('cal|2026-10')!;
+    const nov = ledgers.get('cal|2026-11')!;
+    expect(oct.committed).toBe(800_000); // 5 Oct + 30 Oct
+    expect(oct.remaining).toBe(1_200_000);
+    expect(nov.carryIn).toBe(1_200_000);
+    expect(nov.committed).toBe(800_000); // 5 Nov + 30 Nov: the 30th belongs to November, not to the next period
+    expect(nov.remaining).toBe(1_200_000 + 2_000_000 - 800_000);
+  });
+
+  it('a month filter is that calendar month, with no pay schedule needed', () => {
+    const periods = buildCalendarPeriods(paidOn20, today);
+    const b = monthBounds('2026-11', periods);
+    expect([b.start.getMonth(), b.start.getDate(), b.end.getMonth(), b.end.getDate()]).toEqual([10, 1, 11, 1]);
+    const future = monthBounds('2027-01', periods, null);
+    expect([future.start.getMonth(), future.start.getDate()]).toEqual([0, 1]);
+    const entries = periodEntries([rent, bill], '2026-11', b, new Map(), today);
+    expect(entries.map((e) => e.due?.getDate())).toEqual([5, 30]);
   });
 });

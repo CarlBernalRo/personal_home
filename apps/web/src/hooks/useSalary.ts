@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/auth'
 import { useHouseholdOwed } from '@/hooks/useHouseholdOwed'
 import { useMyHouseholds } from '@/hooks/useMyHouseholds'
 import {
-  buildSalaryPeriods, isScheduleUsable, latestPayDate, monthKey, periodAt,
+  buildCalendarPeriods, buildSalaryPeriods, isScheduleUsable, latestPayDate, monthKey, periodAt, periodModeOf,
   type ExtraIncome, type PayDate, type PaySchedule, type VariableBudget, type VariableSpend,
 } from '@/shared'
 
@@ -93,11 +93,15 @@ export function useSalary() {
 
   const today = new Date()
 
+  // Periods run from pay day to pay day, or by calendar month when the user chose so in their profile
+  const periodMode = periodModeOf(schedule)
   const periods = useMemo(
-    () => (usable ? buildSalaryPeriods(salaries, schedule!) : []),
+    () => (!usable ? [] : periodMode === 'calendar' ? buildCalendarPeriods(salaries) : buildSalaryPeriods(salaries, schedule!)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [salaries, usable, schedule],
+    [salaries, usable, schedule, periodMode],
   )
+  // The pay schedule only predicts the span of a month that has no confirmed salary yet when periods follow pay days
+  const boundsSchedule = periodMode === 'salary' && usable ? schedule : null
 
   const currentPeriod = periodAt(periods, today)
 
@@ -245,7 +249,7 @@ export function useSalary() {
     await load()
   }
 
-  return { accounts, accountsLoaded, reloadAccounts, depositAccountId, pickAccount, rememberAccount, schedule: usable ? schedule : null, salaries, extras, budgets, spends: allSpends, variable, addBudget, updateBudget, removeBudget, removeBudgets, registerSpend, removeSpend, personal, addPersonalExpense, editPersonalExpense, addExtra, removeExtra, periods, currentPeriod, pending, confirm, loading, reload: load }
+  return { periodMode, boundsSchedule, accounts, accountsLoaded, reloadAccounts, depositAccountId, pickAccount, rememberAccount, schedule: usable ? schedule : null, salaries, extras, budgets, spends: allSpends, variable, addBudget, updateBudget, removeBudget, removeBudgets, registerSpend, removeSpend, personal, addPersonalExpense, editPersonalExpense, addExtra, removeExtra, periods, currentPeriod, pending, confirm, loading, reload: load }
 }
 
 export type SalaryState = ReturnType<typeof useSalary>

@@ -26,6 +26,8 @@ import {
 import { formatCOP } from '@/shared'
 import type { AccountType } from '@/shared'
 import { AppIcon, EmptyMark, GOAL_ICON_KEYS } from '@/components/ui/AppIcon'
+import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
+import { AccountMovements } from '@/components/finance/AccountMovements'
 
 // ── Account types ────────────────────────────────────────────────────────────
 const ACCOUNT_TYPES: { value: AccountType; label: string; icon: string }[] = [
@@ -65,13 +67,16 @@ type IncomeForm   = z.infer<typeof incomeSchema>
 type GoalForm     = z.infer<typeof goalSchema>
 type AddMoneyForm = z.infer<typeof addMoneySchema>
 
-type Tab = 'cuentas' | 'ingresos' | 'ahorros'
+type Tab = 'movimientos' | 'ingresos' | 'ahorros'
 
 export default function FinancesPage() {
   const { user }       = useAuth()
   const { showToast }  = useToast()
   const ask = useConfirm()
-  const [activeTab, setActiveTab] = useState<Tab>('cuentas')
+  const [activeTab, setActiveTab] = useState<Tab>('movimientos')
+  // Account picked on the left to narrow the movements (null = all), and a counter that makes the movements reload
+  const [accountFilter, setAccountFilter] = useState<string | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   const [accounts, setAccounts]   = useState<any[]>([])
   const [moving, setMoving]       = useState(false)
@@ -128,11 +133,13 @@ export default function FinancesPage() {
     const data = await getAccounts(user.uid)
     setAccounts(data as any[])
     setLoadingAcc(false)
+    setRefreshKey((k) => k + 1)
   }
   async function loadIncomes() {
     if (!user) return
     const data = await getIncomes(user.uid)
     setIncomes(data as any[])
+    setRefreshKey((k) => k + 1)
     setLoadingInc(false)
   }
   async function loadGoals() {
@@ -280,123 +287,136 @@ export default function FinancesPage() {
   const totalTarget    = goals.reduce((s: number, g: any) => s + (g.targetAmount as number), 0)
 
   const TABS: { key: Tab; label: string; icon: string }[] = [
-    { key: 'cuentas',  label: 'Cuentas',  icon: 'bank' },
-    { key: 'ingresos', label: 'Ingresos', icon: 'cash' },
-    { key: 'ahorros',  label: 'Ahorros',  icon: 'savings' },
+    { key: 'movimientos', label: 'Movimientos', icon: 'list' },
+    { key: 'ingresos',    label: 'Ingresos',    icon: 'cash' },
+    { key: 'ahorros',     label: 'Ahorros',     icon: 'savings' },
   ]
+  const paneProps = {
+    contentClassName: 'max-lg:!overflow-visible space-y-5 py-3 !pl-3 !pr-3 lg:py-4 lg:!pl-4 lg:!pr-6',
+    borderRadius: 24,
+    offset: 7,
+    variant: 'plain' as const,
+    themeColor: 'brand' as const,
+  }
 
   return (
-    <div className="space-y-5 fade-in text-[#f3f5f6]">
-      {/* Header */}
-      <div>
-        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1 notch-sm bg-white/[0.04] border border-white/[0.08]">
-          <Wallet size={11} className="text-brand-400" />
-          <span className="font-pixel text-[8px] text-brand-400 uppercase tracking-widest">Patrimonio</span>
+    <div className="flex flex-col gap-5 fade-in text-[#f3f5f6] lg:flex-row lg:h-full lg:min-h-0">
+      {/* Left pane: the accounts and what each one holds. Picking one narrows the movements on the right. */}
+      <CurvedScrollContainer
+        className="lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50"
+        corners="both"
+        {...paneProps}
+      >
+        <div>
+          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1 notch-sm bg-white/[0.04] border border-white/[0.08]">
+            <Wallet size={11} className="text-brand-400" />
+            <span className="font-pixel text-[8px] text-brand-400 uppercase tracking-widest">Patrimonio</span>
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-[#f0fae8]">Finanzas</h1>
         </div>
-        <h1 className="text-2xl font-bold tracking-tight text-[#f0fae8]">Finanzas</h1>
-      </div>
 
-      {/* Executive Segmented Tab Switcher */}
-      <div className="flex gap-1.5 bg-[#0a1f2f] border border-white/10 p-1.5 rounded-2xl shadow-sm">
-        {TABS.map(({ key, label, icon }) => (
-          <button
-            key={key}
-            onClick={() => switchTab(key)}
-            className={clsx(
-              'flex-1 py-2.5 text-xs font-bold transition-all flex items-center justify-center gap-2 interactive-press rounded-xl',
-              activeTab === key
-                ? 'bg-brand-600 text-white shadow-sm border border-brand-400/40'
-                : 'text-[#c7ccd1] hover:text-white hover:bg-white/10 border border-transparent hover:border-white/15',
-            )}
-          >
-            <AppIcon name={icon} size={15} />
-            <span>{label}</span>
-          </button>
-        ))}
-      </div>
-
-      {/* ── CUENTAS tab ────────────────────────────────────────────────────── */}
-      {activeTab === 'cuentas' && (
-        <div className="space-y-4 slide-up">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs text-[#9aa4ac]">
-                Saldo total disponible:{' '}
-                <span className="font-bold text-brand-400 font-mono text-sm ml-1">
-                  {formatCOP(totalBalance)}
-                </span>
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {accounts.length > 1 && (
-                <Button onClick={() => setMoving(true)} size="sm" variant="secondary">
-                  <ArrowLeftRight size={15} /> Mover saldo
-                </Button>
-              )}
-              <Button onClick={openCreateAcc} size="sm" notched={true}>
-                <Plus size={15} /> Nueva cuenta
-              </Button>
+        <div className="rounded-2xl border border-white/10 bg-[#0a1f2f] p-4 sm:p-5 flex items-center justify-between gap-3 shadow-xl">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-11 h-11 rounded-xl bg-sky-500/15 border border-sky-400/40 flex items-center justify-center text-sky-300 flex-shrink-0">
+              <AppIcon name="bank" size={20} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-[#9aa4ac]">Dinero en tus cuentas</p>
+              <p className="text-[10px] text-[#5f6a72]">Total de {accounts.length} {accounts.length === 1 ? 'cuenta' : 'cuentas'}</p>
             </div>
           </div>
+          <p className={clsx('text-xl sm:text-2xl font-bold font-mono tabular-nums flex-shrink-0', totalBalance < 0 ? 'text-red-400' : 'text-sky-200')}>
+            {formatCOP(totalBalance)}
+          </p>
+        </div>
 
-          {loadingAcc ? (
-            <SkeletonList count={3} />
-          ) : accounts.length === 0 ? (
-            <div className="notch bg-[#0a1f2f] border border-white/10 text-center py-12 p-6">
-              <EmptyMark name="debt" />
-              <p className="text-sm font-bold text-[#f0fae8]">Sin cuentas bancarias registradas</p>
-              <p className="text-xs text-[#8a929a] mt-1">Agrega tus cuentas para llevar el control de tus saldos.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {accounts.map((acc: any) => {
-                const typeInfo = ACCOUNT_TYPES.find((t) => t.value === acc.type)
-                return (
-                  <div
-                    key={acc.id as string}
-                    className="notch-sm p-4 bg-[#0a1f2f] border transition-all hover:border-white/25 flex items-center justify-between gap-3 group"
-                    style={{ borderColor: (acc.color as string) + '35' }}
-                  >
-                    <div className="flex items-center gap-3.5 min-w-0">
-                      <div
-                        className="w-11 h-11 notch-sm flex items-center justify-center text-xl flex-shrink-0"
-                        style={{ backgroundColor: (acc.color as string) + '25', border: `1px solid ${(acc.color as string)}40` }}
-                      >
-                        <AppIcon name={typeInfo?.icon ?? 'debt'} size={20} />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-bold text-sm text-[#f3f5f6] truncate">{acc.name as string}</p>
-                        <p className="text-xs text-[#8a929a] mt-0.5">{typeInfo?.label ?? acc.type}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <p className="text-sm sm:text-base font-bold font-mono" style={{ color: acc.color }}>
-                        {formatCOP(acc.balance as number)}
-                      </p>
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => openEditAcc(acc)}
-                          className="p-1.5 rounded-lg text-[#5f6a72] hover:text-brand-400 hover:bg-white/5 transition"
-                          title="Editar cuenta"
-                        >
-                          <Edit2 size={13} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteAcc(acc.id as string)}
-                          className="p-1.5 rounded-lg text-[#5f6a72] hover:text-red-400 hover:bg-red-500/10 transition"
-                          title="Eliminar cuenta"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+        <div className="flex items-center gap-2">
+          <Button onClick={openCreateAcc} size="sm" notched className="flex-1">
+            <Plus size={15} /> Nueva cuenta
+          </Button>
+          {accounts.length > 1 && (
+            <Button onClick={() => setMoving(true)} size="sm" variant="secondary" className="flex-1">
+              <ArrowLeftRight size={15} /> Mover saldo
+            </Button>
           )}
         </div>
+
+        {loadingAcc ? (
+          <SkeletonList count={3} />
+        ) : accounts.length === 0 ? (
+          <div className="notch bg-[#0a1f2f] border border-white/10 text-center py-10 px-6">
+            <EmptyMark name="debt" />
+            <p className="text-sm font-bold text-[#f0fae8]">Sin cuentas bancarias registradas</p>
+            <p className="text-xs text-[#8a929a] mt-1">Agrega tus cuentas para llevar el control de tus saldos.</p>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {accounts.map((acc: any) => {
+              const typeInfo = ACCOUNT_TYPES.find((t) => t.value === acc.type)
+              const selected = accountFilter === acc.id
+              return (
+                <div
+                  key={acc.id as string}
+                  className={clsx('notch-sm p-3.5 bg-[#0a1f2f] border transition-all flex items-center justify-between gap-3', selected ? 'bg-white/[0.06]' : 'hover:border-white/25')}
+                  style={{ borderColor: selected ? (acc.color as string) : (acc.color as string) + '35' }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setAccountFilter(selected ? null : (acc.id as string))}
+                    aria-pressed={selected}
+                    title={selected ? 'Ver los movimientos de todas las cuentas' : `Ver solo los movimientos de ${acc.name}`}
+                    className="flex items-center gap-3 min-w-0 flex-1 text-left"
+                  >
+                    <span
+                      className="w-10 h-10 notch-sm flex items-center justify-center flex-shrink-0"
+                      style={{ backgroundColor: (acc.color as string) + '25', border: `1px solid ${(acc.color as string)}40` }}
+                    >
+                      <AppIcon name={typeInfo?.icon ?? 'debt'} size={18} />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block font-bold text-sm text-[#f3f5f6] truncate">{acc.name as string}</span>
+                      <span className="block text-[11px] text-[#8a929a]">{typeInfo?.label ?? acc.type}{acc.isDefault ? ' · por defecto' : ''}</span>
+                      <span className="block text-sm font-bold font-mono mt-0.5" style={{ color: acc.color }}>{formatCOP(acc.balance as number)}</span>
+                    </span>
+                  </button>
+                  <div className="flex gap-1 flex-shrink-0">
+                    <button onClick={() => openEditAcc(acc)} className="p-1.5 rounded-lg text-[#5f6a72] hover:text-brand-400 hover:bg-white/5 transition" title="Editar cuenta" aria-label={`Editar ${acc.name}`}>
+                      <Edit2 size={13} />
+                    </button>
+                    <button onClick={() => handleDeleteAcc(acc.id as string)} className="p-1.5 rounded-lg text-[#5f6a72] hover:text-red-400 hover:bg-red-500/10 transition" title="Eliminar cuenta" aria-label={`Eliminar ${acc.name}`}>
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </CurvedScrollContainer>
+
+      {/* Right pane: the view tabs stay on top and only the content below scrolls (the same frame as Gastos Fijos) */}
+      <div className="min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0">
+        <div className="flex justify-center sm:justify-start flex-shrink-0">
+          <div className="flex gap-1 p-1 bg-[#0d263a] border border-white/[0.06] rounded-xl text-xs overflow-x-auto scrollbar-none max-w-full">
+            {TABS.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => switchTab(key)}
+                className={clsx(
+                  'whitespace-nowrap px-4 py-2 rounded-lg font-medium transition',
+                  activeTab === key ? 'bg-[#0a1f2f] text-white font-semibold border border-white/10 hover:border-brand-400/60 hover:bg-brand-500/10' : 'text-[#8a929a] hover:text-white',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <CurvedScrollContainer className="lg:flex-1 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50" corners="bottom-right" {...paneProps}>
+      {/* ── MOVIMIENTOS tab ────────────────────────────────────────────────── */}
+      {activeTab === 'movimientos' && (
+        <AccountMovements accounts={accounts} accountFilter={accountFilter} onAccountFilter={setAccountFilter} refreshKey={refreshKey} />
       )}
 
       {/* ── INGRESOS tab ───────────────────────────────────────────────────── */}
@@ -565,6 +585,9 @@ export default function FinancesPage() {
           )}
         </div>
       )}
+
+        </CurvedScrollContainer>
+      </div>
 
       {/* ── MODALS ── */}
 

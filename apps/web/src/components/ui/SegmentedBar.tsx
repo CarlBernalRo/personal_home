@@ -3,7 +3,7 @@ import { clsx } from 'clsx'
 import { formatCOP } from '@/shared'
 
 /** Text color that reads on a segment: dark on light fills (a pale lime account), white on dark ones. */
-function inkOn(hex: string): string {
+export function inkOn(hex: string): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return '#ffffff';
   const n = parseInt(m[1], 16);

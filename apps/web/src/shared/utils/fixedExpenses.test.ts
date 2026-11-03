@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isPaused, toggleRange, isAutoDebit, withAutoPayments, amountFor, indexPayments, carriedOver, reviseHistory, revisionStart, monthEntries, dueDateFor, effectiveDue, getStatus, monthRange, occurrencesInMonth, shiftMonth, isDueMonth, cadenceFor, monthlyEquivalent, cadenceRevisionStart } from './fixedExpenses';
+import { isPaused, toggleRange, isAutoDebit, withAutoPayments, amountFor, indexPayments, carriedOver, reviseHistory, revisionStart, monthEntries, dueDateFor, effectiveDue, getStatus, monthRange, occurrencesInMonth, shiftMonth, isDueMonth, cadenceFor, monthlyEquivalent, cadenceRevisionStart, planAutoPayments } from './fixedExpenses';
 
 const ymd = (x: Date) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
 const fe = (over: Record<string, unknown> = {}) => ({
@@ -337,5 +337,36 @@ describe('correcting the frequency of an expense', () => {
   it('a bill already paid this month keeps its cycle: the change starts next month', () => {
     const paid = new Map([['w|2026-10', { paidAmount: 60_000 }]]);
     expect(cadenceRevisionStart(wrong, paid, new Date(2026, 9, 31))).toBe('2026-11');
+  });
+});
+
+describe('planAutoPayments (what the daily server job stores)', () => {
+  const card = { id: 'card', concept: 'Tarjeta', estimatedAmount: 100_000, paymentDay: 10, frequency: 'fijo' as const, startMonth: '2026-09', autoDebit: [{ from: '2026-09' }] };
+  const accounts = [{ id: 'main', isDefault: true, createdAt: new Date(2026, 9, 15, 12) }]; // created 15 Oct
+  const today = new Date(2026, 10, 12); // 12 Nov
+
+  it('stores only what fell due after the account was created, once per month, with a fixed id', () => {
+    const plan = planAutoPayments([card], [], accounts, today, 'u1');
+    expect(plan.map((p) => [p.docId, p.paymentDate.getDate(), p.accountId])).toEqual([
+      ['auto_card_2026-11', 10, 'main'], // 10 Oct was before the account existed: already in its opening balance
+    ]);
+    expect(plan[0]).toMatchObject({ userId: 'u1', paidAmount: 100_000, month: '2026-11' });
+  });
+
+  it('does nothing for an occurrence that is already stored, so running twice never charges twice', () => {
+    const stored = [{ fixedExpenseId: 'card', month: '2026-11' }];
+    expect(planAutoPayments([card], stored, accounts, today, 'u1')).toEqual([]);
+  });
+
+  it('uses the account set on the expense, else the default one, and skips when there is none', () => {
+    const other = { ...card, accountId: 'nequi' };
+    const two = [...accounts, { id: 'nequi', createdAt: new Date(2026, 9, 1) }];
+    expect(planAutoPayments([other], [], two, today, 'u1').map((p) => p.accountId)).toEqual(['nequi', 'nequi']); // Oct 10 and Nov 10: that account existed
+    expect(planAutoPayments([card], [], [], today, 'u1')).toEqual([]);
+  });
+
+  it('waits for the due date', () => {
+    expect(planAutoPayments([card], [], accounts, new Date(2026, 10, 9), 'u1')).toEqual([]);
+    expect(planAutoPayments([card], [], accounts, new Date(2026, 10, 10), 'u1')).toHaveLength(1); // the day it falls due
   });
 });

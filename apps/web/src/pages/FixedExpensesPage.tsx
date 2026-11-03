@@ -21,7 +21,7 @@ import {
 } from '@/lib/firestore'
 import {
   formatCOP, getStatus, indexPayments, paymentKey,
-  amountFor, settingsFor, monthBounds, periodEntries, effectiveDue, withAutoPayments, monthKey, shiftMonth, type DueOverride, type MonthEntry, type OwedLine,
+  amountFor, settingsFor, monthBounds, periodEntries, effectiveDue, withAutoPayments, planAutoPayments, monthKey, shiftMonth, type DueOverride, type MonthEntry, type OwedLine,
 } from '@/shared'
 import { FixedCalendar } from '@/components/fixed/FixedCalendar'
 import { FixedTimeline } from '@/components/fixed/FixedTimeline'
@@ -35,7 +35,8 @@ import { FixedOutlook } from '@/components/fixed/FixedOutlook'
 import { AutoManualCard } from '@/components/fixed/AutoManualCard'
 import { PausedNotesCard } from '@/components/fixed/PausedNotesCard'
 import { FixedConfigPanel } from '@/components/fixed/FixedConfigPanel'
-import { STATUS_META, PROGRESS_STATES, entryStatusKey, statusGroup, type StatusKey } from '@/components/fixed/status'
+import { STATUS_META, PROGRESS_STATES, entryAccountId, entryStatusKey, statusGroup, type StatusKey } from '@/components/fixed/status'
+import { AccountFilter } from '@/components/ui/AccountFilter'
 import { VariableBudgetsCard } from '@/components/salary/VariableBudgetsCard'
 import { useSearchParams } from 'react-router-dom'
 import { usePeriodStore } from '@/store/period'
@@ -77,6 +78,8 @@ export default function FixedExpensesPage() {
   const [lineError, setLineError] = useState<string | null>(null)
   // State picked in the progress bar: the history shows only those payments (null = all)
   const [statusFilter, setStatusFilter] = useState<StatusKey | null>(null)
+  // Account picked as a filter: the history shows only the payments that went through it (null = all)
+  const [accountFilter, setAccountFilter] = useState<string | null>(null)
   // Bank accounts the user can pay from, and the one picked for this payment ('' = none)
   const accounts = salary.accounts
   const [accountId, setAccountId] = useState('')
@@ -121,17 +124,9 @@ export default function FixedExpensesPage() {
   const storing = useRef(new Set<string>())
   useEffect(() => {
     if (!user || loading || !salary.accountsLoaded || accounts.length === 0) return
-    const items = withAutoPayments(expenses, payments, new Date())
-      .filter((p: any) => typeof p.id === 'string' && p.id.startsWith('auto|') && !storing.current.has(p.id))
-      .flatMap((p: any) => {
-        const fe = expenses.find((e) => e.id === p.fixedExpenseId)
-        const acc = accounts.find((a) => a.id === fe?.accountId) ?? accounts.find((a) => a.isDefault)
-        const created = acc?.createdAt instanceof Date ? acc.createdAt : null
-        if (!acc || !created) return []
-        const endOfCreationDay = new Date(created.getFullYear(), created.getMonth(), created.getDate(), 23, 59, 59, 999)
-        if (p.paymentDate.getTime() <= endOfCreationDay.getTime()) return []
-        return [{ id: p.id as string, data: { fixedExpenseId: p.fixedExpenseId, userId: user.uid, concept: p.concept ?? '', paidAmount: p.paidAmount, accountId: acc.id as string, month: p.month, paymentDate: p.paymentDate as Date, notes: '' } }]
-      })
+    const items = planAutoPayments(expenses, payments, accounts, new Date(), user.uid)
+      .filter((p) => !storing.current.has(p.docId))
+      .map((p) => ({ id: p.docId, data: { fixedExpenseId: p.fixedExpenseId, userId: p.userId, concept: p.concept, paidAmount: p.paidAmount, accountId: p.accountId, month: p.month, paymentDate: p.paymentDate, notes: '' } }))
     if (items.length === 0) return
     items.forEach((i) => storing.current.add(i.id))
     materializeAutoPayments(items.map((i) => i.data)).then(() => load()).catch(() => items.forEach((i) => storing.current.delete(i.id)))
@@ -140,7 +135,7 @@ export default function FixedExpensesPage() {
 
   // One entry per expense on its date; unpaid earlier months are folded into its amount
   // What the month covers: its salary period when there is one (30 Oct–29 Nov), else the calendar month
-  const bounds = useMemo(() => monthBounds(month, salary.periods), [month, salary.periods])
+  const bounds = useMemo(() => monthBounds(month, salary.periods, salary.boundsSchedule), [month, salary.periods, salary.boundsSchedule])
   const rows = useMemo(
     () => periodEntries(expenses, month, bounds, paymentIndex, today),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -175,7 +170,7 @@ export default function FixedExpensesPage() {
 
   const togglePicked = (key: StatusKey) => setStatusFilter((cur) => (cur === key ? null : key))
   // a filter belongs to the period it was picked in
-  useEffect(() => { setStatusFilter(null) }, [month])
+  useEffect(() => { setStatusFilter(null); setAccountFilter(null) }, [month])
 
   function openSelection(entry: MonthEntry<any>) {
     const { fe, hostMonth, owed } = entry
@@ -420,6 +415,9 @@ export default function FixedExpensesPage() {
                         </li>
                       ))}
                     </ul>
+                    {accounts.length > 0 && (
+                      <AccountFilter accounts={accounts} value={accountFilter} onChange={setAccountFilter} hasUnassigned={rows.some((r) => !entryAccountId(r))} />
+                    )}
                     {statusFilter && (
                       <div className="flex items-center justify-between gap-3 rounded-lg border border-white/15 bg-white/5 px-3 py-2">
                         <p className="text-xs text-[#c7ccd1]">
@@ -463,7 +461,7 @@ export default function FixedExpensesPage() {
                   )}
                 </div>
               ) : (
-                <FixedTimeline month={month} bounds={bounds} expenses={expenses} paymentIndex={paymentIndex} onSelect={openSelection} periods={salary.periods} extras={salary.extras} variable={salary.variable} statusFilter={statusFilter} onClearFilter={() => setStatusFilter(null)} top={month === salaryMonth ? <VariableBudgetsCard salary={salary} /> : undefined} />
+                <FixedTimeline month={month} bounds={bounds} expenses={expenses} paymentIndex={paymentIndex} onSelect={openSelection} periods={salary.periods} extras={salary.extras} variable={salary.variable} statusFilter={statusFilter} accounts={accounts} accountFilter={accountFilter} onClearFilter={() => { setStatusFilter(null); setAccountFilter(null) }} top={month === salaryMonth ? <VariableBudgetsCard salary={salary} /> : undefined} />
               )}
             </div>
           )}

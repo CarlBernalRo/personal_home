@@ -20,8 +20,33 @@ export const STATUS_META: Record<StatusKey, { label: string; chip: string; cell:
 export const entryStatusKey = (e: MonthEntry<any>): StatusKey =>
   e.arrears.length > 0 ? 'arrears' : e.payment?.auto && e.owed.length === 0 ? 'auto' : e.status
 
+/**
+ * Account of an entry: the one a paid payment came out of, or (while unpaid) the one the expense is set to be
+ * paid from. A payment registered without an account has none: it does not borrow the expense's.
+ */
+export const entryAccountId = (e: MonthEntry<any>): string | undefined =>
+  e.payment ? ((e.payment as any).accountId as string | undefined) : (e.fe.accountId as string | undefined)
+
 /** The states the progress bar counts (and filters by): "con atraso" counts as overdue. */
 export const statusGroup = (key: StatusKey): StatusKey => (key === 'arrears' ? 'overdue' : key)
 
 /** Order the progress bar lists them in, from settled to far away. */
 export const PROGRESS_STATES: StatusKey[] = ['paid', 'auto', 'overdue', 'due-soon', 'pending', 'upcoming']
+
+/**
+ * Day an entry is drawn on: the day it was paid once it is paid, otherwise its due date. A payment made
+ * early (the 28th for a bill due on the 1st) shows on the 28th, with the due date kept as a note.
+ */
+export function entryDisplayDate(e: MonthEntry<any>): Date | null {
+  if (e.owed.length === 0 && e.payment?.paymentDate) {
+    const d = e.payment.paymentDate instanceof Date ? e.payment.paymentDate : new Date(e.payment.paymentDate)
+    if (!isNaN(d.getTime())) return new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  }
+  return e.due
+}
+
+/** True when the payment was made on a different day than its due date. */
+export const paidOffDue = (e: MonthEntry<any>): boolean => {
+  const shown = entryDisplayDate(e)
+  return !!(shown && e.due && e.owed.length === 0 && shown.toDateString() !== e.due.toDateString())
+}

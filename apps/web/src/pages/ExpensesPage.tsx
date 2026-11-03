@@ -20,6 +20,8 @@ import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { SalaryPanel } from '@/components/salary/SalaryPanel'
 import { FixedOutlook } from '@/components/fixed/FixedOutlook'
 import { ExpenseTimeline, type ExpenseRow } from '@/components/expenses/ExpenseTimeline'
+import { buildExpenseRows } from '@/components/expenses/rows'
+import { AccountFilter, NO_ACCOUNT } from '@/components/ui/AccountFilter'
 import { useSalary } from '@/hooks/useSalary'
 import { useFixedData } from '@/hooks/useFixedData'
 import { usePayProjection } from '@/hooks/usePayProjection'
@@ -64,35 +66,20 @@ export default function ExpensesPage() {
   const monthLabel   = format(new Date(Number(month.slice(0, 4)), Number(month.slice(5)) - 1, 1), 'MMMM yyyy', { locale: es })
 
   // What the month covers: its salary period when there is one, else the calendar month
-  const bounds = useMemo(() => monthBounds(month, salary.periods), [month, salary.periods])
+  const bounds = useMemo(() => monthBounds(month, salary.periods, salary.boundsSchedule), [month, salary.periods, salary.boundsSchedule])
 
   const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema) as any,
     defaultValues: { date: format(new Date(), 'yyyy-MM-dd'), category: 'otro' },
   })
 
-  const rows = useMemo<ExpenseRow[]>(() => {
-    const inRange = (d: Date) => d >= bounds.start && d < bounds.end
-    const own: ExpenseRow[] = salary.personal
-      .map((e): ExpenseRow => ({
-        id: e.id,
-        description: e.description,
-        amount: e.amount,
-        category: e.category,
-        date: toDate(e.date),
-        counted: Boolean(e.tracked || e.variableBudgetId),
-        household: false,
-        budget: Boolean(e.variableBudgetId),
-        accountId: e.accountId as string | undefined,
-      }))
-      .filter((r) => inRange(r.date))
-    const abonos: ExpenseRow[] = salary.spends
-      .filter((s) => s.id.startsWith('abono|') && inRange(s.date))
-      .map((s) => ({ id: s.id, description: s.concept, amount: s.amount, category: '', date: s.date, counted: true, household: true, budget: false }))
-    return [...own, ...abonos].sort((a, b) => b.date.getTime() - a.date.getTime())
-  }, [salary.personal, salary.spends, bounds])
+  const rows = useMemo<ExpenseRow[]>(() => buildExpenseRows(salary.personal, bounds), [salary.personal, bounds])
 
-  const shown = category === 'all' ? rows : rows.filter((r) => r.category === category)
+  // Narrowed by category and by the account the spend came out of (null = all)
+  const [accountFilter, setAccountFilter] = useState<string | null>(null)
+  const shown = rows
+    .filter((r) => category === 'all' || r.category === category)
+    .filter((r) => !accountFilter || (accountFilter === NO_ACCOUNT ? !r.accountId : r.accountId === accountFilter))
   const countedTotal = rows.filter((r) => r.counted).reduce((s, r) => s + r.amount, 0)
   const historyTotal = rows.filter((r) => !r.counted).reduce((s, r) => s + r.amount, 0)
   const shownTotal   = shown.filter((r) => r.counted).reduce((s, r) => s + r.amount, 0)
@@ -294,6 +281,7 @@ export default function ExpensesPage() {
                 )
               })}
             </div>
+            <AccountFilter accounts={salary.accounts} value={accountFilter} onChange={setAccountFilter} hasUnassigned={rows.some((r) => !r.accountId)} className="mt-2" />
           </div>
 
           <CurvedScrollContainer
@@ -312,6 +300,7 @@ export default function ExpensesPage() {
             ) : (
               <ExpenseTimeline
                 rows={shown}
+                accounts={salary.accounts}
                 showToday={new Date() >= bounds.start && new Date() < bounds.end}
                 onDelete={(r) => handleDelete(r.id)}
                 onEdit={openEdit}

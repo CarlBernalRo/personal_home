@@ -377,6 +377,55 @@ export function withAutoPayments<P extends { fixedExpenseId: string; month: stri
   return out;
 }
 
+/** An automatic debit that is due and must be stored as a real payment, with the account it comes out of. */
+export interface PlannedAutoPayment {
+  /** Fixed id of this occurrence (per expense and month): storing it twice is impossible. */
+  docId: string;
+  fixedExpenseId: string;
+  userId: string;
+  concept: string;
+  paidAmount: number;
+  month: string;
+  paymentDate: Date;
+  accountId: string;
+}
+
+/**
+ * The automatic debits of one user that have to be stored as real payments right now: every one the bank
+ * made by itself (see withAutoPayments) that has an account to come out of — the one set on the expense, else
+ * the default one — and that fell due after that account was created (the ones before are already inside its
+ * opening balance). Used by the app and by the daily server job, so both decide the same.
+ */
+export function planAutoPayments(
+  expenses: (ExpenseLike & { id: string; concept?: string; userId?: string })[],
+  payments: { fixedExpenseId: string; month: string }[],
+  accounts: { id: string; isDefault?: boolean; createdAt?: Date | null }[],
+  today: Date,
+  userId: string,
+): PlannedAutoPayment[] {
+  const out: PlannedAutoPayment[] = [];
+  for (const p of withAutoPayments(expenses, payments, today)) {
+    if (!('auto' in p) || p.auto !== true || !String(p.id).startsWith('auto|')) continue; // only the generated ones
+    const fe = expenses.find((e) => e.id === p.fixedExpenseId) as (typeof expenses)[number] & { accountId?: string } | undefined;
+    const account = accounts.find((a) => a.id === fe?.accountId) ?? accounts.find((a) => a.isDefault);
+    const created = account?.createdAt;
+    if (!account || !(created instanceof Date) || isNaN(created.getTime())) continue;
+    const endOfCreationDay = new Date(created.getFullYear(), created.getMonth(), created.getDate(), 23, 59, 59, 999);
+    if (p.paymentDate.getTime() <= endOfCreationDay.getTime()) continue;
+    out.push({
+      docId: `auto_${p.fixedExpenseId}_${p.month}`,
+      fixedExpenseId: p.fixedExpenseId,
+      userId,
+      concept: p.concept ?? '',
+      paidAmount: p.paidAmount,
+      month: p.month,
+      paymentDate: p.paymentDate,
+      accountId: account.id,
+    });
+  }
+  return out;
+}
+
 // ── Activating / deactivating from a month on ────────────────────────────────
 
 type MonthRanges = { from: string; until?: string }[];

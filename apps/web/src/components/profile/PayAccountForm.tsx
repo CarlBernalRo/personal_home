@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Landmark } from 'lucide-react'
 import { useToast } from '@/components/ui/Toast'
+import { FormActions } from '@/components/ui/FormActions'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthStore } from '@/store/auth'
 import { getAccounts, updateUserProfile } from '@/lib/firestore'
@@ -18,21 +19,22 @@ export function PayAccountForm() {
   const [value, setValue] = useState(saved)
   const [saving, setSaving] = useState(false)
 
+  // the profile may load after the form is drawn: show the account that is really saved
+  useEffect(() => { setValue(saved) }, [saved])
+
   useEffect(() => {
     if (!user) return
     getAccounts(user.uid).then((a) => setAccounts(a as any[])).catch(() => {})
   }, [user])
 
-  async function onChange(id: string) {
+  async function onSave() {
     if (!user) return
-    setValue(id)
     setSaving(true)
     try {
-      await updateUserProfile(user.uid, { payAccountId: id })
-      setProfile({ ...profile, payAccountId: id } as any)
+      await updateUserProfile(user.uid, { payAccountId: value })
+      setProfile({ ...profile, payAccountId: value } as any)
       showToast('Cuenta para pagos guardada', 'success')
     } catch {
-      setValue(saved)
       showToast('No se pudo guardar', 'error')
     } finally {
       setSaving(false)
@@ -50,12 +52,15 @@ export function PayAccountForm() {
       ) : (
         <label className="space-y-1 block">
           <span className="text-xs font-semibold text-[#9aa4ac]">¿De qué cuenta salen tus pagos normalmente?</span>
-          <select className={selectCls} value={value} disabled={saving} onChange={(e) => onChange(e.target.value)}>
+          <select className={selectCls} value={value} disabled={saving} onChange={(e) => setValue(e.target.value)}>
             <option value="">Ninguna en particular (se usa la del último pago)</option>
             {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} · {formatCOP(a.balance as number)}</option>)}
           </select>
           <span className="text-[11px] text-[#8a929a] block">Es la que aparece elegida al pagar o registrar un gasto; en cada pago puedes cambiarla. Si un gasto tiene su propia cuenta configurada, esa tiene prioridad.</span>
         </label>
+      )}
+      {accounts.length > 0 && (
+        <FormActions onSave={onSave} onCancel={() => setValue(saved)} saving={saving} disabled={value === saved} saveLabel="Guardar cuenta para pagos" />
       )}
     </div>
   )

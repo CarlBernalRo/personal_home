@@ -12,7 +12,7 @@ import {
   amountFor, effectiveDue, householdDebtDays, isAutoDebit, isPaused, monthEntries, monthKey, settingsFor, monthRange, shiftMonth, formatCOP,
   type DueOverride, type HouseholdDebtRow, type MonthEntry, type VariableBudget, type VariableData,
 } from '@/shared'
-import { STATUS_META, entryStatusKey, type StatusKey } from './status'
+import { STATUS_META, entryDisplayDate, entryStatusKey, type StatusKey } from './status'
 
 interface Props {
   month: string
@@ -91,8 +91,7 @@ const entryAmount = (entry: MonthEntry<any>): number =>
 
 const AMBER_DOT = '#f59e0b'
 
-const ORANGE_DOT = '#f97316'
-const itemDot = (item: DayItem) => (item.kind === 'fixed' ? STATUS_META[entryKey(item.entry)].dot : item.kind === 'spend' ? ORANGE_DOT : AMBER_DOT)
+const itemDot = (item: DayItem) => (item.kind === 'fixed' ? STATUS_META[entryKey(item.entry)].dot : AMBER_DOT)
 
 const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400'
 
@@ -110,11 +109,25 @@ export function FixedCalendar({ month, expenses, paymentIndex, onSelect, onMove,
 
   // One entry per expense on its date; unpaid earlier months are folded into the amount
   const entries = monthEntries(expenses, month, paymentIndex, today)
+  // What is drawn: unpaid ones on their due date; paid ones on the day they were paid, which can be in a
+  // neighbouring month's bill (a payment made on the 28th for the 1st), so those are looked up there too
+  const drawn = new Map<string, MonthEntry<any>>()
+  for (const e of entries) if (e.owed.length > 0 || !e.due) drawn.set(`${e.fe.id}|${e.hostMonth}`, e)
+  for (const m2 of [shiftMonth(month, -1), month, shiftMonth(month, 1)]) {
+    for (const e of m2 === month ? entries : monthEntries(expenses, m2, paymentIndex, today)) {
+      if (e.owed.length > 0) continue
+      const shownOn = entryDisplayDate(e)
+      if (shownOn && monthKey(shownOn) === month) drawn.set(`${e.fe.id}|${e.hostMonth}`, e)
+    }
+  }
   const byDay = new Map<number, MonthEntry<any>[]>()
   const noDay: MonthEntry<any>[] = []
-  for (const e of entries) {
-    if (!e.due) { noDay.push(e); continue }
-    const d = e.due.getDate()
+  for (const e of drawn.values()) {
+    const shownOn = entryDisplayDate(e)
+    if (!shownOn) { noDay.push(e); continue }
+    // an unpaid bill that is due in this month stays here; a paid one only if it was paid in this month
+    if (monthKey(shownOn) !== month) continue
+    const d = shownOn.getDate()
     byDay.set(d, [...(byDay.get(d) ?? []), e])
   }
 
@@ -136,6 +149,7 @@ export function FixedCalendar({ month, expenses, paymentIndex, onSelect, onMove,
   }
   const spendByDay = new Map<number, VariableData['spends']>()
   for (const x of variable?.spends ?? []) {
+    if (!x.budgetId) continue // additional spends belong to their own zone
     if (monthKey(x.date) !== month) continue
     spendByDay.set(x.date.getDate(), [...(spendByDay.get(x.date.getDate()) ?? []), x])
   }
@@ -283,7 +297,6 @@ export function FixedCalendar({ month, expenses, paymentIndex, onSelect, onMove,
             title={`${item.x.concept} · gasto adicional registrado`}
             label={item.x.concept}
             sub={`−${formatCOP(item.x.amount)}`}
-            accent="orange"
             tone="solid"
           />
         )
@@ -629,7 +642,7 @@ function Legend() {
         <span className={pill}><CornerUpRight size={10} /> Movido</span>
         <span className={pill}><Zap size={10} className="text-cyan-300" /> Débito automático</span>
         <span className={clsx(pill, 'border-dashed border-amber-400/40 text-amber-200')}><CalendarClock size={10} /> Ocasional (recordatorio)</span>
-        <span className={clsx(pill, 'border-orange-500/45 bg-orange-500/10 text-orange-300')}><Receipt size={10} /> Gasto adicional registrado</span>
+        <span className={clsx(pill, 'border-amber-400/40 bg-amber-500/10 text-amber-200')}><Receipt size={10} /> Gasto ocasional registrado</span>
         <span className={clsx(pill, 'border-dashed border-amber-400/40 text-amber-200')}><Home size={10} /> Deuda de hogar</span>
       </div>
       <p className="flex items-center gap-1.5 text-[#8a929a]">
