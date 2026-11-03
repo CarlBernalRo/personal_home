@@ -145,7 +145,11 @@ async function main() {
   console.log(`Bot del token: @${me.username}`)
   const state = (await stateRef.get()).data() ?? {}
 
-  const offset = await linkChats(Number(state.offset ?? 0))
+  // With a webhook set (the Cloudflare Worker) Telegram hands messages to it and getUpdates would fail: linking is its job then
+  const hook = await tg('getWebhookInfo', {})
+  let offset = Number(state.offset ?? 0)
+  if (hook.url) console.log('Webhook activo: la vinculación la hace el Worker; esta tarea solo envía avisos.')
+  else offset = await linkChats(offset)
 
   await sendPending()
 
