@@ -1,17 +1,16 @@
 /**
- * Telegram job (independent from the automatic-debits one): links chats and forwards the app's notifications.
+ * Telegram job (independent from the automatic-debits one): forwards the app's notifications to Telegram.
  *
- *  1. LINK — reads what people wrote to the bot. `/start CODE` links that chat to the user whose profile holds that
- *     code (`telegramLinkCode`, generated from Perfil → Avisos); `/stop` unlinks it.
- *  2. SEND — every notification that has no Telegram status yet goes to the recipient's chat (if they linked one and kept
- *     that zone on), and is then marked `telegramStatus: 'sent'` (or 'skipped'), so running the job again never repeats it.
+ * Every notification that has no Telegram status yet goes to the recipient's chat (if they linked one and kept that
+ * zone on) and is then marked `telegramStatus: 'sent'` (or 'skipped'), so running the job again never repeats it.
+ * Linking a chat is NOT done here: the Cloudflare Worker in workers/telegram-webhook does it the moment the person
+ * presses "Iniciar" in the bot.
  *
- * State (the last update read) lives in `system/telegram`. Reads the service account from
- * GOOGLE_APPLICATION_CREDENTIALS and the bot token from TELEGRAM_BOT_TOKEN. By default it only LISTS what it would do;
- * pass --apply to link, send and save state.
+ * Reads the service account from GOOGLE_APPLICATION_CREDENTIALS and the bot token from TELEGRAM_BOT_TOKEN. By default
+ * it only LISTS what it would do; pass --apply to send.
  *
  *   npx tsx scripts/ci/send-telegram.ts           (dry run)
- *   npx tsx scripts/ci/send-telegram.ts --apply   (acts)
+ *   npx tsx scripts/ci/send-telegram.ts --apply   (sends)
  */
 
 process.env.TZ ||= 'America/Bogota'
@@ -25,8 +24,7 @@ if (!TOKEN) throw new Error('Falta TELEGRAM_BOT_TOKEN.')
 
 admin.initializeApp({ credential: admin.credential.applicationDefault() })
 const db = admin.firestore()
-const { FieldValue, Timestamp } = admin.firestore
-const stateRef = db.doc('system/telegram')
+const { FieldValue } = admin.firestore
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -40,60 +38,11 @@ async function tg(method: string, body: Record<string, unknown>) {
   return data.result
 }
 
-const say = (chatId: number | string, text: string) => (APPLY ? tg('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }) : Promise.resolve())
-
-/** 1. Chats that wrote to the bot: link or unlink them. Returns the next update offset. */
-async function linkChats(offset: number) {
-  const updates: any[] = await tg('getUpdates', { offset, timeout: 0, allowed_updates: ['message'] })
-  console.log(`${updates.length} mensaje(s) nuevo(s) para el bot.`)
-  let next = offset
-  for (const u of updates) {
-    next = Math.max(next, u.update_id + 1)
-    const msg = u.message
-    if (!msg?.text || msg.chat?.type !== 'private') continue
-    const chatId = msg.chat.id as number
-    const text = String(msg.text).trim()
-
-    if (/^\/stop\b/i.test(text)) {
-      const users = await db.collection('users').where('telegramChatId', '==', String(chatId)).get()
-      for (const d of users.docs) {
-        console.log(`  · desvincula ${d.id.slice(0, 6)}… (chat ${chatId})`)
-        if (APPLY) await d.ref.update({ telegramChatId: FieldValue.delete(), telegramLinkedAt: FieldValue.delete() })
-      }
-      await say(chatId, 'Listo, no te enviaré más avisos. Vuelve a vincular desde Perfil → Avisos cuando quieras.')
-      continue
-    }
-
-    const code = text.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9]{6,32})$/i)?.[1]?.toUpperCase()
-    if (!code) {
-      await say(chatId, 'Hola 👋 Para recibir tus avisos, entra a la app → <b>Perfil → Avisos</b>, toca <b>Vincular Telegram</b> y abre el enlace que te muestra.')
-      continue
-    }
-    const found = await db.collection('users').where('telegramLinkCode', '==', code).limit(1).get()
-    const doc = found.docs[0]
-    const issued = doc?.get('telegramLinkCodeAt')?.toMillis?.() as number | undefined
-    if (!doc || (issued && Date.now() - issued > 48 * 3600_000)) {
-      console.log(`  · código ${code} inválido o vencido (chat ${chatId})`)
-      await say(chatId, 'Ese código no es válido o ya venció. Genera uno nuevo desde Perfil → Avisos.')
-      continue
-    }
-    console.log(`  · vincula ${doc.id.slice(0, 6)}… con el chat ${chatId}`)
-    if (APPLY) {
-      await doc.ref.update({
-        telegramChatId: String(chatId), telegramLinkedAt: FieldValue.serverTimestamp(),
-        telegramLinkCode: FieldValue.delete(), telegramLinkCodeAt: FieldValue.delete(),
-      })
-    }
-    await say(chatId, '✅ <b>Telegram vinculado.</b> Aquí te llegarán tus avisos de Gastos Hogar. Escribe /stop para dejar de recibirlos.')
-  }
-  return next
-}
-
 /** Notifications older than this are never sent: linking must not flood the chat with the whole history. */
 const MAX_AGE_DAYS = 7
 
 /**
- * 2. Forward what has not been sent yet. Every notification carries a Telegram status: no `telegramStatus` = pending,
+ * Forward what has not been sent yet. Every notification carries a Telegram status: no `telegramStatus` = pending,
  * 'sent' = delivered, 'skipped' = deliberately not sent (dismissed, zone switched off, too old). Only pending ones
  * are looked at, so running the job again never repeats a message.
  */
@@ -139,22 +88,10 @@ async function sendPending() {
 }
 
 async function main() {
-  const started = new Date()
-  console.log(`Fecha: ${started.toString()}  (${APPLY ? 'ACTÚA' : 'simulación'})`)
-  const me = await tg('getMe', {})
-  console.log(`Bot del token: @${me.username}`)
-  const state = (await stateRef.get()).data() ?? {}
-
-  // With a webhook set (the Cloudflare Worker) Telegram hands messages to it and getUpdates would fail: linking is its job then
-  const hook = await tg('getWebhookInfo', {})
-  let offset = Number(state.offset ?? 0)
-  if (hook.url) console.log('Webhook activo: la vinculación la hace el Worker; esta tarea solo envía avisos.')
-  else offset = await linkChats(offset)
-
+  console.log(`Fecha: ${new Date().toString()}  (${APPLY ? 'ACTÚA' : 'simulación'})`)
+  console.log(`Bot del token: @${(await tg('getMe', {})).username}`)
   await sendPending()
-
-  if (APPLY) await stateRef.set({ offset }, { merge: true })
-  else console.log('\nSimulación: no se envió ni guardó nada. Agrega --apply.')
+  if (!APPLY) console.log('\nSimulación: no se envió nada. Agrega --apply.')
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })

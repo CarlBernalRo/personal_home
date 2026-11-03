@@ -3,8 +3,9 @@
  * waiting for the hourly GitHub job.
  *
  * Telegram POSTs every message sent to the bot here. The Worker only deals with linking:
- *   /start CODE  → finds the user whose profile holds that code (`telegramLinkCode`, made in Perfil → Avisos), stores
- *                  their `telegramChatId` and answers in the chat
+ *   /start CODE  → finds the user whose profile holds that code (`telegramLinkCode`, made in Perfil → Avisos; valid
+ *                  5 minutes, single use, and refused if more than one profile holds it), stores their `telegramChatId`
+ *                  and answers in the chat
  *   /stop        → unlinks that chat
  * Sending the app's notifications stays in the GitHub job (scripts/ci/send-telegram.ts).
  *
@@ -18,7 +19,8 @@ interface Env {
   FIREBASE_SERVICE_ACCOUNT: string
 }
 
-const CODE_TTL_MS = 48 * 3600_000
+/** A link code is valid for 5 minutes and works once (it is removed from the profile when it links). */
+const CODE_TTL_MS = 5 * 60_000
 
 // ── Google access token from the service account (RS256 JWT signed with WebCrypto) ──────────────────────────────
 let cached: { token: string; exp: number } | null = null
@@ -63,13 +65,13 @@ async function firestore(env: Env, path: string, init: RequestInit & { json?: un
   return data
 }
 
-/** The first user whose `field` equals `value`. */
-async function userWhere(env: Env, field: string, value: string) {
+/** Up to two users whose `field` equals `value` (two means the value is ambiguous). */
+async function usersWhere(env: Env, field: string, value: string) {
   const rows: any[] = await firestore(env, ':runQuery', {
     method: 'POST',
-    json: { structuredQuery: { from: [{ collectionId: 'users' }], where: { fieldFilter: { field: { fieldPath: field }, op: 'EQUAL', value: { stringValue: value } } }, limit: 1 } },
+    json: { structuredQuery: { from: [{ collectionId: 'users' }], where: { fieldFilter: { field: { fieldPath: field }, op: 'EQUAL', value: { stringValue: value } } }, limit: 2 } },
   })
-  return rows.find((r) => r.document)?.document as { name: string; fields: Record<string, any> } | undefined
+  return rows.filter((r) => r.document).map((r) => r.document) as { name: string; fields: Record<string, any> }[]
 }
 
 /** Writes `fields`; any path in `mask` that is not in `fields` is removed from the document. */
@@ -89,8 +91,7 @@ async function handle(env: Env, msg: any) {
   const text = String(msg.text).trim()
 
   if (/^\/stop\b/i.test(text)) {
-    const user = await userWhere(env, 'telegramChatId', String(chatId))
-    if (user) await patchUser(env, user.name, ['telegramChatId', 'telegramLinkedAt'], {})
+    for (const user of await usersWhere(env, 'telegramChatId', String(chatId))) await patchUser(env, user.name, ['telegramChatId', 'telegramLinkedAt'], {})
     await say(env, chatId, 'Listo, no te enviaré más avisos. Vuelve a vincular desde Perfil → Avisos cuando quieras.')
     return
   }
@@ -101,9 +102,12 @@ async function handle(env: Env, msg: any) {
     return
   }
 
-  const user = await userWhere(env, 'telegramLinkCode', code)
+  // the code must belong to exactly one person; judged against when the message was SENT, not when it is read
+  const matches = await usersWhere(env, 'telegramLinkCode', code)
+  const user = matches.length === 1 ? matches[0] : undefined
   const issued = user?.fields.telegramLinkCodeAt?.timestampValue as string | undefined
-  if (!user || (issued && Date.now() - Date.parse(issued) > CODE_TTL_MS)) {
+  const sentAt = typeof msg.date === 'number' ? msg.date * 1000 : Date.now()
+  if (!user || !issued || sentAt - Date.parse(issued) > CODE_TTL_MS) {
     await say(env, chatId, 'Ese código no es válido o ya venció. Genera uno nuevo desde Perfil → Avisos.')
     return
   }

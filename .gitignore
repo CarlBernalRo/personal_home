@@ -38,3 +38,6 @@ inspirations/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Caché local de wrangler (Cloudflare Worker)
+workers/**/.wrangler/

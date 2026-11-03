@@ -1009,13 +1009,6 @@ export async function saveDerivedNotifications(userId: string, alerts: { key: st
   await batch.commit()
 }
 
-export async function deleteNotifications(ids: string[]) {
-  if (ids.length === 0) return
-  const batch = writeBatch(db)
-  ids.forEach((id) => batch.delete(doc(db, 'notifications', id)))
-  await batch.commit()
-}
-
 // ── Household invitations ─────────────────────────────────────────────────────
 
 export async function createHouseholdInvite(data: NewHouseholdInvite) {
