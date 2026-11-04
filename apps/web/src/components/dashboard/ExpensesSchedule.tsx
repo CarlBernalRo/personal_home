@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { AttachmentButton } from '@/components/pending/AttachmentButton'
-import { addMonths, differenceInCalendarDays, format, startOfDay, startOfMonth } from 'date-fns'
+import { addMonths, format, startOfDay, startOfMonth } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { ListChecks } from 'lucide-react'
 import type { DashboardData } from '@/hooks/useDashboardData'
@@ -17,6 +17,8 @@ const MONTHS_SHOWN = 6
 const DAY_MS = 86_400_000
 /** Width of one day on the line: wide enough for a circle, so the line scrolls sideways. */
 const DAY_W = 34
+/** A run of days with nothing in it is not drawn day by day: it is squeezed into one short break of this width. */
+const GAP_W = 24
 
 interface Item {
   id: string
@@ -66,8 +68,6 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
   const earliest = [...salary.periods].sort((a, b) => a.start.getTime() - b.start.getTime())[0]?.start
   const from = startOfMonth(earliest && earliest.getTime() < today.getTime() ? earliest : today)
   const to = startOfMonth(addMonths(from, MONTHS_SHOWN))
-  const totalDays = differenceInCalendarDays(to, from)
-  const x = (d: Date) => differenceInCalendarDays(d, from) * DAY_W
   const months = Array.from({ length: MONTHS_SHOWN }, (_, i) => addMonths(from, i))
 
   const days = useMemo(() => {
@@ -130,14 +130,49 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fixed.expenses, fixed.paymentIndex, salary.personal, from.getTime()])
 
+  // The axis: only the days that have something (and today, so its mark has a place) take room; the empty stretches
+  // between them are squeezed into a short break. `x` maps any date onto it, so months and salary periods follow along.
+  const todayKey = dayKey(today)
+  const axis = useMemo(() => {
+    const keys = new Set(days.map((d) => d.day))
+    if (todayKey >= from.getTime() && todayKey < to.getTime()) keys.add(todayKey)
+    const cells = [...keys].sort((a, b) => a - b)
+    const left = new Map<number, number>()
+    const breaks: { at: number; days: number }[] = []
+    let cursor = 0
+    cells.forEach((k, i) => {
+      if (i > 0) {
+        const empty = Math.round((k - cells[i - 1]) / DAY_MS) - 1
+        if (empty > 0) { breaks.push({ at: cursor + GAP_W / 2, days: empty }); cursor += GAP_W }
+      }
+      left.set(k, cursor)
+      cursor += DAY_W
+    })
+    const width = Math.max(cursor, DAY_W)
+    const x = (date: Date) => {
+      const t = dayKey(date)
+      if (cells.length === 0 || t <= cells[0]) return 0
+      if (t > cells[cells.length - 1]) return width
+      const exact = left.get(t)
+      if (exact !== undefined) return exact
+      // inside a squeezed stretch: placed in proportion to how far through it the date is
+      const next = cells.findIndex((c) => c > t)
+      const prev = cells[next - 1]
+      const empty = Math.round((cells[next] - prev) / DAY_MS) - 1
+      const through = (Math.round((t - prev) / DAY_MS) - 1) / empty
+      return left.get(prev)! + DAY_W + GAP_W * through
+    }
+    return { cells, left, breaks, width, x }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [days, todayKey, from.getTime(), to.getTime()])
+  const { x, width: axisW } = axis
+
   // open on today, so the nearest payments are the first thing seen
-  useFocusToday(scroller, () => {
-    const t = differenceInCalendarDays(today, from)
-    return t >= 0 && t < totalDays ? t * DAY_W + DAY_W / 2 : null
-  }, days.length > 0)
+  const todayCell = axis.left.get(todayKey)
+  useFocusToday(scroller, () => (todayCell !== undefined ? todayCell + DAY_W / 2 : null), days.length > 0)
 
   const periods = salary.periods.filter((p) => p.end.getTime() > from.getTime() && p.start.getTime() < to.getTime())
-  const todayX = differenceInCalendarDays(today, from) * DAY_W + DAY_W / 2
+  const todayX = todayCell !== undefined ? todayCell + DAY_W / 2 : -1
 
   const picked = (() => {
     if (!selected) return null
@@ -207,26 +242,26 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
       ) : (
         <div>
           <div ref={scroller} className="overflow-x-auto scrollbar-none -mx-1 px-1 pb-1">
-            <div className="relative" style={{ width: totalDays * DAY_W, height: 150 }}>
+            <div className="relative" style={{ width: axisW, height: 150 }}>
               {/* today's line goes first so it sits under the period ranges and the circles */}
-              {todayX > 0 && todayX < totalDays * DAY_W && (
+              {todayX >= 0 && (
                 <>
                   <span className="absolute top-[50px] bottom-0 w-px bg-white/70 pointer-events-none" style={{ left: todayX }} aria-hidden="true" />
                   <span className="absolute bottom-0 -translate-x-1/2 rounded bg-white/90 px-1 text-[9px] font-bold uppercase text-[#06131d] pointer-events-none" style={{ left: todayX }}>Hoy</span>
                 </>
               )}
 
-              {/* month axis */}
-              {months.map((m) => (
+              {/* month axis: only the months that have something (the others were squeezed away) */}
+              {months.filter((m) => axis.cells.some((c) => c >= m.getTime() && c < addMonths(m, 1).getTime())).map((m, i) => (
                 <span key={m.getTime()} className="absolute top-0 text-[10px] font-semibold capitalize text-[#9aa4ac] border-l border-white/15 pl-1.5 h-4" style={{ left: x(m) }}>
-                  {format(m, m.getMonth() === 0 || m.getTime() === from.getTime() ? 'MMMM yyyy' : 'MMMM', { locale: es })}
+                  {format(m, i === 0 || m.getMonth() === 0 ? 'MMMM yyyy' : 'MMMM', { locale: es })}
                 </span>
               ))}
 
               {/* the salary periods, as context for the dates */}
               {periods.map((p) => {
                 const left = Math.max(0, x(p.start))
-                const right = Math.min(totalDays * DAY_W, x(p.end))
+                const right = Math.min(axisW, x(p.end))
                 if (right <= left) return null
                 return (
                   <span key={p.id} className="absolute top-5 h-5 rounded border border-white/10 bg-[#0e2434] px-1.5 text-[9px] font-mono leading-5 text-[#8a929a] truncate" style={{ left, width: right - left - 2 }}>
@@ -237,6 +272,18 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
 
               {/* the line, with a tick and the day number under every day that has payments */}
               <span className="absolute left-0 right-0 top-[88px] h-px bg-white/15" aria-hidden="true" />
+              {/* a stretch of days with nothing in it, squeezed: a small break in the line says how long it was */}
+              {axis.breaks.map((b) => (
+                <span
+                  key={b.at}
+                  title={`${b.days} ${b.days === 1 ? 'día' : 'días'} sin pagos`}
+                  aria-label={`${b.days} ${b.days === 1 ? 'día' : 'días'} sin pagos`}
+                  className="absolute top-[79px] h-[18px] -translate-x-1/2 cursor-default bg-[#0a1f2f] px-0.5 text-[12px] font-bold leading-[18px] tracking-[-0.08em] text-[#7d8a94]"
+                  style={{ left: b.at }}
+                >
+                  ···
+                </span>
+              ))}
               {days.map((d) => (
                 <div key={d.day} className="absolute top-[28px] flex flex-col items-center" style={{ left: x(d.date), width: DAY_W, height: 120 }}>
                   <div className="flex flex-col items-center gap-1" style={{ marginTop: d.fixed.length > 0 && d.additional.length > 0 ? 32 : 47 }}>{/* centered on the line; two circles stack: fixed over additional */}
