@@ -198,11 +198,11 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
                     </div>
                   ))}
                   {(spendDays.get(day) ?? []).map((x) => (
-                    <div key={x.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-amber-400/40 bg-amber-500/10">
-                      <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-amber-200 truncate"><Receipt size={13} className="flex-shrink-0" aria-hidden="true" /> {x.concept}</span>
-                      <span className="flex items-center gap-2">
+                    <div key={x.id} className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 px-3 py-2 rounded-lg border border-amber-400/40 bg-amber-500/10">
+                      <span className="flex items-start gap-1.5 text-sm font-semibold text-amber-200 min-w-0"><Receipt size={13} className="flex-shrink-0 mt-1 sm:mt-0" aria-hidden="true" /> <span className="break-words sm:truncate">{x.concept}</span></span>
+                      <span className="flex items-center justify-end gap-2 sm:flex-shrink-0">
                         {x.attachmentId && <AttachmentButton compact attachmentId={x.attachmentId} />}
-                        <span className="text-sm font-mono font-bold text-amber-200">−{formatCOP(x.amount)}</span>
+                        <span className="whitespace-nowrap text-base sm:text-sm font-mono font-bold text-rose-300">−{formatCOP(x.amount)}</span>
                       </span>
                     </div>
                   ))}
@@ -230,13 +230,8 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
                         <span className="flex items-center gap-2.5 min-w-0">
                           <AppIcon name={cat?.icon} size={16} className="text-brand-300 flex-shrink-0" />
                           <span className="min-w-0">
-                            <span className="block text-sm font-semibold text-[#f0fae8] truncate">{fe.concept}{fe.oneTime && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">programado</span>}</span>
-                            {paidOn && (
-                              <span className="flex items-center gap-2 text-[10px] font-mono text-brand-400">
-                                <span>{payment?.auto ? 'debitado' : 'pagado'} el {paidOn}{paidOffDue(entry) && entry.due ? ` · vencía el ${format(entry.due, 'd MMM', { locale: es })}` : ''}</span>
-                                {(payment as any)?.attachmentId && <AttachmentButton compact attachmentId={(payment as any).attachmentId} />}
-                              </span>
-                            )}
+                            <span className="block text-sm font-semibold text-[#f0fae8] break-words sm:truncate">{fe.concept}{fe.oneTime && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">programado</span>}</span>
+                            {paidOn && <span className="block text-[10px] font-mono text-brand-400">{payment?.auto ? 'debitado' : 'pagado'} el {paidOn}{paidOffDue(entry) && entry.due ? ` · vencía el ${format(entry.due, 'd MMM', { locale: es })}` : ''}</span>}
                             <AccountChip account={accounts.find((a) => a.id === entryAccountId(entry))} planned={!payment} />
                             {hasArrears && (
                               <span className="block text-[10px] font-mono text-red-300 capitalize">
@@ -249,8 +244,8 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
                           {/* fixed-width columns so amounts and statuses line up from row to row */}
                           <span className="sm:w-28 text-left sm:text-right leading-tight">
                             {hasArrears && <span className="block text-[9px] uppercase tracking-wider text-red-300">Total a pagar</span>}
-                            <span className={clsx('text-sm font-mono tabular-nums', hasArrears && 'font-bold text-red-200')}>
-                              {formatCOP(shown(entry))}
+                            <span className={clsx('text-sm font-mono tabular-nums', hasArrears ? 'font-bold text-red-200' : 'text-rose-300')}>
+                              −{formatCOP(shown(entry))}
                             </span>
                             {balance !== null && (
                               <span className={clsx('block max-lg:hidden text-[10px] font-mono', balance < 0 ? 'text-red-300' : 'text-brand-300')}>
@@ -258,8 +253,11 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
                               </span>
                             )}
                           </span>
-                          <span className={clsx('sm:w-[11.5rem] text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', STATUS_META[keyOf(entry)].chip)}>
-                            {labelOf(entry)}
+                          <span className="flex items-center gap-2">
+                            {(payment as any)?.attachmentId ? <AttachmentButton compact attachmentId={(payment as any).attachmentId} /> : <span className="hidden sm:block w-7 flex-shrink-0" aria-hidden="true" />}
+                            <span className={clsx('sm:w-[11.5rem] text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', STATUS_META[keyOf(entry)].chip)}>
+                              {labelOf(entry)}
+                            </span>
                           </span>
                         </span>
                       </button>

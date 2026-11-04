@@ -10,7 +10,7 @@ import type {
   NewIncome, NewHouseholdDebt, NewHouseholdExpense,
   CrossingAllocation, NewStoredNotification, NewHouseholdInvite, PendingMovement,
 } from '@/shared'
-import { resolveExpenseShares, sharesToDebtors } from '@/shared'
+import { resolveExpenseShares, sharesToDebtors, planAbono, isPendingDebt } from '@/shared'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -985,6 +985,14 @@ export async function markNotificationsUnread(ids: string[]) {
 }
 
 /** Takes notifications out of the active list without deleting them: they stay in the history. */
+/** These saved notifications stopped being true: they stay in the history but are never sent to Telegram. */
+export async function skipTelegramNotifications(ids: string[]) {
+  if (ids.length === 0) return
+  const batch = writeBatch(db)
+  ids.forEach((id) => batch.update(doc(db, 'notifications', id), { telegramStatus: 'skipped', telegramAt: serverTimestamp() }))
+  await batch.commit()
+}
+
 export async function archiveNotifications(ids: string[]) {
   if (ids.length === 0) return
   const batch = writeBatch(db)
@@ -1056,6 +1064,8 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
   const account = chosen && (await getDoc(doc(db, 'accounts', chosen))).exists() ? chosen : undefined
   const date = toDate(pm.date)
   const batch = writeBatch(db)
+  // work that needs the committed data (figures of the debts, telling the person who was paid)
+  let after: (() => Promise<void>) | null = null
 
   if (pm.kind === 'income') {
     batch.set(doc(collection(db, 'incomes')), {
@@ -1075,6 +1085,47 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
       paymentDate: Timestamp.fromDate(date), notes: pm.comment ?? '', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
     })
     if (account) batch.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
+  } else if (pm.kind === 'abono') {
+    if (!pm.householdId) throw new Error('Falta saber a qué hogar corresponde')
+    const hh = await getHousehold(pm.householdId)
+    const members = ((hh?.members as string[] | undefined) ?? [])
+    if (!hh || !members.includes(pm.userId)) throw new Error('Ya no perteneces a ese hogar. Descarta este movimiento.')
+    if (pm.creditorId && !members.includes(pm.creditorId)) throw new Error('La persona a la que pagaste ya no está en el hogar. Descarta este movimiento.')
+    // the debts as they are NOW: another payment may have changed what is owed since the screenshot was sent
+    const raw = (await getHouseholdDebts(pm.householdId)) as any[]
+    const paid = new Map<string, number>()
+    for (const x of raw) if (x.tipo === 'Abono' && x.saldaId) paid.set(x.saldaId, (paid.get(x.saldaId) || 0) + (x.amount as number))
+    const debts = raw.map((d) => (d.tipo === 'Deuda' ? { ...d, paidAbono: paid.get(d.id) || 0 } : d))
+    if (pm.targetDebtId && !debts.some((d) => d.id === pm.targetDebtId && isPendingDebt(d))) throw new Error('Esa deuda ya está saldada. Descarta este movimiento.')
+
+    const plan = planAbono({ debts, members, debtor: pm.userId, creditor: pm.creditorId ?? null, targetDebtId: pm.targetDebtId ?? null, amount: pm.amount, category: 'otros_hogar' })
+    // everything this confirmation writes is ONE payment, even when it is spread over several debts
+    const paymentId = crypto.randomUUID()
+    for (const r of plan.rows) {
+      batch.set(doc(collection(db, 'householdDebts')), {
+        householdId: pm.householdId, concept: r.concept, tipo: 'Abono', amount: r.amount, debtor: pm.userId, creditor: r.creditor, paymentId,
+        accountId: account ?? null, receiptStatus: r.creditor && r.creditor !== pm.userId ? 'pending' : null, category: r.category,
+        date: Timestamp.fromDate(date), registeredBy: pm.userId, estado: '', saldaId: r.saldaId, notas: pm.comment ?? '', cruzado: false, crossedAmount: 0,
+        ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+      })
+    }
+    if (account) batch.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
+
+    const myName = ((hh.memberNames as Record<string, string> | undefined) ?? {})[pm.userId] || 'Alguien'
+    after = async () => {
+      for (const id of new Set(plan.rows.map((r) => r.saldaId).filter(Boolean) as string[])) await syncDebtFigures(id, pm.householdId!).catch(() => { /* the screen computes it from the movements anyway */ })
+      // the person who was paid is told, with the detail, so they can confirm it and say in which account they got it
+      const link = `/hogar?id=${pm.householdId}`
+      if (!plan.paidTo || plan.paidTo === pm.userId) {
+        await notifyHouseholdMembers(members, { fromUid: pm.userId, zone: 'hogar', severity: 'info', title: `${myName} registró un abono`, body: `${pm.amount.toLocaleString('es-CO')}.`, link }).catch(() => {})
+      } else {
+        await notifyHouseholdMembers([plan.paidTo], {
+          fromUid: pm.userId, zone: 'hogar', severity: 'info', title: `${myName} te pagó $${pm.amount.toLocaleString('es-CO')}`,
+          body: `${plan.paidLines.map((l) => `${l.concept} ($${l.amount.toLocaleString('es-CO')})`).join(' · ')}. Confirma que lo recibiste y en qué cuenta.`,
+          link, receipt: { householdId: pm.householdId!, paymentId, amount: pm.amount, fromName: myName, lines: plan.paidLines, date: date.toISOString() },
+        }).catch(() => {})
+      }
+    }
   } else {
     batch.set(doc(collection(db, 'expenses')), {
       userId: pm.userId, description: pm.concept, amount: pm.amount, category: pm.category ?? 'otro', date: Timestamp.fromDate(date),
@@ -1086,6 +1137,7 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
 
   batch.update(doc(db, 'pendingMovements', pm.id), { status: 'confirmed', confirmedAt: serverTimestamp(), accountId: account ?? deleteField() })
   await batch.commit()
+  if (after) await (after as () => Promise<void>)()
 }
 
 /** The person does not want it: it stays on record as discarded, leaves the pending list, and its screenshot is deleted. */

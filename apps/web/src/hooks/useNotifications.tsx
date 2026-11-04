@@ -6,7 +6,7 @@ import { useFixedData } from '@/hooks/useFixedData'
 import { usePendingMovements } from '@/hooks/usePendingMovements'
 import { useAuthStore } from '@/store/auth'
 import {
-  archiveNotifications, saveDerivedNotifications, getHousehold, getHouseholdIds, getMyInvites, getNotifications, joinHousehold, markNotificationsRead, markNotificationsUnread,
+  archiveNotifications, saveDerivedNotifications, skipTelegramNotifications, getHousehold, getHouseholdIds, getMyInvites, getNotifications, joinHousehold, markNotificationsRead, markNotificationsUnread,
   notifyHouseholdMembers, respondToInvite,
 } from '@/lib/firestore'
 import {
@@ -100,7 +100,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       ])
       setStored(docs.map((d: any): AppNotification => ({
         key: d.id, source: 'stored', zone: d.zone, severity: d.severity, title: d.title, body: d.body, link: d.link,
-        read: !!d.read, createdAt: toDate(d.createdAt), receipt: d.receipt, archived: !!d.archived, derivedKey: d.derivedKey,
+        read: !!d.read, createdAt: toDate(d.createdAt), receipt: d.receipt, archived: !!d.archived, derivedKey: d.derivedKey, telegramStatus: d.telegramStatus,
       })))
       setInvites(
         (invs as any[])
@@ -152,7 +152,9 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const notifications = useMemo<AppNotification[]>(() => {
     const hidden = new Set(local.hidden)
     const read = new Set(local.read)
-    const fromDerived = derived.filter((n) => !hidden.has(n.key)).map((n) => ({ ...n, read: read.has(n.key) }))
+    // a notice marked as read from Telegram is read in its saved copy: the live alert follows it
+    const copyRead = new Set(stored.filter((c) => c.derivedKey && c.read).map((c) => c.derivedKey as string))
+    const fromDerived = derived.filter((n) => !hidden.has(n.key)).map((n) => ({ ...n, read: read.has(n.key) || copyRead.has(n.key) }))
     // saved copies of derived alerts and dismissed ones only live in the history
     const active = stored.filter((n) => !n.archived && !n.derivedKey)
     return [...invites, ...fromDerived, ...active].sort((a, b) => {
@@ -184,6 +186,16 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       .then(() => refresh())
       .catch(() => fresh.forEach((n) => savedKeys.current.delete(n.key)))
   }, [uid, loading, derived, stored, refresh])
+
+  // A saved copy of an alert whose situation was solved (e.g. the movements were confirmed) must not go to Telegram later
+  useEffect(() => {
+    if (!uid || loading || salary.loading || fixed.loading || pending.loading) return
+    const live = new Set(derived.map((n) => n.key))
+    const stale = stored.filter((n) => n.derivedKey && !live.has(n.derivedKey) && !n.telegramStatus).map((n) => n.key)
+    if (stale.length === 0) return
+    setStored((prev) => prev.map((x) => (stale.includes(x.key) ? { ...x, telegramStatus: 'skipped' } : x)))
+    skipTelegramNotifications(stale).catch(() => {})
+  }, [uid, loading, salary.loading, fixed.loading, pending.loading, derived, stored])
 
   // how many of the alerts that apply right now were dismissed here
   const hiddenCount = useMemo(() => {

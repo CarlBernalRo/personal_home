@@ -39,6 +39,8 @@ export interface StoredNotification {
   archived?: boolean;
   /** A copy of an alert worked out from the person's own data, kept so it stays in the history after it is solved. */
   derivedKey?: string;
+  /** Set by the Telegram job (or by the app when the alert stopped applying): 'sent' | 'skipped'. */
+  telegramStatus?: 'sent' | 'skipped';
   createdAt: Date;
 }
 
@@ -81,4 +83,6 @@ export interface AppNotification {
   archived?: boolean;
   /** Only in the history: this one is a saved copy of an alert that comes from the person's data. */
   derivedKey?: string;
+  /** Whether the Telegram job already took care of it. */
+  telegramStatus?: 'sent' | 'skipped';
 }

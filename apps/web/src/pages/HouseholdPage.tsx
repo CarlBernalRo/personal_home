@@ -25,7 +25,7 @@ import {
   calcNetBalance, renameHousehold, deleteHousehold, getHouseholdIds,
   addHouseholdCrossing, getHouseholdCrossings, notifyHouseholdMembers, getAccounts,
 } from '@/lib/firestore'
-import { formatCOP, remainingOf, allocateAbono, inPaymentOrder, isPendingDebt, creditorOf, owedByCreditor, othersOf } from '@/shared'
+import { formatCOP, remainingOf, allocateAbono, inPaymentOrder, isPendingDebt, creditorOf, owedByCreditor, othersOf, planAbono } from '@/shared'
 import { ConfirmReceiptModal } from '@/components/household/ConfirmReceiptModal'
 import { HouseholdExpenseModal } from '@/components/household/HouseholdExpenseModal'
 import { HouseholdLoanModal } from '@/components/household/HouseholdLoanModal'
@@ -216,120 +216,45 @@ export default function HouseholdPage() {
       const effectiveTargetId = saldaTargetId || selectedTargetDebtId
       // everything this submit writes is ONE payment, even when it is split across several debts
       const paymentId = crypto.randomUUID()
-      // what the payment went to, so the person who receives it can see and confirm it
-      const paidLines: { concept: string; amount: number }[] = []
-      let paidTo: string | null = null
       const toConfirm = (c: string | null) => (c && c !== user.uid ? 'pending' as const : null)
-      const targetDebt = effectiveTargetId ? debts.find((d: any) => d.id === effectiveTargetId) : null
+      const paidAt = new Date(data.date + 'T12:00:00')
+      // who is paid and how it is split is decided by the shared planner (also used to confirm an abono prepared in Telegram)
+      const plan = planAbono({
+        debts, members, debtor: data.debtor, creditor: data.creditor || null, targetDebtId: effectiveTargetId,
+        amount: data.amount, concept: data.concept, category: data.category,
+      })
 
-      if (effectiveTargetId && targetDebt) {
+      for (const r of plan.rows) {
         await addHouseholdDebt({
           householdId: activeId,
-          concept: data.concept?.trim() || `Abono: ${targetDebt.concept}`,
+          concept: r.concept,
           tipo: 'Abono',
-          amount: data.amount,
+          amount: r.amount,
           debtor: data.debtor,
-          creditor: creditorOf(targetDebt, members) ?? null,
+          creditor: r.creditor,
           paymentId,
           accountId: data.accountId || null,
-          receiptStatus: toConfirm(creditorOf(targetDebt, members) ?? null),
-          category: targetDebt.category || data.category,
-          date: new Date(data.date + 'T12:00:00'),
+          receiptStatus: toConfirm(r.creditor),
+          category: r.category,
+          date: paidAt,
           registeredBy: user.uid,
           estado: '',
-          saldaId: effectiveTargetId,
+          saldaId: r.saldaId,
           notas: data.notas ?? '',
           cruzado: false,
         })
-        const newRemaining = Math.max(0, remainingOf(targetDebt) - data.amount)
-        if (newRemaining === 0) {
-          showToast(`¡Deuda "${targetDebt.concept}" 100% saldada!`, 'success')
-        } else {
-          showToast(`Abono de ${formatCOP(data.amount)} registrado. Saldo pendiente: ${formatCOP(newRemaining)}`, 'success')
-        }
-        paidLines.push({ concept: targetDebt.concept, amount: data.amount })
-        paidTo = creditorOf(targetDebt, members) ?? null
-      } else {
-        // General abono: allocate across pending debts of this debtor (oldest first)
-        // only what is owed to the person being paid (a household can have several creditors)
-        const lines = owedByCreditor(debts, data.debtor, members)
-        const creditor = data.creditor || (lines.length === 1 ? lines[0].creditor : null) || null
-        const pending = inPaymentOrder(debts.filter((d: any) => d.debtor === data.debtor && isPendingDebt(d) && (!creditor || creditorOf(d, members) === creditor)))
-        const allocations = allocateAbono(data.amount, pending)
-
-        if (allocations.length > 0) {
-          for (const alloc of allocations) {
-            const d = pending.find((x: any) => x.id === alloc.debtId)
-            paidLines.push({ concept: d?.concept ?? data.concept ?? 'Abono', amount: alloc.amount })
-            await addHouseholdDebt({
-              householdId: activeId,
-              concept: `Abono: ${d?.concept ?? data.concept}`,
-              tipo: 'Abono',
-              amount: alloc.amount,
-              debtor: data.debtor,
-              creditor,
-              paymentId,
-              accountId: data.accountId || null,
-              receiptStatus: toConfirm(creditor),
-              category: d?.category ?? data.category,
-              date: new Date(data.date + 'T12:00:00'),
-              registeredBy: user.uid,
-              estado: '',
-              saldaId: alloc.debtId,
-              notas: data.notas ?? '',
-              cruzado: false,
-            })
-          }
-          const allocatedTotal = allocations.reduce((s, a) => s + a.amount, 0)
-          if (data.amount > allocatedTotal) {
-            paidLines.push({ concept: data.concept || 'Abono al hogar', amount: data.amount - allocatedTotal })
-            await addHouseholdDebt({
-              householdId: activeId,
-              concept: data.concept || 'Abono al hogar',
-              tipo: 'Abono',
-              amount: data.amount - allocatedTotal,
-              debtor: data.debtor,
-              creditor,
-              paymentId,
-              accountId: data.accountId || null,
-              receiptStatus: toConfirm(creditor),
-              category: data.category,
-              date: new Date(data.date + 'T12:00:00'),
-              registeredBy: user.uid,
-              estado: '',
-              saldaId: null,
-              notas: data.notas ?? '',
-              cruzado: false,
-            })
-          }
-          showToast(`Abono de ${formatCOP(data.amount)} distribuido en ${allocations.length} deuda(s)`, 'success')
-          paidTo = creditor
-        } else {
-          await addHouseholdDebt({
-            householdId: activeId,
-            concept: data.concept || 'Abono al hogar',
-            tipo: 'Abono',
-            amount: data.amount,
-            debtor: data.debtor,
-            creditor,
-            paymentId,
-            accountId: data.accountId || null,
-            receiptStatus: toConfirm(creditor),
-            category: data.category,
-            date: new Date(data.date + 'T12:00:00'),
-            registeredBy: user.uid,
-            estado: '',
-            saldaId: null,
-            notas: data.notas ?? '',
-            cruzado: false,
-          })
-          paidTo = creditor
-          paidLines.push({ concept: data.concept || 'Abono al hogar', amount: data.amount })
-          showToast(`Abono de ${formatCOP(data.amount)} registrado`, 'success')
-        }
       }
 
-      tellPayment(paidTo, data.amount, paidLines, paymentId, new Date(data.date + 'T12:00:00'))
+      if (plan.kind === 'target') {
+        if (plan.remainingAfter === 0) showToast(`¡Deuda "${plan.targetConcept}" 100% saldada!`, 'success')
+        else showToast(`Abono de ${formatCOP(data.amount)} registrado. Saldo pendiente: ${formatCOP(plan.remainingAfter ?? 0)}`, 'success')
+      } else if (plan.kind === 'allocated') {
+        showToast(`Abono de ${formatCOP(data.amount)} distribuido en ${plan.allocations} deuda(s)`, 'success')
+      } else {
+        showToast(`Abono de ${formatCOP(data.amount)} registrado`, 'success')
+      }
+
+      tellPayment(plan.paidTo, data.amount, plan.paidLines, paymentId, paidAt)
       debtForm.reset({ date: format(new Date(), 'yyyy-MM-dd'), tipo: 'Abono', category: 'otros_hogar', debtor: user.uid, creditor: '', accountId: defaultAccountId })
       loadAccounts()
       setSaldaTargetId(null)

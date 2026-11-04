@@ -109,28 +109,31 @@ export function ExpenseTimeline({ rows, showToday, onDelete, onEdit, accounts = 
                       <div
                         key={r.id}
                         className={clsx(
-                          'w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border bg-[#0d263a] transition-colors',
+                          'w-full flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3 px-3 py-2.5 rounded-lg border bg-[#0d263a] transition-colors',
                           KIND[kind].border,
                           !r.counted && 'opacity-60',
                         )}
                       >
-                        <span className="flex items-center gap-2.5 min-w-0">
-                          <span className="flex-shrink-0">{r.household ? <Home size={16} className="text-sky-300" /> : <AppIcon name={cat?.icon} size={16} className="text-brand-300" />}</span>
+                        <span className="flex items-start sm:items-center gap-2.5 min-w-0">
+                          <span className="flex-shrink-0 mt-0.5 sm:mt-0">{r.household ? <Home size={16} className="text-sky-300" /> : <AppIcon name={cat?.icon} size={16} className="text-brand-300" />}</span>
                           <span className="min-w-0">
-                            <span className="block text-sm font-semibold text-[#f0fae8] truncate">{r.description}</span>
+                            {/* on a phone the whole name is shown (it wraps); on a wide screen it is cut to keep the rows even */}
+                            <span className="block text-sm font-semibold text-[#f0fae8] break-words sm:truncate">{r.description}</span>
                             <span className="block text-[10px] font-mono text-[#8a929a]">{r.household ? 'Abono en el hogar' : (cat?.label ?? r.category)}</span>
                             <AccountChip account={accounts.find((a) => a.id === r.accountId)} />
                           </span>
                         </span>
-                        <span className="flex items-center gap-3 flex-shrink-0">
-                          {/* fixed-width columns so amounts and kinds line up from row to row */}
-                          {r.attachmentId && <AttachmentButton compact attachmentId={r.attachmentId} />}
-                          <span className="min-w-[5.5rem] sm:w-28 text-right text-sm font-mono tabular-nums">{formatCOP(r.amount)}</span>
-                          <span className={clsx('hidden sm:block sm:w-[11.5rem] text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', KIND[kind].chip)}>
-                            {KIND[kind].label}
+                        {/* phone: amount and type on one line, the actions at the end; wide screen: fixed columns so rows line up */}
+                        <span className="flex items-center justify-between gap-3 sm:justify-end sm:flex-shrink-0 border-t border-white/[0.06] pt-2 sm:border-0 sm:pt-0">
+                          <span className="text-base sm:text-sm font-mono tabular-nums font-semibold sm:w-28 sm:text-right text-rose-300">−{formatCOP(r.amount)}</span>
+                          <span className="flex items-center gap-2">
+                            {r.attachmentId ? <AttachmentButton compact attachmentId={r.attachmentId} /> : <span className="hidden sm:block w-7 flex-shrink-0" aria-hidden="true" />}
+                            <span className={clsx('sm:w-[11.5rem] text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', KIND[kind].chip)}>
+                              {KIND[kind].label}
+                            </span>
                           </span>
                           {r.household || !onDelete || !onEdit ? (
-                            <span className="w-[3.5rem]" />
+                            <span className="hidden sm:block w-[3.5rem]" />
                           ) : (
                             <span className="flex items-center">
                               <button

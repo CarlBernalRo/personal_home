@@ -1,5 +1,5 @@
 /** What kind of record a movement read from a Telegram screenshot would become once the person confirms it. */
-export type PendingKind = 'income' | 'fixed' | 'occasional';
+export type PendingKind = 'income' | 'fixed' | 'occasional' | 'abono';
 
 /**
  * A movement the person prepared in Telegram (from a screenshot) and that is waiting for them to confirm it in the app.
@@ -19,6 +19,10 @@ export interface PendingMovement {
   occMonth?: string;
   /** For an occasional expense that belongs to one of the person's budgets. */
   budgetId?: string;
+  /** For an abono to a household: which household, whom it pays and (optionally) the one debt it is meant for. */
+  householdId?: string;
+  creditorId?: string;
+  targetDebtId?: string;
   /** Account chosen in Telegram; the person can change it before confirming. */
   accountId?: string;
   comment?: string;

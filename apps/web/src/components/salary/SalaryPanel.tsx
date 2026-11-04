@@ -303,11 +303,13 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
           {periodExtras.length > 0 && (
             <div className="space-y-1 border-t border-white/10 pt-2">
               {periodExtras.map((x) => (
-                <div key={x.id} className="flex items-center justify-between gap-2 text-xs">
-                  <span className="inline-flex items-center gap-1 text-violet-200 truncate"><Plus size={12} className="flex-shrink-0" aria-hidden="true" /> {x.concept} <span className="text-[#8a929a]">· {shortDate(x.date)}</span></span>
+                <div key={x.id} className="flex items-start justify-between gap-2 text-xs">
+                  <span className="min-w-0 flex-1 text-violet-200">
+                    <span className="flex items-start gap-1"><Plus size={12} className="mt-0.5 flex-shrink-0" aria-hidden="true" /> <span className="break-words">{x.concept} <span className="text-[#8a929a]">· {shortDate(x.date)}</span></span></span>
+                  </span>
                   <span className="flex items-center gap-2 flex-shrink-0">
                     {x.attachmentId && <AttachmentButton compact attachmentId={x.attachmentId} />}
-                    <span className="font-mono text-violet-200">+{formatCOP(x.amount)}</span>
+                    <span className="font-mono text-emerald-300 whitespace-nowrap">+{formatCOP(x.amount)}</span>
                     <button
                       type="button"
                       onClick={async () => {

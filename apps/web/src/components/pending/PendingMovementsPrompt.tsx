@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Send, Wallet, CalendarClock, ShoppingBag } from 'lucide-react'
+import { Send, Wallet, CalendarClock, ShoppingBag, Home } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { useAuth } from '@/hooks/useAuth'
@@ -26,6 +26,7 @@ export function PendingMovementsPrompt() {
     { icon: Wallet, label: counts.income === 1 ? 'ingreso' : 'ingresos', n: counts.income, tone: 'text-emerald-300' },
     { icon: CalendarClock, label: counts.fixed === 1 ? 'gasto fijo' : 'gastos fijos', n: counts.fixed, tone: 'text-sky-300' },
     { icon: ShoppingBag, label: counts.occasional === 1 ? 'gasto adicional' : 'gastos adicionales', n: counts.occasional, tone: 'text-amber-300' },
+    { icon: Home, label: counts.abono === 1 ? 'abono al hogar' : 'abonos al hogar', n: counts.abono, tone: 'text-violet-300' },
   ].filter((r) => r.n > 0)
 
   return (

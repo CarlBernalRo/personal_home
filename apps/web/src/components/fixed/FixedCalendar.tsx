@@ -6,7 +6,7 @@ import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
 import {
   AlertTriangle, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, CircleDashed, Clock, CornerUpRight,
-  GripVertical, Home, Layers, Receipt, Zap, type LucideIcon,
+  GripVertical, Home, Layers, Paperclip, Receipt, Zap, type LucideIcon,
 } from 'lucide-react'
 import {
   amountFor, effectiveDue, householdDebtDays, isAutoDebit, isPaused, monthEntries, monthKey, settingsFor, monthRange, shiftMonth, formatCOP,
@@ -572,6 +572,7 @@ function FixedChip({ entry, viewMonth, isDragging, canDrag, onOpen, onPointerDow
           <span className="font-mono text-[11px] font-semibold tabular-nums truncate">{amount}</span>
           {autoPending && <Zap size={10} className="shrink-0 text-cyan-300" aria-label="Automático" />}
           {moved && <CornerUpRight size={10} className="shrink-0 opacity-80" aria-label="Movido" />}
+          {(payment as any)?.attachmentId && <Paperclip size={10} className="shrink-0 text-brand-300" aria-label="Tiene comprobante: ábrelo para verlo" />}
         </span>
         {(hasArrears || fromOther) && (
           <span className="block truncate text-[10px] opacity-80">

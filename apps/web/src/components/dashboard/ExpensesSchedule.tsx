@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { addMonths, differenceInCalendarDays, format, startOfDay, startOfMonth } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { ListChecks } from 'lucide-react'
@@ -33,6 +34,8 @@ interface Item {
   planned?: boolean
   /** For a payment made on a different day than its due date: when it was due. */
   note?: string
+  /** Screenshot of the payment / spend sent from Telegram. */
+  attachmentId?: string
 }
 
 type Track = 'fixed' | 'additional'
@@ -99,6 +102,7 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
           rank: RANK[key] ?? 0,
           accountId: (payment ? (payment as any).accountId : fe.accountId) as string | undefined,
           planned: !payment,
+          attachmentId: payment ? ((payment as any).attachmentId as string | undefined) : undefined,
           note: payment && shownOn.getTime() !== startOfDay(due).getTime() ? `vencía el ${format(due, "d 'de' MMM", { locale: es })}` : undefined,
         })
       }
@@ -119,6 +123,7 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
         state: counted ? '' : 'Anterior · no cuenta',
         rank: 0,
         accountId: e.accountId as string | undefined,
+        attachmentId: e.attachmentId as string | undefined,
       })
     }
     return [...map.values()].sort((a, b) => a.day - b.day)
@@ -269,12 +274,15 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
                 <span className="flex items-start gap-2.5 min-w-0">
                   <span className="mt-1 w-2.5 h-2.5 rounded-[3px] flex-shrink-0" style={{ backgroundColor: i.color }} aria-hidden="true" />
                   <span className="min-w-0">
-                    <span className="block text-sm font-semibold text-[#f0fae8] truncate">{i.label}</span>
+                    <span className="block text-sm font-semibold text-[#f0fae8] break-words">{i.label}</span>
                     <span className="block text-[11px] text-[#8a929a]">{[i.sub, i.state, i.note].filter(Boolean).join(' · ')}</span>
                     <AccountChip account={salary.accounts.find((a: any) => a.id === i.accountId)} planned={i.planned} className="mt-0.5" />
                   </span>
                 </span>
-                <span className="font-mono text-sm font-bold text-[#f3f5f6] flex-shrink-0">{formatCOP(i.amount)}</span>
+                <span className="flex items-center gap-2 flex-shrink-0">
+                  {i.attachmentId && <AttachmentButton compact attachmentId={i.attachmentId} />}
+                  <span className="font-mono text-sm font-bold text-rose-300 whitespace-nowrap">−{formatCOP(i.amount)}</span>
+                </span>
               </li>
             ))}
           </ul>

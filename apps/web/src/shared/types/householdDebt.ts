@@ -37,6 +37,8 @@ export interface HouseholdDebt {
   /** Position of this installment in its loan, and how many there are. */
   installment?: number | null;
   installments?: number | null;
+  /** Screenshot of the payment sent from Telegram (`attachments/{id}`). */
+  attachmentId?: string;
   createdAt: Date;
 }
 

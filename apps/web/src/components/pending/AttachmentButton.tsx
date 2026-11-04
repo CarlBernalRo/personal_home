@@ -8,8 +8,9 @@ interface Props {
   /** Text of the button (full variant). */
   label?: string
   /**
-   * Just a paperclip, for rows of a list. It is a span with role="button" so it can live inside a row that is itself a
-   * button, and its clicks (also those inside the picture window) do not reach that row.
+   * Only the paperclip, for rows of a list: it goes just left of the row's type chip. It is a span with role="button" so it
+   * can live inside a row that is itself a button, and its clicks (also those inside the picture window) do not reach that
+   * row.
    */
   compact?: boolean
 }
@@ -55,9 +56,10 @@ export function AttachmentButton({ attachmentId, label = 'Ver comprobante', comp
           aria-label="Ver comprobante"
           onClick={show}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show() } }}
-          className="inline-flex cursor-pointer items-center rounded-md p-1 text-brand-300 transition hover:bg-brand-500/15 hover:text-brand-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400"
+          // 28px round button; the invisible ::before widens the tap area beyond it (a thumb needs ~40px)
+          className="relative inline-flex h-7 w-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-full border border-brand-400/40 bg-brand-500/10 text-brand-300 transition before:absolute before:-inset-1.5 before:content-[''] hover:bg-brand-500/20 hover:text-brand-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400"
         >
-          <Paperclip size={13} />
+          <Paperclip size={14} aria-hidden="true" />
         </span>
         {viewer}
       </span>

@@ -1,4 +1,5 @@
 import { Fragment, useState } from 'react'
+import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { format, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
@@ -123,13 +124,15 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                     const receiptState = isPayment ? (kids.every((k) => k.debt?.receiptStatus === 'confirmed') ? 'confirmed' : kids.some((k) => k.debt?.receiptStatus === 'pending') ? 'pending' : null) : null
                     const iReceive = receiptState === 'pending' && kids[0]?.debt?.creditor === myUid
                     const lastState = kids.length ? kids[kids.length - 1] : r
+                    // the screenshot of a payment is kept on its abono rows (all of them share it)
+                    const attachmentId = isPayment ? ((r.debt?.attachmentId as string | undefined) ?? (kids.find((k) => k.debt?.attachmentId)?.debt?.attachmentId as string | undefined)) : undefined
                     const left = r.debt ? remainingOf(r.debt) : 0
                     const content = (
                       <>
                         <span className="flex items-center gap-2.5 min-w-0">
                           <Avatar name={who} photoURL={photoOf(r.debtor)} size={26} color={colorOf(r.debtor)} />
                           <span className="min-w-0">
-                            <span className="block text-sm font-semibold text-[#f0fae8] truncate">
+                            <span className="block text-sm font-semibold text-[#f0fae8] break-words sm:truncate">
                               {r.concept}
                               {r.debt?.loanId && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-amber-300 border border-amber-400/40 rounded px-1 py-0.5">préstamo</span>}
                               {r.debt?.expenseId && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">gasto compartido</span>}
@@ -152,8 +155,11 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                           {iReceive && onConfirmReceipt && (
                             <button type="button" onClick={() => onConfirmReceipt(r)} className="whitespace-nowrap rounded-md border border-emerald-400/50 bg-emerald-500/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-300 hover:bg-emerald-500/25 transition">Confirmar recibido</button>
                           )}
-                          <span className={clsx('sm:w-24 text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', STATUS_META[status].chip)}>
-                            {STATUS_META[status].label}
+                          <span className="flex items-center gap-2">
+                            {isPayment && attachmentId ? <AttachmentButton compact attachmentId={attachmentId} /> : <span className="hidden sm:block w-7 flex-shrink-0" aria-hidden="true" />}
+                            <span className={clsx('sm:w-24 text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', STATUS_META[status].chip)}>
+                              {STATUS_META[status].label}
+                            </span>
                           </span>
                         </span>
                       </>

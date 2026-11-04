@@ -29,6 +29,7 @@ export function usePendingMovements() {
     income: items.filter((p) => p.kind === 'income').length,
     fixed: items.filter((p) => p.kind === 'fixed').length,
     occasional: items.filter((p) => p.kind === 'occasional').length,
+    abono: items.filter((p) => p.kind === 'abono').length,
     total: items.length,
   }), [items])
 

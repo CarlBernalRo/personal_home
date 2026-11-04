@@ -1,4 +1,5 @@
 import { format } from 'date-fns'
+import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { es } from 'date-fns/locale'
 import { ArrowLeft, Clock, Coins, GitMerge, ShoppingBag, Trash2 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -44,15 +45,15 @@ export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId
 
   // What happened to this debt, in date order, with the balance left after each movement
   const moves = [
-    ...abonos.map((a) => ({ id: `ab|${a.id}`, kind: 'abono' as const, date: toDate(a.date), amount: a.amount as number, by: byName(a.registeredBy), note: (a.notas as string) || '', onDelete: () => onDeleteAbono(a) })),
+    ...abonos.map((a) => ({ id: `ab|${a.id}`, kind: 'abono' as const, date: toDate(a.date), amount: a.amount as number, by: byName(a.registeredBy), note: (a.notas as string) || '', attachmentId: a.attachmentId as string | undefined, onDelete: () => onDeleteAbono(a) })),
     ...crosses.map((c) => ({ id: `cr|${c.id}`, kind: 'cruce' as const, date: toDate(c.createdAt), amount: c.amount as number, by: byName(c.initiatedBy), note: (c.notes as string) || '', onDelete: undefined as (() => void) | undefined })),
   ].sort((a, b) => a.date.getTime() - b.date.getTime())
   let running = debt.amount as number
   const steps = [
-    { id: 'registro', label: 'Deuda registrada', color: '#f59e0b', date: toDate(debt.date), by: byName(debt.registeredBy), note: '', delta: debt.amount as number, balance: running, onDelete: undefined as (() => void) | undefined },
+    { id: 'registro', label: 'Deuda registrada', color: '#f59e0b', date: toDate(debt.date), by: byName(debt.registeredBy), note: '', attachmentId: undefined as string | undefined, delta: debt.amount as number, balance: running, onDelete: undefined as (() => void) | undefined },
     ...moves.map((m) => {
       running -= m.amount
-      return { id: m.id, label: m.kind === 'abono' ? `Abono a ${creditorName}` : `Cruce con una deuda de ${creditorName}`, color: m.kind === 'abono' ? '#52b69a' : '#38bdf8', date: m.date, by: m.by, note: m.note, delta: -m.amount, balance: running, onDelete: m.onDelete }
+      return { id: m.id, label: m.kind === 'abono' ? `Abono a ${creditorName}` : `Cruce con una deuda de ${creditorName}`, color: m.kind === 'abono' ? '#52b69a' : '#38bdf8', date: m.date, by: m.by, note: m.note, attachmentId: 'attachmentId' in m ? m.attachmentId : undefined, delta: -m.amount, balance: running, onDelete: m.onDelete }
     }),
   ]
   const remainingNow = remainingOf(debt)
@@ -153,9 +154,12 @@ export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId
                       <p className="text-xs font-semibold" style={{ color: st.color }}>{st.label}</p>
                       <p className="text-[10px] text-[#8a929a]">{fmt(st.date)}{st.by ? ` · ${st.by}` : ''}{st.note ? ` · ${st.note}` : ''}</p>
                     </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-xs font-mono font-bold text-[#f3f5f6]">{st.delta > 0 ? '+' : '−'}{formatCOP(Math.abs(st.delta))}</p>
-                      <p className="text-[10px] font-mono text-[#8a929a]">saldo {formatCOP(Math.max(0, st.balance))}</p>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {st.attachmentId && <AttachmentButton compact attachmentId={st.attachmentId} />}
+                      <div className="text-right">
+                        <p className="text-xs font-mono font-bold text-[#f3f5f6]">{st.delta > 0 ? '+' : '−'}{formatCOP(Math.abs(st.delta))}</p>
+                        <p className="text-[10px] font-mono text-[#8a929a]">saldo {formatCOP(Math.max(0, st.balance))}</p>
+                      </div>
                     </div>
                     {st.onDelete && (
                       <button onClick={st.onDelete} title="Eliminar abono" aria-label="Eliminar abono" className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/15 transition flex-shrink-0">

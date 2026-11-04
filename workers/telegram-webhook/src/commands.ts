@@ -66,7 +66,7 @@ async function proximos(db: Db, uid: string, today: Date) {
 }
 
 // ── households ───────────────────────────────────────────────────────────────────────────────────────────────────
-async function households(db: Db, uid: string) {
+export async function households(db: Db, uid: string) {
   const list = await db.query('households', [{ field: 'members', op: 'ARRAY_CONTAINS', value: uid }])
   return Promise.all(list.map(async (h) => {
     const raw = await db.query('householdDebts', [{ field: 'householdId', op: 'EQUAL', value: h.id }])

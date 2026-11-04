@@ -8,22 +8,22 @@ No contiene ningún token ni secreto: esos se generan y guardan tú mismo (ver "
 ## 1. Cómo está armado
 
 ```
-Usuario ──/start CÓDIGO, /saldo…──▶ Telegram ──webhook──▶ Cloudflare Worker ──▶ Firestore
-                                                              │  (vincula chats, responde comandos)
-                                                              ▼
-Firestore (notifications) ◀── la app guarda avisos ──  GitHub Actions (cada hora)
-                                  │                          │
-                                  └────── send-telegram.ts ──┘──▶ Telegram ──▶ chat del usuario
+Usuario ──/start CÓDIGO, /saldo, capturas──▶ Telegram ──webhook──▶ ┐
+                                                                   │   Cloudflare Worker  ◀── Cron Triggers (cada 10 min y 7:07 a.m.)
+Firestore ◀────────── lee y escribe ───────────────────────────────┘   (vincula, responde, lee capturas,
+   ▲   (notifications, pendingMovements, fixedExpensePayments…)         envía avisos, guarda débitos automáticos)
+   └── la app guarda avisos y movimientos pendientes
 ```
+
+GitHub **solo guarda el código**: no ejecuta nada. Todo lo que corre solo vive en el Worker.
 
 | Pieza | Dónde vive | Qué hace |
 |---|---|---|
 | **App** (Perfil → Avisos) | Firebase Hosting | Genera un código de un solo uso (5 min) y muestra el estado de la vinculación. Guarda `telegramChatId`, `telegramZones` en `users/{uid}`. |
 | **Worker** | Cloudflare (`workers/telegram-webhook/`) | Recibe cada mensaje del bot al instante. Vincula (`/start CÓDIGO`), desvincula (`/stop`) y responde los comandos de consulta. |
-| **Task de avisos** | GitHub Actions (`.github/workflows/telegram-avisos.yml`, `scripts/ci/send-telegram.ts`) | Cada hora envía a Telegram las notificaciones que aún no se han enviado. |
+| **Tareas programadas** | El mismo Worker (Cron Triggers, `src/jobs.ts`) | Cada 10 minutos envía a Telegram los avisos que faltan. Cada día a las 7:07 a.m. guarda los débitos automáticos vencidos (ver sección 8). |
 | **Bot** | Telegram (BotFather) | El usuario del bot es el que usa la app en `VITE_TELEGRAM_BOT`. |
 
-Lo que **no** se hace aquí: la task **ya no vincula chats** (eso es del Worker) y el Worker **no envía avisos** (eso es de la task).
 
 ### Comandos del bot (solo lectura, solo chats vinculados)
 
@@ -33,11 +33,11 @@ Lo que **no** se hace aquí: la task **ya no vincula chats** (eso es del Worker)
 
 Cada documento de `notifications` puede llevar `telegramStatus`:
 
-- sin valor → **pendiente** (se envía en la próxima ejecución),
+- sin valor → **pendiente** (se envía en la próxima ejecución, máximo 10 minutos),
 - `sent` → enviado (también `telegramSent: true`),
-- `skipped` → omitido a propósito: descartado en la app, de una zona apagada o de hace más de 7 días.
+- `skipped` → omitido a propósito: descartado en la app, de una zona apagada o de hace más de 48 horas.
 
-Ejecutar la task varias veces **no repite** mensajes.
+Ejecutar el trabajo varias veces **no repite** mensajes. Se envían solo los avisos de las últimas 48 horas, y un aviso de "movimientos pendientes" se omite si ya no queda ninguno por confirmar.
 
 ### Reglas del código de vinculación
 
@@ -66,14 +66,9 @@ VITE_TELEGRAM_BOT=Casita_Felix_bot
 
 Es el usuario del bot **sin** `@`. Sin esta variable, la pestaña Avisos dice "Falta configurar el bot". El valor se compila dentro de la app: hay que **volver a desplegar** para que cambie en producción.
 
-### 2.3 Secreto en GitHub (para la task de avisos)
+### 2.3 GitHub
 
-GitHub → repo → Settings → Secrets and variables → Actions:
-
-- `TELEGRAM_BOT_TOKEN` = el token del bot.
-- `FIREBASE_SERVICE_ACCOUNT` = el JSON de una cuenta de servicio de Firebase (ya existe por la task de débitos automáticos).
-
-El workflow solo corre por cron desde la rama **`main`**.
+No se configura nada en GitHub: ni secretos ni workflows. (Antes las tareas corrían allí; GitHub las retrasaba horas y se movieron al Worker.) Si todavía existen los secretos `TELEGRAM_BOT_TOKEN` y `FIREBASE_SERVICE_ACCOUNT` en el repo, se pueden borrar.
 
 ### 2.4 Cuenta de servicio para el Worker
 
@@ -152,7 +147,7 @@ npx firebase-tools deploy --only hosting --project personalhome-3ee06
 2. Abre el bot con el botón y toca **Iniciar**. Si no se abre nada (computador sin Telegram instalado), escribe `/start TU_CÓDIGO` a mano en el chat del bot desde el celular o web.telegram.org.
 3. El bot responde "✅ Telegram vinculado" **al instante** y la pantalla cambia sola.
 4. Escribe `/saldo`: debe contestar tus cuentas.
-5. Avisos: GitHub → Actions → **Avisos por Telegram** → *Run workflow*, con **"apply" marcado**. Sin "apply" solo simula. El log muestra `Bot del token: @…` y cuántos avisos envió (`0` si no hay notificaciones nuevas sin enviar).
+5. Avisos: espera hasta 10 minutos o ejecútalo ya con `POST /run/telegram?apply=1` (sección 8). Responde cuántos avisos envió (`0` si no hay nuevos).
 
 ---
 
@@ -161,10 +156,9 @@ npx firebase-tools deploy --only hosting --project personalhome-3ee06
 ### Token del bot (también si se filtró)
 
 1. BotFather → `/revoke` → elige el bot → copia el token nuevo.
-2. GitHub: actualiza el secreto `TELEGRAM_BOT_TOKEN`.
-3. Worker: `npx wrangler secret put TELEGRAM_BOT_TOKEN`.
-4. Vuelve a ejecutar `setWebhook` (2.7) con el token nuevo.
-5. Vuelve a publicar el menú (2.8).
+2. Worker: `npx wrangler secret put TELEGRAM_BOT_TOKEN`.
+3. Vuelve a ejecutar `setWebhook` (2.7) con el token nuevo.
+4. Vuelve a publicar el menú (2.8).
 
 El vínculo de los usuarios sigue vigente: vive en Firestore, no depende del token.
 
@@ -187,10 +181,9 @@ El vínculo de los usuarios sigue vigente: vive en Firestore, no depende del tok
 | El menú "/" muestra comandos que no son nuestros | Hay listas en otro ámbito o idioma, o caché del cliente | Ejecuta `/setup` (2.8), cierra y abre el chat. |
 | "El código no es válido o ya venció" | Pasaron más de 5 min, o ya se usó | En la app, **Generar código nuevo**. |
 | Pantalla de la app no cambia a "vinculado" | El Worker no se enteró del `/start` | Revisa el diagnóstico de arriba; mira Firestore: `users/{uid}.telegramChatId` debe existir. |
-| La task de GitHub falla en `getMe` | El token de GitHub es viejo o de otro bot | Actualiza `TELEGRAM_BOT_TOKEN` en los secretos. |
-| La task dice `0 enviados` | No hay notificaciones nuevas sin enviar | Es normal. Hace falta una notificación nueva de otra persona o una alerta nueva. |
-| Un aviso no llega | Descartado, zona apagada o de hace más de 7 días (queda `skipped`) | Revisa las zonas en Perfil → Avisos. |
-| Los avisos tardan | La task corre cada hora (`17 * * * *`) y GitHub puede retrasar los cron | Es una limitación conocida; ver "Límites". |
+| El envío dice `sent: 0` | No hay avisos nuevos sin enviar | Es normal. Hace falta una notificación nueva o una alerta nueva. |
+| Un aviso no llega | Descartado, de una zona apagada, de hace más de 48 horas, o una alerta que ya se resolvió (queda `skipped`) | Revisa las zonas en Perfil → Avisos. |
+| Los avisos o los débitos no corrieron | El Worker no se redesplegó con los Cron Triggers, o falló | Mira `system/jobs` en Firestore (hora, resultado o error de cada trabajo) o ejecuta `POST /run/...` (sección 8). |
 | `git push` o el build suben datos personales | La página `/seed` solo existe en desarrollo (`import.meta.env.DEV`) | Antes de desplegar, verifica que el bundle no contenga datos de `seed-data.ts`. |
 
 Útil: `npx wrangler tail` (en `workers\telegram-webhook`) muestra en vivo lo que recibe el Worker.
@@ -199,12 +192,12 @@ El vínculo de los usuarios sigue vigente: vive en Firestore, no depende del tok
 
 ## 5. Límites y notas
 
-- Los **avisos** salen cada hora (cron de GitHub, no es exacto). La **vinculación y los comandos** son instantáneos (Worker).
+- Los **avisos** salen cada 10 minutos (Cron Trigger de Cloudflare, puntual). La **vinculación y los comandos** son instantáneos.
 - Los avisos calculados de los datos de alguien ("vence mañana") solo llegan a Telegram si esa persona abrió la app ese día, porque es la app quien los guarda.
 - Cloudflare Workers (plan gratis): 100.000 peticiones al día. Sobra para este uso.
 - Solo funcionan chats **privados** con el bot. El Worker ignora los grupos.
 - `/stop` en el bot o **Desvincular** en la app borran el `telegramChatId`.
-- Si alguien bloquea el bot, la task detecta el error 403 y desvincula el chat sola.
+- Si alguien bloquea el bot, el envío lo detecta y desvincula el chat solo.
 
 ## 6. Archivos
 
@@ -215,9 +208,9 @@ El vínculo de los usuarios sigue vigente: vive en Firestore, no depende del tok
 - `apps/web/src/pages/PendingMovementsPage.tsx`, `components/pending/PendingMovementsPrompt.tsx`, `hooks/usePendingMovements.ts` — confirmación en la app.
 - `workers/telegram-webhook/src/commands.ts` — comandos de consulta.
 - `workers/telegram-webhook/src/db.ts` — cliente REST de Firestore.
-- `workers/telegram-webhook/wrangler.toml` — nombre del Worker.
-- `scripts/ci/send-telegram.ts` — task de avisos.
-- `.github/workflows/telegram-avisos.yml` — cron horario.
+- `workers/telegram-webhook/wrangler.toml` — nombre del Worker, servicio de IA y horarios de los Cron Triggers.
+- `workers/telegram-webhook/src/jobs.ts` — trabajos programados: envío de avisos y débitos automáticos.
+- `workers/telegram-webhook/src/format.ts` — arma el mensaje de cada tipo de aviso (sección 9).
 - `apps/web/src/components/profile/TelegramForm.tsx` — pantalla Perfil → Avisos.
 
 ## 7. Registrar movimientos desde una captura
@@ -228,11 +221,12 @@ El usuario envía al bot una captura (foto o imagen) de un pago o ingreso. El bo
 
 1. **Valor** → "Leí $X, ¿es correcto?" (Sí / Escribir otro).
 2. **Fecha** → igual (además Hoy / Ayer).
-3. **Tipo** → Ingreso · Gasto fijo · Gasto ocasional (siempre lo elige la persona; la captura solo da una pista).
+3. **Tipo** → Ingreso · Gasto fijo · Gasto ocasional · **Abono al hogar** (siempre lo elige la persona; la captura solo da una pista, por ejemplo avisa si menciona a alguien de tu hogar).
 4. Según el tipo:
    - *Ingreso*: concepto → cuenta.
    - *Gasto fijo*: cuál gasto fijo y de qué mes (lista de los pendientes más cercanos a la fecha) → cuenta.
    - *Gasto ocasional*: cuál presupuesto, o "Otro gasto" (concepto y categoría) → cuenta.
+   - *Abono al hogar*: **a cuál hogar** → **a quién le pagaste** (ordenado por lo que le debes) → **a qué deuda va**: repartirlo entre sus deudas (la más antigua primero) o una concreta → cuenta de la que salió el dinero.
 5. **Comentario** (opcional) → **Confirmar** → "Enviar a la app".
 
 Cada paso tiene **⬅️ Atrás** y **❌ Cancelar**; `/cancelar` también sirve. El estado de la conversación se guarda en `telegramFlows/{chatId}` (vence a las 24 h); los botones de mensajes viejos no hacen nada.
@@ -243,12 +237,13 @@ Cada paso tiene **⬅️ Atrás** y **❌ Cancelar**; `/cancelar` también sirve
 - La pantalla **`/pendientes`** (ítem *Pendientes por confirmar* en la barra lateral; en el celular, el ícono de bandeja junto a la campana) usa el mismo diseño de dos paneles que Notificaciones: a la izquierda el filtro por tipo con contadores y **Confirmar todos**; a la derecha los movimientos agrupados por Hoy / Esta semana / Antes. En cada uno se puede cambiar la cuenta, ver el comprobante, **Confirmar y registrar** (crea el ingreso, el pago del fijo o el gasto y mueve el saldo, en una sola escritura) o **Descartar**.
 - También aparece una alerta en Notificaciones ("Tienes N movimientos de Telegram por confirmar").
 - Un gasto fijo que ya se pagó en la app mientras tanto **se rechaza** al confirmar (hay que descartarlo).
+- **Abono al hogar:** al confirmar se calcula con las deudas *de ese momento* (no las de cuando se envió la captura), con la misma lógica de la pantalla de Hogar (`planAbono`, compartida): se crean las filas de abono (una por deuda que salda, más una general si sobra), se descuenta la cuenta, y a quien recibió le llega el aviso con el detalle para que confirme y diga en qué cuenta lo recibió. Si la deuda elegida ya se saldó, o la persona ya no está en el hogar, se rechaza y hay que descartarlo.
 
 ### Datos
 
 | Colección | Qué guarda | Quién escribe |
 |---|---|---|
-| `pendingMovements` | `kind` (`income`/`fixed`/`occasional`), `amount`, `date`, `concept`, `category`, `fixedExpenseId`+`occMonth`, `budgetId`, `accountId`, `comment`, `status` (`pending`/`confirmed`/`discarded`), `read` (lo que dijo la captura) | El Worker crea; el dueño confirma o descarta (reglas en `firestore.rules`) |
+| `pendingMovements` | `kind` (`income`/`fixed`/`occasional`/`abono`), `amount`, `date`, `concept`, `category`, `fixedExpenseId`+`occMonth`, `budgetId`, `householdId`+`creditorId`+`targetDebtId` (abono), `accountId`, `comment`, `status` (`pending`/`confirmed`/`discarded`), `read` (lo que dijo la captura) | El Worker crea; el dueño confirma o descarta (reglas en `firestore.rules`) |
 | `telegramFlows` | Estado de la conversación en curso | Solo el Worker (sin acceso desde la app) |
 | `attachments` | Copia pequeña de la captura (`mime`, `size`, `data` en base64, `userId`) | El Worker crea; el dueño la lee o la borra |
 
@@ -308,3 +303,65 @@ Lee con menos precisión que los modelos de pago, pero el flujo nunca asume: cad
 | La app no muestra la modal | Ya salió en esta sesión (una vez por sesión), o no hay pendientes | Cerrar sesión y volver a entrar, o abrir `/pendientes`. |
 | Error al confirmar un gasto fijo | Ya estaba pagado en la app | Descartar el pendiente. |
 | "No guardé la imagen porque pesa mucho" | Se envió como archivo sin comprimir | Enviarla como foto (no como archivo). |
+
+## 8. Tareas programadas (en el Worker)
+
+Cloudflare dispara el Worker a la hora exacta (los Cron Triggers están en UTC; Colombia es UTC-5):
+
+| Trabajo | Cuándo | Qué hace |
+|---|---|---|
+| `telegram` | cada 10 minutos (`*/10 * * * *`) | Envía a Telegram los avisos nuevos (últimas 48 h) de cada persona vinculada, respetando sus zonas. Omite descartados, de zonas apagadas y alertas ya resueltas. |
+| `debits` | todos los días a las 7:07 a.m. de Colombia (`7 12 * * *`) | Guarda como pagos reales los débitos automáticos que ya vencieron y descuenta de su cuenta. Mismo cálculo que hace la app al abrirla (`planAutoPayments`). |
+
+**Seguridad de los débitos:** cada pago tiene un id fijo por gasto y mes (`auto_<gasto>_<mes>`) y se crea junto con el cambio de saldo en **una sola escritura atómica**; si ya existe (la app o una ejecución anterior lo guardó) no se repite ni se descuenta dos veces. El cálculo se hace con el reloj de Colombia aunque el Worker corra en UTC (se probó que da exactamente lo mismo, con datos reales, en varias fechas y en los cambios de día).
+
+### Ver si corrieron
+
+Cada ejecución real deja su huella en el documento `system/jobs` de Firestore (`telegram` y `debits`: hora, duración, resultado o error). Se ve en la consola de Firebase → Firestore → `system` → `jobs`.
+
+### Ejecutarlos a mano
+
+Con el secreto del webhook en el encabezado. Sin `?apply=1` solo **informa** qué haría, sin enviar ni escribir nada:
+
+```powershell
+# qué enviaría / qué guardaría (simulación)
+curl.exe -X POST "https://gastos-hogar-telegram.TUSUBDOMINIO.workers.dev/run/telegram" -H "X-Telegram-Bot-Api-Secret-Token: TU_WEBHOOK_SECRET"
+curl.exe -X POST "https://gastos-hogar-telegram.TUSUBDOMINIO.workers.dev/run/debits" -H "X-Telegram-Bot-Api-Secret-Token: TU_WEBHOOK_SECRET"
+# de verdad
+curl.exe -X POST "https://gastos-hogar-telegram.TUSUBDOMINIO.workers.dev/run/debits?apply=1" -H "X-Telegram-Bot-Api-Secret-Token: TU_WEBHOOK_SECRET"
+```
+
+### Activarlos (una sola vez, al redesplegar el Worker)
+
+Los horarios viven en `wrangler.toml` (`[triggers] crons`). Basta con `npx wrangler deploy`: Cloudflare los registra solos. En el panel de Cloudflare → Workers → `gastos-hogar-telegram` → **Triggers** se ven los dos horarios.
+
+### Límites del plan gratuito de Cloudflare
+
+- **10 ms de CPU por ejecución** y **50 llamadas a servicios externos** por ejecución. Con este volumen (pocas personas) sobra; si algún día aparece el error "exceeded CPU time", el plan de pago de Workers (USD 5/mes) lo sube a 30 s.
+- 5 Cron Triggers por cuenta (se usan 2).
+- Firestore: 144 ejecuciones al día del envío leen solo los avisos de las últimas 48 h, así que quedan muy por debajo de la cuota gratuita.
+
+## 9. Cómo se ven los avisos en Telegram
+
+Cada aviso se arma con **datos en vivo** de la base (no con el texto que la app guardó al crearlo), así que lo que dice es lo que es cierto al momento de enviarlo. Si el dato ya no existe (por ejemplo, la deuda se pagó), se envía la versión simple. Código en `workers/telegram-webhook/src/format.ts`.
+
+| Aviso | Qué incluye |
+|---|---|
+| **Pago por vencer** | Monto, fecha, categoría y frecuencia, **qué cuenta paga y si alcanza** (saldo → cómo quedaría), si es débito automático, y tus anotaciones del gasto. |
+| **Varios por vencer a la vez** | **Un solo mensaje**: lista, total y cómo quedaría cada cuenta. |
+| **Pagos vencidos** | Cada uno con los días de atraso (o meses atrasados), el total y si tus cuentas alcanzan para ponerte al día. |
+| **Día de pago** | Monto, fecha completa y la cuenta donde se deposita. |
+| **Gastos superan ingresos** | Cuánto te pasas, cuánto falta por pagar y los gastos pendientes más grandes. |
+| **Presupuesto ocasional superado** | **Barra de progreso** (▰▰▰▰▱▱▱▱▱▱ 125%), llevas vs estimado, el exceso y los últimos gastos. |
+| **Deuda del hogar por vencer** | Concepto, barra de lo pagado, lo que falta, a quién se le debe y cuándo vence. |
+| **Movimientos por confirmar** | Lista con tipo, monto, fecha y 📎 si tiene comprobante, más los totales de ingresos y gastos. |
+| **Te pagaron (hogar)** | Quién, cuánto, **por qué conceptos**, en qué cuentas puedes recibirlo y tu situación en el hogar. |
+| **Evento del hogar** | El texto del evento más **tu situación en ese hogar** (cuánto debes y cuánto te deben). |
+
+**Herramientas de Telegram que se usan**
+- Formato HTML: negrillas, cursivas y `código`; bloques de cita, que se **pliegan solos** cuando la lista es larga (`<blockquote expandable>`).
+- **Botones:** "📲 Abrir …" lleva directo a la pantalla correcta de la app, y "✓ Marcar como leída" marca el aviso desde el chat (se refleja en la app) y deja solo el botón de abrir.
+- **Silencio inteligente:** solo suena el teléfono con lo que requiere acción (advertencias, críticos, pagos por confirmar); lo informativo llega en silencio.
+- Los mensajes se mantienen cortos: una barra y un par de líneas por dato, sin vistas previas de enlaces.
+
+Los textos del usuario (nombres, conceptos) se escapan antes de enviarse, para que un `<` o un `&` nunca rompa el mensaje (Telegram rechaza el HTML mal formado).

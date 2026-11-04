@@ -1,11 +1,14 @@
 /** The few Telegram Bot API calls the flow needs, behind an interface so the flow can be tested without the network. */
 
-export type Button = { text: string; data: string }
+/** A button under a message: `url` opens a link (the app, straight to a screen), `data` calls back to the bot. */
+export type Button = { text: string; data?: string; url?: string }
 export type Keyboard = Button[][]
 
 export interface Telegram {
-  /** Sends a message and returns its id. */
-  send(chatId: number, text: string, keyboard?: Keyboard): Promise<number>
+  /** Sends a message and returns its id. `silent` delivers it without sound or vibration. */
+  send(chatId: number, text: string, keyboard?: Keyboard, opts?: { silent?: boolean }): Promise<number>
+  /** Changes only the buttons of a message (its text and formatting stay). */
+  editKeyboard?(chatId: number, messageId: number, keyboard: Keyboard): Promise<void>
   /** Rewrites a message (and its buttons). A "not modified" answer is not an error. */
   edit(chatId: number, messageId: number, text: string, keyboard?: Keyboard): Promise<void>
   /** Stops the spinner on a pressed button, optionally with a small notice. */
@@ -15,7 +18,7 @@ export interface Telegram {
 }
 
 const markup = (keyboard?: Keyboard) =>
-  keyboard ? { reply_markup: { inline_keyboard: keyboard.map((row) => row.map((b) => ({ text: b.text, callback_data: b.data }))) } } : { reply_markup: { inline_keyboard: [] } }
+  keyboard ? { reply_markup: { inline_keyboard: keyboard.map((row) => row.map((b) => (b.url ? { text: b.text, url: b.url } : { text: b.text, callback_data: b.data ?? '' }))) } } : { reply_markup: { inline_keyboard: [] } }
 
 export function createTelegram(token: string): Telegram {
   const call = async (method: string, body: Record<string, unknown>) => {
@@ -25,8 +28,12 @@ export function createTelegram(token: string): Telegram {
     return data.result
   }
   return {
-    async send(chatId, text, keyboard) {
-      return (await call('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...markup(keyboard) })).message_id
+    async send(chatId, text, keyboard, opts) {
+      return (await call('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...(opts?.silent ? { disable_notification: true } : {}), ...(keyboard ? markup(keyboard) : {}) })).message_id
+    },
+    async editKeyboard(chatId, messageId, keyboard) {
+      try { await call('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, ...markup(keyboard) }) }
+      catch (e: any) { if (!/not modified/i.test(String(e?.message))) throw e }
     },
     async edit(chatId, messageId, text, keyboard) {
       try { await call('editMessageText', { chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...markup(keyboard) }) }

@@ -59,6 +59,16 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
     const html = document.documentElement
     html.style.overflow = 'hidden'
     return () => {
+      // On a touch screen the browser delivers the end of the tap (mouse events, the "click") to whatever is under the
+      // finger once the sheet is gone: the icon of the bottom bar lit up or even got pressed. A transparent shield absorbs
+      // it for a moment.
+      if (window.matchMedia?.('(pointer: coarse)').matches) {
+        const shield = document.createElement('div')
+        shield.setAttribute('aria-hidden', 'true')
+        shield.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:transparent;touch-action:none;'
+        document.body.appendChild(shield)
+        setTimeout(() => shield.remove(), 450)
+      }
       openCount -= 1
       if (openCount === 0) {
         html.style.overflow = ''

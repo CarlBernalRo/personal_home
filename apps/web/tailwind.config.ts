@@ -1,6 +1,8 @@
 import type { Config } from 'tailwindcss'
 
 export default {
+  // hover: utilities apply only on devices that can hover (no sticky "hover" after a tap on a phone)
+  future: { hoverOnlyWhenSupported: true },
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {

@@ -8,14 +8,14 @@
  *
  * The state of the conversation lives in `telegramFlows/{chatId}` (the Worker keeps nothing in memory).
  */
-import { PERSONAL_CATEGORIES } from '../../../apps/web/src/shared/index'
-import { fixedFor, bogotaToday } from './commands'
+import { PERSONAL_CATEGORIES, creditorOf, inPaymentOrder, isPendingDebt, owedByCreditor, remainingOf } from '../../../apps/web/src/shared/index'
+import { fixedFor, bogotaToday, households } from './commands'
 import type { Db } from './db'
 import type { Keyboard, Telegram } from './telegram'
 import { EMPTY_EXTRACTED, b64, type Extracted } from './vision'
 
-export type Kind = 'income' | 'fixed' | 'occasional'
-type Step = 'amount' | 'date' | 'kind' | 'concept' | 'fixed' | 'budget' | 'category' | 'account' | 'comment' | 'confirm'
+export type Kind = 'income' | 'fixed' | 'occasional' | 'abono'
+type Step = 'amount' | 'date' | 'kind' | 'concept' | 'fixed' | 'budget' | 'category' | 'household' | 'creditor' | 'target' | 'account' | 'comment' | 'confirm'
 
 export interface FlowData {
   amount?: number
@@ -29,6 +29,13 @@ export interface FlowData {
   fixedLabel?: string
   budgetId?: string
   budgetLabel?: string
+  /** Abono to a household: where, to whom and which debt ('auto' = spread it, oldest first). */
+  householdId?: string
+  householdLabel?: string
+  creditorId?: string
+  creditorLabel?: string
+  targetDebtId?: string
+  targetLabel?: string
   /** null = the person chose "sin cuenta" */
   accountId?: string | null
   accountLabel?: string
@@ -136,6 +143,7 @@ function stepsOf(f: Flow): Step[] {
   switch (f.data.kind) {
     case 'income': return [...head, 'concept', 'account', 'comment', 'confirm']
     case 'fixed': return [...head, 'fixed', 'account', 'comment', 'confirm']
+    case 'abono': return [...head, 'household', 'creditor', 'target', 'account', 'comment', 'confirm']
     case 'occasional': return [...head, 'budget', ...(f.data.budgetId === 'other' ? (['concept', 'category'] as Step[]) : []), 'account', 'comment', 'confirm']
     default: return head
   }
@@ -178,12 +186,15 @@ function recap(f: Flow): string {
   if (d.kind) lines.push(`🏷 Tipo: <b>${KIND_LABEL[d.kind]}</b>`)
   if (d.fixedLabel) lines.push(`📌 Gasto fijo: <b>${esc(d.fixedLabel)}</b>`)
   if (d.budgetLabel) lines.push(`🛒 Presupuesto: <b>${esc(d.budgetLabel)}</b>`)
-  if (d.concept && d.kind !== 'fixed') lines.push(`📝 Concepto: <b>${esc(d.concept)}</b>`)
+  if (d.householdLabel) lines.push(`🏠 Hogar: <b>${esc(d.householdLabel)}</b>`)
+  if (d.creditorLabel) lines.push(`🙋 Le pagas a: <b>${esc(d.creditorLabel)}</b>`)
+  if (d.targetDebtId) lines.push(`🎯 Va a: <b>${esc(d.targetDebtId === 'auto' ? 'sus deudas, la más antigua primero' : d.targetLabel)}</b>`)
+  if (d.concept && d.kind !== 'fixed' && d.kind !== 'abono') lines.push(`📝 Concepto: <b>${esc(d.concept)}</b>`)
   if (d.category) lines.push(`🗂 Categoría: <b>${esc(PERSONAL_CATEGORIES.find((c) => c.id === d.category)?.label ?? d.category)}</b>`)
   if (d.accountId !== undefined) lines.push(`🏦 Cuenta: <b>${esc(d.accountId ? d.accountLabel : 'Sin cuenta')}</b>`)
   return lines.length ? `${lines.join('\n')}\n\n` : ''
 }
-const KIND_LABEL: Record<Kind, string> = { income: 'Ingreso', fixed: 'Gasto fijo', occasional: 'Gasto ocasional' }
+const KIND_LABEL: Record<Kind, string> = { income: 'Ingreso', fixed: 'Gasto fijo', occasional: 'Gasto ocasional', abono: 'Abono al hogar' }
 
 async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboard }> {
   const head = '📸 <b>Registrar movimiento</b>\n\n'
@@ -213,10 +224,13 @@ async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboar
       }
     }
     case 'kind': {
-      const hint = ex.direction === 'income' ? '\n<i>La captura parece un dinero recibido.</i>' : ex.direction === 'expense' ? '\n<i>La captura parece un pago o envío.</i>' : ''
+      let hint = ex.direction === 'income' ? '\n<i>La captura parece un dinero recibido.</i>' : ex.direction === 'expense' ? '\n<i>La captura parece un pago o envío.</i>' : ''
+      // the screenshot names someone of the household: it may be an abono (only a hint, the person decides)
+      const who = await memberNamed(d, f)
+      if (who) hint += `\n<i>Menciona a <b>${esc(who.name)}</b>, de tu hogar «${esc(who.household)}»: puede ser un abono.</i>`
       return {
         text: `${head}${body}¿Qué tipo de movimiento es?${hint}`,
-        kb: [[{ text: '💰 Ingreso', data: 'f:k:income' }], [{ text: '📌 Gasto fijo', data: 'f:k:fixed' }], [{ text: '🛒 Gasto ocasional', data: 'f:k:occasional' }], NAV[0]],
+        kb: [[{ text: '💰 Ingreso', data: 'f:k:income' }], [{ text: '📌 Gasto fijo', data: 'f:k:fixed' }], [{ text: '🛒 Gasto ocasional', data: 'f:k:occasional' }], [{ text: '🏠 Abono al hogar', data: 'f:k:abono' }], NAV[0]],
       }
     }
     case 'concept': {
@@ -246,6 +260,42 @@ async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboar
     }
     case 'category':
       return { text: `${head}${body}¿En qué <b>categoría</b> lo pones?`, kb: [...rows(PERSONAL_CATEGORIES.map((c) => ({ text: clip(c.label, 22), data: `f:cat:${c.id}` })), 2), NAV[0]] }
+    case 'household': {
+      const hhs = await households(d.db, f.userId)
+      if (hhs.length === 0) return { text: `${head}${body}No perteneces a ningún hogar todavía, así que no puedo registrar un abono.`, kb: [NAV[0]] }
+      return {
+        text: `${head}${body}¿A cuál <b>hogar</b> le abonas?`,
+        kb: [...hhs.map(({ h, members }) => [{ text: clip(`${h.name} · ${members.length} personas`, 40), data: `f:hh:${h.id}` }]), NAV[0]],
+      }
+    }
+    case 'creditor': {
+      const hh = (await households(d.db, f.userId)).find((x) => x.h.id === f.data.householdId)
+      if (!hh) return { text: `${head}${body}Ese hogar ya no está disponible.`, kb: [NAV[0]] }
+      const owed = new Map(owedByCreditor(hh.debts as any[], f.userId, hh.members).map((l) => [l.creditor, l.owed]))
+      const others = hh.members.filter((m) => m !== f.userId).sort((a, b) => (owed.get(b) ?? 0) - (owed.get(a) ?? 0))
+      return {
+        text: `${head}${body}¿A quién le pagaste?`,
+        kb: [...others.map((m) => [{ text: clip(`${hh.name(m)}${owed.get(m) ? ` · le debes ${cop(owed.get(m)!)}` : ''}`, 46), data: `f:cr:${m}` }]), NAV[0]],
+      }
+    }
+    case 'target': {
+      const hh = (await households(d.db, f.userId)).find((x) => x.h.id === f.data.householdId)
+      if (!hh) return { text: `${head}${body}Ese hogar ya no está disponible.`, kb: [NAV[0]] }
+      const debts = inPaymentOrder((hh.debts as any[]).filter((x) => x.debtor === f.userId && isPendingDebt(x) && creditorOf(x, hh.members) === f.data.creditorId))
+      const total = debts.reduce((s, x) => s + remainingOf(x), 0)
+      const amount = f.data.amount ?? 0
+      const note = debts.length === 0
+        ? `No le debes nada registrado a <b>${esc(f.data.creditorLabel)}</b>: el abono quedará como un pago general.`
+        : `Le debes <b>${cop(total)}</b> en ${debts.length} deuda${debts.length === 1 ? '' : 's'}.${amount > total ? ` Tu abono (${cop(amount)}) es mayor: lo que sobre quedará como pago general.` : ''}`
+      return {
+        text: `${head}${body}${note}\n¿A qué deuda va el abono?`,
+        kb: [
+          [{ text: debts.length ? '🔀 Repartir entre sus deudas (la más antigua primero)' : '➡️ Continuar', data: 'f:td:auto' }],
+          ...debts.slice(0, 8).map((x) => [{ text: clip(`${x.concept} · ${cop(remainingOf(x))}`, 48), data: `f:td:${x.id}` }]),
+          NAV[0],
+        ],
+      }
+    }
     case 'account': {
       const accounts = await accountsOf(d, f.userId)
       const effect = f.data.kind === 'income' ? 'sumará' : 'descontará'
@@ -383,13 +433,44 @@ export async function onCallback(d: FlowDeps, userId: string, cb: { id: string; 
       if (f.step === 'date') { d0.date = isoOf(new Date(today.getFullYear(), today.getMonth(), today.getDate() - (action === 'yest' ? 1 : 0))); advance(f) }
       break
     case 'k': {
-      if (f.step !== 'kind' || !['income', 'fixed', 'occasional'].includes(a)) break
+      if (f.step !== 'kind' || !['income', 'fixed', 'occasional', 'abono'].includes(a)) break
       if (d0.kind !== a) {
         // another type: what belonged to the previous one no longer applies
         delete d0.concept; delete d0.category; delete d0.fixedExpenseId; delete d0.occMonth; delete d0.fixedLabel
         delete d0.budgetId; delete d0.budgetLabel; delete d0.accountId; delete d0.accountLabel
+        delete d0.householdId; delete d0.householdLabel; delete d0.creditorId; delete d0.creditorLabel; delete d0.targetDebtId; delete d0.targetLabel
       }
       d0.kind = a as Kind
+      advance(f)
+      break
+    }
+    case 'hh': {
+      if (f.step !== 'household') break
+      const hh = (await households(d.db, f.userId)).find((x) => x.h.id === a)
+      if (!hh) { notice = 'Ese hogar ya no está disponible'; break }
+      if (d0.householdId !== a) { delete d0.creditorId; delete d0.creditorLabel; delete d0.targetDebtId; delete d0.targetLabel }
+      d0.householdId = hh.h.id; d0.householdLabel = String(hh.h.name)
+      advance(f)
+      break
+    }
+    case 'cr': {
+      if (f.step !== 'creditor') break
+      const hh = (await households(d.db, f.userId)).find((x) => x.h.id === d0.householdId)
+      if (!hh || !hh.members.includes(a) || a === f.userId) { notice = 'Esa persona ya no está disponible'; break }
+      if (d0.creditorId !== a) { delete d0.targetDebtId; delete d0.targetLabel }
+      d0.creditorId = a; d0.creditorLabel = hh.name(a)
+      advance(f)
+      break
+    }
+    case 'td': {
+      if (f.step !== 'target') break
+      if (a === 'auto') { d0.targetDebtId = 'auto'; delete d0.targetLabel }
+      else {
+        const hh = (await households(d.db, f.userId)).find((x) => x.h.id === d0.householdId)
+        const debt = (hh?.debts as any[] | undefined)?.find((x) => x.id === a && x.debtor === f.userId && isPendingDebt(x))
+        if (!debt) { notice = 'Esa deuda ya no está disponible'; break }
+        d0.targetDebtId = debt.id; d0.targetLabel = `${debt.concept} · ${cop(remainingOf(debt))}`
+      }
       advance(f)
       break
     }
@@ -482,7 +563,10 @@ async function send(d: FlowDeps, f: Flow) {
     !x.amount ? 'el valor' : !x.date ? 'la fecha' : !x.kind ? 'el tipo' : x.accountId === undefined ? 'la cuenta'
       : x.kind === 'fixed' && !x.fixedExpenseId ? 'el gasto fijo'
         : x.kind === 'occasional' && !x.budgetId ? 'el presupuesto'
-          : x.kind !== 'fixed' && !x.concept ? 'el concepto'
+          : x.kind === 'abono' && !x.householdId ? 'el hogar'
+            : x.kind === 'abono' && !x.creditorId ? 'a quién le pagaste'
+              : x.kind === 'abono' && !x.targetDebtId ? 'a qué deuda va'
+          : x.kind !== 'fixed' && x.kind !== 'abono' && !x.concept ? 'el concepto'
             : x.kind === 'occasional' && x.budgetId === 'other' && !x.category ? 'la categoría' : ''
   if (missing) { await d.tg.edit(f.chatId, f.messageId!, `Falta ${missing}. Usa ⬅️ Atrás para completarlo.`, NAV); return }
 
@@ -493,8 +577,11 @@ async function send(d: FlowDeps, f: Flow) {
     amount: x.amount,
     // midnight in Colombia (UTC-5), like the dates the app writes
     date: new Date(Date.UTC(y, m - 1, dd, 5, 0, 0)),
-    concept: x.concept ?? '',
+    concept: x.kind === 'abono' ? `Abono a ${x.creditorLabel} · ${x.householdLabel}` : (x.concept ?? ''),
     category: x.category,
+    householdId: x.householdId,
+    creditorId: x.creditorId,
+    targetDebtId: x.targetDebtId && x.targetDebtId !== 'auto' ? x.targetDebtId : undefined,
     fixedExpenseId: x.fixedExpenseId,
     occMonth: x.occMonth,
     budgetId: x.budgetId && x.budgetId !== 'other' ? x.budgetId : undefined,
@@ -513,4 +600,20 @@ async function send(d: FlowDeps, f: Flow) {
     `✅ <b>Enviado a la app.</b>\n\n${recap(f)}Queda <b>pendiente por confirmar</b>: ábrela y confírmalo para que se registre. Tienes ${pending} movimiento${pending === 1 ? '' : 's'} pendiente${pending === 1 ? '' : 's'}.`,
     [],
   )
+}
+
+const plain = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+/** A person of one of the user's households whose name appears in what the screenshot says (a hint, never a decision). */
+async function memberNamed(d: FlowDeps, f: Flow): Promise<{ name: string; household: string } | null> {
+  const text = plain(`${f.extracted.counterparty ?? ''} ${f.extracted.concept ?? ''}`)
+  if (text.trim().length < 3) return null
+  for (const hh of await households(d.db, f.userId)) {
+    for (const m of hh.members.filter((x) => x !== f.userId)) {
+      const name = hh.name(m)
+      const first = plain(name).split(/\s+/)[0]
+      if (first.length >= 3 && text.includes(first)) return { name, household: String(hh.h.name) }
+    }
+  }
+  return null
 }

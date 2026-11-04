@@ -5,3 +5,9 @@ compatibility_date = "2025-01-01"
 # Workers AI: reads the screenshots (free daily allowance, inside your own Cloudflare account)
 [ai]
 binding = "AI"
+
+# Scheduled jobs (UTC). Colombia is UTC-5, so 12:07 UTC = 7:07 a.m.
+#  - every 10 minutes: forwards the new notifications to Telegram
+#  - every day at 12:07: stores the automatic debits that fell due
+[triggers]
+crons = ["*/10 * * * *", "7 12 * * *"]

@@ -319,6 +319,8 @@ a svg:not(.animate-spin):not([data-static]),
   transform-origin: center center;
 }
 
+/* Hover effects only on devices that can hover: on a phone a tap would leave the element looking hovered. */
+@media (hover: hover) {
 button:not(:disabled):hover svg:not(.animate-spin):not([data-static]):not(.sidebar-icon),
 a:not(.sidebar-nav-item):hover svg:not(.animate-spin):not([data-static]):not(.sidebar-icon),
 .interactive-icon:hover svg:not(.animate-spin):not([data-static]):not(.sidebar-icon),
@@ -327,12 +329,14 @@ a:not(.sidebar-nav-item):hover svg:not(.animate-spin):not([data-static]):not(.si
   transform: scale(1.10);
   filter: drop-shadow(0 0 5px currentColor);
 }
+}
 
 /* ── Clean Sidebar Navigation (No jarring 3D rotation) ── */
 .sidebar-nav-item {
   transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.15s ease;
 }
 
+@media (hover: hover) {
 .sidebar-nav-item:not(.is-collapsed):not(.is-mobile-nav):hover {
   transform: translateX(3px);
   background: rgba(52, 160, 164, 0.08) !important;
@@ -350,16 +354,19 @@ a:not(.sidebar-nav-item):hover svg:not(.animate-spin):not([data-static]):not(.si
   transform: translateY(-2px);
   background: rgba(52, 160, 164, 0.10) !important;
 }
+}
 
 .sidebar-nav-item:active {
   transform: scale(0.98) !important;
 }
 
+@media (hover: hover) {
 .sidebar-nav-item:hover svg.sidebar-icon,
 .sidebar-nav-item:hover .icon-box svg {
   transform: scale(1.15) !important;
   color: var(--nav-accent, #52b69a) !important;
   filter: drop-shadow(0 0 6px var(--nav-accent, #52b69a)) !important;
+}
 }
 
 .sidebar-nav-item.is-active svg.sidebar-icon,

@@ -100,22 +100,25 @@ export function MovementTimeline({ items, accounts }: Props) {
                         <span className="flex items-center gap-2.5 min-w-0">
                           <Icon size={16} className="flex-shrink-0" style={{ color: zone.color }} aria-hidden="true" />
                           <span className="min-w-0">
-                            <span className="block text-sm font-semibold text-[#f0fae8] truncate">{m.concept}</span>
-                            <span className="block text-[10px] font-mono text-[#8a929a] truncate">{m.sub}</span>
+                            {/* on a phone the whole description is shown (it wraps); on a wide screen it is cut to keep rows even */}
+                            <span className="block text-sm font-semibold text-[#f0fae8] break-words sm:truncate">{m.concept}</span>
+                            <span className="block text-[10px] font-mono text-[#8a929a] sm:truncate">{m.sub}</span>
                             {acc ? <AccountChip account={acc} /> : m.zone === 'household' ? <span className="block text-[10px] font-mono text-[#5f6a72]">Sin cuenta asignada</span> : null}
                           </span>
                         </span>
                         <span className="flex items-center justify-between gap-3 sm:justify-end sm:flex-shrink-0">
-                          {m.attachmentId && <AttachmentButton compact attachmentId={m.attachmentId} />}
-                          <span className={clsx('sm:w-28 text-left sm:text-right text-sm font-mono tabular-nums font-semibold', m.amount >= 0 ? 'text-brand-300' : 'text-[#f3f5f6]')}>
+                          <span className={clsx('sm:w-28 text-left sm:text-right text-base sm:text-sm font-mono tabular-nums font-semibold', m.amount >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
                             {m.amount >= 0 ? '+' : '−'}{formatCOP(Math.abs(m.amount))}
                           </span>
-                          {/* fixed-width chip so the amounts and kinds line up from row to row */}
-                          <span
-                            className="sm:w-[8.5rem] text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border"
-                            style={{ backgroundColor: zone.color + '26', color: zone.color, borderColor: zone.color + '66' }}
-                          >
-                            {zone.label}
+                          {/* fixed-width chip so the amounts and kinds line up from row to row; the attachment sits just left of it */}
+                          <span className="flex items-center gap-2">
+                            {m.attachmentId ? <AttachmentButton compact attachmentId={m.attachmentId} /> : <span className="hidden sm:block w-7 flex-shrink-0" aria-hidden="true" />}
+                            <span
+                              className="sm:w-[8.5rem] text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border"
+                              style={{ backgroundColor: zone.color + '26', color: zone.color, borderColor: zone.color + '66' }}
+                            >
+                              {zone.label}
+                            </span>
                           </span>
                         </span>
                       </div>

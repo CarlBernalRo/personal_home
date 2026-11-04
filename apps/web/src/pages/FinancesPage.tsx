@@ -450,32 +450,34 @@ export default function FinancesPage() {
               {incomes.map((inc: any) => (
                 <div
                   key={inc.id as string}
-                  className="notch-sm flex items-center justify-between p-3.5 bg-[#0a1f2f] border border-white/[0.08] hover:border-brand-500/30 transition-all group"
+                  className="notch-sm flex items-start sm:items-center justify-between gap-2 p-3.5 bg-[#0a1f2f] border border-white/[0.08] hover:border-brand-500/30 transition-all group"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-start sm:items-center gap-3 min-w-0">
                     <div className="w-10 h-10 notch-sm bg-brand-500/15 border border-brand-500/30 flex items-center justify-center flex-shrink-0 text-brand-300 glow-brand-sm">
                       <AppIcon name="cash" size={18} />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-xs sm:text-sm font-semibold text-[#f0fae8] truncate">{inc.concept as string}</p>
+                      <p className="text-xs sm:text-sm font-semibold text-[#f0fae8] break-words sm:truncate">{inc.concept as string}</p>
                       <p className="text-[10px] text-[#8a929a] mt-0.5">
                         {format(inc.date instanceof Date ? inc.date : new Date(inc.date), 'dd MMMM yyyy', { locale: es })}
                       </p>
                       {(() => {
                         const acc = inc.accountId ? accounts.find((x: any) => x.id === inc.accountId) : null
                         return (
-                          <p className="mt-1 inline-flex items-center gap-1.5 text-[10px] text-[#9aa4ac]">
-                            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: acc ? (acc.color as string) : '#5f6a72' }} aria-hidden="true" />
-                            {acc ? acc.name as string : inc.accountId ? 'Cuenta eliminada' : 'Sin cuenta asignada'}
+                          <p className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[10px] text-[#9aa4ac]">
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: acc ? (acc.color as string) : '#5f6a72' }} aria-hidden="true" />
+                              {acc ? acc.name as string : inc.accountId ? 'Cuenta eliminada' : 'Sin cuenta asignada'}
+                            </span>
                           </p>
                         )
                       })()}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 flex-shrink-0">
+                  <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                     {inc.attachmentId && <AttachmentButton compact attachmentId={inc.attachmentId as string} />}
-                    <span className="text-xs sm:text-sm font-bold text-brand-400 font-mono">
+                    <span className="text-xs sm:text-sm font-bold text-emerald-300 font-mono whitespace-nowrap">
                       +{formatCOP(inc.amount as number)}
                     </span>
                     <button

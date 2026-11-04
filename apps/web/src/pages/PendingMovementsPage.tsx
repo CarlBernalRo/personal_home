@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { CalendarClock, CheckCheck, CheckCircle2, Inbox, Layers, Loader2, Send, ShoppingBag, Trash2, Wallet } from 'lucide-react'
+import { CalendarClock, CheckCheck, CheckCircle2, Home, Inbox, Layers, Loader2, Send, ShoppingBag, Trash2, Wallet } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/Button'
 import { AccountSelect } from '@/components/ui/AccountSelect'
@@ -24,6 +24,7 @@ const KIND = {
   income: { label: 'Ingreso', plural: 'Ingresos', icon: Wallet, border: 'border-l-emerald-400', iconBox: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300', chip: 'text-emerald-300', sign: '+' },
   fixed: { label: 'Gasto fijo', plural: 'Gastos fijos', icon: CalendarClock, border: 'border-l-sky-400', iconBox: 'border-sky-400/30 bg-sky-400/10 text-sky-300', chip: 'text-sky-300', sign: '-' },
   occasional: { label: 'Gasto adicional', plural: 'Gastos adicionales', icon: ShoppingBag, border: 'border-l-amber-400', iconBox: 'border-amber-400/30 bg-amber-400/10 text-amber-300', chip: 'text-amber-300', sign: '-' },
+  abono: { label: 'Abono al hogar', plural: 'Abonos al hogar', icon: Home, border: 'border-l-violet-400', iconBox: 'border-violet-400/30 bg-violet-400/10 text-violet-300', chip: 'text-violet-300', sign: '-' },
 } as const
 
 const FILTERS: { id: Filter; label: string; icon: typeof Layers }[] = [
@@ -31,6 +32,7 @@ const FILTERS: { id: Filter; label: string; icon: typeof Layers }[] = [
   { id: 'income', label: KIND.income.plural, icon: Wallet },
   { id: 'fixed', label: KIND.fixed.plural, icon: CalendarClock },
   { id: 'occasional', label: KIND.occasional.plural, icon: ShoppingBag },
+  { id: 'abono', label: KIND.abono.plural, icon: Home },
 ]
 
 const GROUPS: DateGroup[] = ['Hoy', 'Esta semana', 'Antes']
@@ -41,6 +43,7 @@ const EMPTY_TEXT: Record<Filter, string> = {
   income: 'No hay ingresos por confirmar.',
   fixed: 'No hay gastos fijos por confirmar.',
   occasional: 'No hay gastos adicionales por confirmar.',
+  abono: 'No hay abonos al hogar por confirmar.',
 }
 
 /** One movement prepared in Telegram: its details, the account it will move, and Confirmar / Descartar. */
@@ -83,15 +86,17 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
         <span className={clsx('flex h-9 w-9 flex-shrink-0 items-center justify-center notch-sm border', k.iconBox)} aria-hidden="true"><Icon size={16} /></span>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
-            <p className="truncate text-sm font-bold leading-snug text-[#f3f5f6]">{pm.concept || 'Sin concepto'}</p>
-            <p className={clsx('flex-shrink-0 font-mono text-sm font-bold tabular-nums', pm.kind === 'income' ? 'text-emerald-300' : 'text-[#f3f5f6]')}>{k.sign}{formatCOP(pm.amount)}</p>
+            <p className="break-words sm:truncate text-sm font-bold leading-snug text-[#f3f5f6]">{pm.concept || 'Sin concepto'}</p>
+            <p className={clsx('flex-shrink-0 font-mono text-sm font-bold tabular-nums', pm.kind === 'income' ? 'text-emerald-300' : 'text-rose-300')}>{k.sign}{formatCOP(pm.amount)}</p>
           </div>
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 text-[10px] text-[#8a929a]">
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[#8a929a]">
+            {pm.attachmentId && <AttachmentButton compact attachmentId={pm.attachmentId} />}
             <span className={clsx('font-semibold uppercase tracking-wider', k.chip)}>{k.label}</span>
             <span aria-hidden="true">·</span>
             <time dateTime={dateOf(pm.date).toISOString()} className="font-mono">{format(dateOf(pm.date), "d MMM yyyy", { locale: es })}</time>
             {pm.kind === 'fixed' && pm.occMonth && (<><span aria-hidden="true">·</span><span>pago de {format(new Date(`${pm.occMonth}-01T12:00:00`), 'MMMM yyyy', { locale: es })}</span></>)}
             {category && (<><span aria-hidden="true">·</span><span>{category}</span></>)}
+            {pm.kind === 'abono' && (<><span aria-hidden="true">·</span><span>{pm.targetDebtId ? 'a una deuda elegida' : 'se reparte entre sus deudas, la más antigua primero'}</span></>)}
           </p>
           {pm.comment && <p className="mt-2 rounded-lg border border-white/10 bg-[#0a1f2f] px-2.5 py-1.5 text-xs text-[#c7ccd1]">💬 {pm.comment}</p>}
         </div>
@@ -111,7 +116,6 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
             <Button type="button" variant="ghost" size="sm" disabled={!!busy} onClick={discard}>
               {busy === 'discard' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />} Descartar
             </Button>
-            {pm.attachmentId && <AttachmentButton attachmentId={pm.attachmentId} />}
           </div>
           <Button type="button" size="sm" notched disabled={!!busy} onClick={confirm}>
             {busy === 'confirm' ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Confirmar y registrar

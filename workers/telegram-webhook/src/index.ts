@@ -16,6 +16,7 @@
 import { createDb } from './db'
 import { COMMANDS, HELP, bogotaToday, runCommand } from './commands'
 import { clearFlow, onCallback, onText, startFromImage, type FlowDeps } from './flow'
+import { saveAutoDebits, sendTelegramAvisos, type JobName } from './jobs'
 import { createTelegram } from './telegram'
 import { EMPTY_EXTRACTED, extractFromImage, type AiRunner } from './vision'
 
@@ -94,6 +95,43 @@ const say = (env: Env, chatId: number, text: string) =>
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
   })
+
+const APP_URL = 'https://personalhome-3ee06.web.app'
+
+/** The Cron Triggers declared in wrangler.toml, UTC (Colombia is UTC-5: 12:07 UTC = 7:07 a.m.). */
+const CRON_JOBS: Record<string, JobName> = { '*/10 * * * *': 'telegram', '7 12 * * *': 'debits' }
+
+/**
+ * Runs one scheduled job and leaves its trace in `system/jobs` (when it ran, how long it took, what it did, or the error),
+ * so it is easy to tell whether a job really ran. With `apply` false nothing is written or sent.
+ */
+async function runJob(env: Env, name: JobName, apply: boolean) {
+  const { db, tg } = flowDeps(env)
+  const started = Date.now()
+  try {
+    const result = name === 'telegram' ? await sendTelegramAvisos({ db, tg, appUrl: APP_URL }, apply) : await saveAutoDebits({ db }, apply)
+    if (apply) await db.patch('system/jobs', { [name]: { at: new Date(), ms: Date.now() - started, ok: true, ...result } })
+    return { ok: true, job: name, apply, ...result }
+  } catch (e: any) {
+    if (apply) await db.patch('system/jobs', { [name]: { at: new Date(), ms: Date.now() - started, ok: false, error: String(e?.message ?? e).slice(0, 400) } }).catch(() => {})
+    throw e
+  }
+}
+
+/** "✓ Marcar como leída" under a notice: marks it in the app and leaves only the button that opens it. */
+async function noticeCallback(env: Env, uid: string, cb: any) {
+  const { db, tg } = flowDeps(env)
+  const [, action, id] = String(cb.data ?? '').split(':')
+  if (action !== 'r' || !id) { await tg.answer(cb.id); return }
+  const n = await db.get(`notifications/${id}`)
+  if (!n || n.userId !== uid) { await tg.answer(cb.id, 'Ese aviso ya no existe'); return }
+  await db.patch(`notifications/${id}`, { read: true })
+  await tg.answer(cb.id, '✓ Marcada como leída')
+  const rows = ((cb.message?.reply_markup?.inline_keyboard ?? []) as any[][])
+    .map((row) => row.filter((b) => !String(b.callback_data ?? '').startsWith('n:r:')).map((b) => ({ text: b.text, url: b.url })))
+    .filter((row) => row.length > 0)
+  await tg.editKeyboard?.(cb.message.chat.id, cb.message.message_id, rows)
+}
 
 const flowDeps = (env: Env): FlowDeps => {
   const sa = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT)
@@ -201,6 +239,12 @@ async function handle(env: Env, msg: any) {
 }
 
 export default {
+  // Cloudflare fires this on the exact minute of each Cron Trigger
+  async scheduled(event: { cron: string }, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) {
+    const job = CRON_JOBS[event.cron]
+    if (job) ctx.waitUntil(runJob(env, job, true).catch((e) => console.error(`job ${job}:`, e)))
+  },
+
   async fetch(request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
     if (request.method !== 'POST') return new Response('ok')
     // POST /setup (same secret header): publishes the command list so Telegram shows the "/" menu
@@ -217,6 +261,17 @@ export default {
         ['default', 'all_private_chats'].map(async (scope) => (await call('setMyCommands', { commands: COMMANDS, scope: { type: scope }, ...(language_code ? { language_code } : {}) })).ok)))
       return new Response(JSON.stringify({ ok: set.every(Boolean), cleared: scopes.length * langs.length, set: set.length }), { status: set.every(Boolean) ? 200 : 502 })
     }
+    // POST /run/telegram | /run/debits (same secret header): runs a job now. Add ?apply=1 to really send / store;
+    // without it the job only reports what it would do.
+    const run = new URL(request.url).pathname.match(/^\/run\/(telegram|debits)$/)
+    if (run) {
+      if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('forbidden', { status: 403 })
+      try {
+        return Response.json(await runJob(env, run[1] as JobName, new URL(request.url).searchParams.get('apply') === '1'))
+      } catch (e: any) {
+        return Response.json({ ok: false, error: String(e?.message ?? e) }, { status: 500 })
+      }
+    }
     // only Telegram knows this secret (it sends it in a header with every update)
     if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('forbidden', { status: 403 })
     // Answer Telegram right away and do the work afterwards (reading a screenshot takes a few seconds)
@@ -229,6 +284,7 @@ export default {
           const uid = await ownerOf(env, chatId)
           const deps = flowDeps(env)
           if (!uid) await deps.tg.answer(cb.id, 'Vincula tu cuenta primero')
+          else if (String(cb.data ?? '').startsWith('n:')) await noticeCallback(env, uid, cb)
           else await onCallback(deps, uid, { id: cb.id, chatId, messageId: cb.message.message_id, data: String(cb.data ?? '') })
         } else {
           await handle(env, update.message)
