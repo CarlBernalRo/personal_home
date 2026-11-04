@@ -14,6 +14,7 @@ export const COMMANDS: { command: string; description: string }[] = [
   { command: 'debo', description: 'Lo que debes en tus hogares' },
   { command: 'medeben', description: 'Lo que te deben en tus hogares' },
   { command: 'resumen', description: 'Cómo vas este mes' },
+  { command: 'cancelar', description: 'Cancelar el registro en curso' },
   { command: 'ayuda', description: 'Ver los comandos' },
 ]
 
@@ -28,6 +29,7 @@ export function bogotaToday(now = Date.now()): Date {
 
 export const HELP =
   '<b>Comandos</b>\n' + COMMANDS.filter((c) => c.command !== 'ayuda').map((c) => `/${c.command} — ${esc(c.description)}`).join('\n') +
+  '\n\n📸 <b>Envíame una captura</b> de un pago o ingreso y te ayudo a registrarlo paso a paso. Queda pendiente: lo confirmas en la app. <i>La lectura corre dentro de tu cuenta de Cloudflare: la imagen no se envía a otras empresas.</i>' +
   '\n\nTambién recibes aquí tus avisos de la app. /stop para dejar de recibirlos.'
 
 // ── /saldo ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -39,7 +41,7 @@ async function saldo(db: Db, uid: string) {
 }
 
 // ── fixed expenses (shared by /proximos and /resumen) ───────────────────────────────────────────────────────────
-async function fixedFor(db: Db, uid: string, today: Date) {
+export async function fixedFor(db: Db, uid: string, today: Date) {
   const [all, payments] = await Promise.all([
     db.query('fixedExpenses', [{ field: 'userId', op: 'EQUAL', value: uid }]),
     db.query('fixedExpensePayments', [{ field: 'userId', op: 'EQUAL', value: uid }]),

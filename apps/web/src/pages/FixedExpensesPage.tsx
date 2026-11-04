@@ -15,6 +15,7 @@ import { IconActionButton } from '@/components/ui/IconActionButton'
 import { ProgramExpenseModal } from '@/components/fixed/ProgramExpenseModal'
 import { Select } from '@/components/ui/Select'
 import { NotesCard, PaymentComment } from '@/components/fixed/NotesCard'
+import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { SkeletonList } from '@/components/ui/Skeleton'
 import { SegmentedBar } from '@/components/ui/SegmentedBar'
 import { useToast } from '@/components/ui/Toast'
@@ -642,6 +643,7 @@ export default function FixedExpensesPage() {
             )}
             <NotesCard notes={(expenses.find((e) => e.id === selected.fe.id) ?? selected.fe).notes} />
             {!editPay && <PaymentComment comment={(selectedPayment as any).notes} />}
+            {!editPay && (selectedPayment as any).attachmentId && <AttachmentButton attachmentId={(selectedPayment as any).attachmentId} />}
             <div className="flex gap-2 pt-2">
               <Button type="button" variant="secondary" className="flex-1" onClick={() => setSelected(null)}>Cerrar</Button>
             </div>

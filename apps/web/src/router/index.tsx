@@ -11,6 +11,7 @@ import FinancesPage from '@/pages/FinancesPage'
 import ProfilePage from '@/pages/ProfilePage'
 import AdminUsersPage from '@/pages/AdminUsersPage'
 import NotificationsPage from '@/pages/NotificationsPage'
+import PendingMovementsPage from '@/pages/PendingMovementsPage'
 
 // The seeding tool holds personal data (e-mails, account numbers, the original Excel): it exists only in development.
 // `import.meta.env.DEV` is false in a production build, so this branch, the page and its data never reach the bundle.
@@ -64,6 +65,7 @@ export const router = createBrowserRouter([
       { path: 'finanzas',     element: <FinancesPage /> },
       ...(SeedPage ? [{ path: 'seed', element: <Suspense fallback={null}><SeedPage /></Suspense> }] : []),
       { path: 'notificaciones', element: <NotificationsPage /> },
+      { path: 'pendientes',     element: <PendingMovementsPage /> },
       { path: 'perfil',        element: <ProfilePage /> },
       { path: 'usuarios',      element: <RequireAdmin><AdminUsersPage /></RequireAdmin> },
     ],

@@ -14,12 +14,19 @@
  */
 
 import { createDb } from './db'
-import { COMMANDS, HELP, runCommand } from './commands'
+import { COMMANDS, HELP, bogotaToday, runCommand } from './commands'
+import { clearFlow, onCallback, onText, startFromImage, type FlowDeps } from './flow'
+import { createTelegram } from './telegram'
+import { EMPTY_EXTRACTED, extractFromImage, type AiRunner } from './vision'
 
 interface Env {
   TELEGRAM_BOT_TOKEN: string
   WEBHOOK_SECRET: string
   FIREBASE_SERVICE_ACCOUNT: string
+  /** Workers AI (bound in wrangler.toml): reads the screenshots. Without it the bot still works: it asks every field. */
+  AI?: AiRunner
+  /** Optional model override for the screenshot reader. */
+  VISION_MODEL?: string
 }
 
 /** A link code is valid for 5 minutes and works once (it is removed from the profile when it links). */
@@ -88,10 +95,60 @@ const say = (env: Env, chatId: number, text: string) =>
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
   })
 
+const flowDeps = (env: Env): FlowDeps => {
+  const sa = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT)
+  return { db: createDb(sa.project_id, () => accessToken(sa)), tg: createTelegram(env.TELEGRAM_BOT_TOKEN) }
+}
+
+/** The owner (profile id) of a linked chat, if any. */
+const ownerOf = async (env: Env, chatId: number) => (await usersWhere(env, 'telegramChatId', String(chatId)))[0]?.name.split('/').pop()
+
+/**
+ * The files of a screenshot in a message. A photo arrives from Telegram already compressed, in several sizes: the biggest
+ * is read, and for keeping we take the largest copy up to ~900 px wide and ~350 KB (about 50-120 KB for a typical
+ * screenshot), so storing it costs almost nothing. An image sent as a FILE is not compressed: it is kept only if small.
+ */
+const imageIn = (msg: any): { read: string; keep: string | null } | null => {
+  if (Array.isArray(msg.photo) && msg.photo.length) {
+    const sizes = [...msg.photo].sort((a: any, b: any) => (a.width ?? 0) - (b.width ?? 0))
+    const small = sizes.filter((p: any) => (p.width ?? 0) <= 900 && (p.file_size ?? 0) <= 350_000)
+    return { read: sizes[sizes.length - 1].file_id, keep: (small[small.length - 1] ?? sizes[0]).file_id }
+  }
+  if (/^image\//.test(msg.document?.mime_type ?? '')) return { read: msg.document.file_id, keep: (msg.document.file_size ?? Infinity) <= 400_000 ? msg.document.file_id : null }
+  return null
+}
+
 async function handle(env: Env, msg: any) {
-  if (!msg?.text || msg.chat?.type !== 'private') return
+  if (!msg || msg.chat?.type !== 'private') return
   const chatId = msg.chat.id as number
+
+  // a screenshot: read it and open the step-by-step registration
+  const files = imageIn(msg)
+  if (files) {
+    const uid = await ownerOf(env, chatId)
+    if (!uid) { await say(env, chatId, 'Primero vincula tu cuenta: entra a la app → <b>Perfil → Avisos</b> y toca <b>Vincular Telegram</b>.'); return }
+    const deps = flowDeps(env)
+    const today = bogotaToday()
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    await startFromImage(deps, uid, chatId, {
+      // no AI binding = no reading: the flow then asks every field by hand
+      extract: async () => {
+        if (!env.AI) return EMPTY_EXTRACTED
+        return extractFromImage({ AI: env.AI, VISION_MODEL: env.VISION_MODEL }, await deps.tg.download(files.read), iso)
+      },
+      keep: async () => (files.keep ? deps.tg.download(files.keep) : null),
+    })
+    return
+  }
+
+  if (!msg.text) return
   const text = String(msg.text).trim()
+
+  if (/^\/cancelar/i.test(text)) {
+    await clearFlow(flowDeps(env), chatId)
+    await say(env, chatId, 'Listo, cancelé el registro en curso. No se guardó nada.')
+    return
+  }
 
   if (/^\/stop\b/i.test(text)) {
     for (const user of await usersWhere(env, 'telegramChatId', String(chatId))) await patchUser(env, user.name, ['telegramChatId', 'telegramLinkedAt'], {})
@@ -112,6 +169,12 @@ async function handle(env: Env, msg: any) {
     try { answer = await runCommand(db, owner.name.split('/').pop()!, text) } catch (e) { console.error(e); answer = 'No pude consultar tus datos ahora. Intenta de nuevo en un momento.' }
     await say(env, chatId, answer ?? `No conozco ese comando.\n\n${HELP}`)
     return
+  }
+
+  // free text: it may be the answer to a question of the registration flow
+  if (!text.startsWith('/')) {
+    const uid = await ownerOf(env, chatId)
+    if (uid && (await onText(flowDeps(env), uid, chatId, text))) return
   }
 
   const code = text.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9]{6,32})$/i)?.[1]?.toUpperCase()
@@ -138,7 +201,7 @@ async function handle(env: Env, msg: any) {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
     if (request.method !== 'POST') return new Response('ok')
     // POST /setup (same secret header): publishes the command list so Telegram shows the "/" menu
     if (new URL(request.url).pathname === '/setup') {
@@ -156,13 +219,25 @@ export default {
     }
     // only Telegram knows this secret (it sends it in a header with every update)
     if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('forbidden', { status: 403 })
-    try {
-      const update: any = await request.json()
-      await handle(env, update.message)
-    } catch (e) {
-      // answer 200 anyway: a non-200 makes Telegram resend the same update over and over
-      console.error(e)
-    }
+    // Answer Telegram right away and do the work afterwards (reading a screenshot takes a few seconds)
+    const update: any = await request.json().catch(() => ({}))
+    ctx.waitUntil((async () => {
+      try {
+        const cb = update.callback_query
+        if (cb?.message?.chat?.type === 'private') {
+          const chatId = cb.message.chat.id as number
+          const uid = await ownerOf(env, chatId)
+          const deps = flowDeps(env)
+          if (!uid) await deps.tg.answer(cb.id, 'Vincula tu cuenta primero')
+          else await onCallback(deps, uid, { id: cb.id, chatId, messageId: cb.message.message_id, data: String(cb.data ?? '') })
+        } else {
+          await handle(env, update.message)
+        }
+      } catch (e) {
+        // answer 200 anyway (above): a non-200 makes Telegram resend the same update over and over
+        console.error(e)
+      }
+    })())
     return new Response('ok')
   },
 }

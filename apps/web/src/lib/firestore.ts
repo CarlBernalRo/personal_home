@@ -8,7 +8,7 @@ import type {
   NewExpense, NewAccount, NewAccountTransfer, NewSavingsGoal,
   NewFixedExpense, NewFixedExpensePayment,
   NewIncome, NewHouseholdDebt, NewHouseholdExpense,
-  CrossingAllocation, NewStoredNotification, NewHouseholdInvite,
+  CrossingAllocation, NewStoredNotification, NewHouseholdInvite, PendingMovement,
 } from '@/shared'
 import { resolveExpenseShares, sharesToDebtors } from '@/shared'
 
@@ -1031,4 +1031,73 @@ export async function respondToInvite(id: string, status: 'accepted' | 'declined
 
 export async function deleteHouseholdInvite(id: string) {
   return deleteDoc(doc(db, 'householdInvites', id))
+}
+
+// ── Movements prepared in Telegram, waiting for confirmation ──────────────────────────────────────────────────
+
+/** The movements the person left pending from Telegram, oldest first. */
+export async function getPendingMovements(userId: string): Promise<PendingMovement[]> {
+  // one equality filter only (no composite index); the status is filtered here
+  const snap = await getDocs(query(collection(db, 'pendingMovements'), where('userId', '==', userId)))
+  return snap.docs
+    .map((d) => mapDoc<PendingMovement>(d))
+    .filter((p) => p.status === 'pending')
+    .sort((a, b) => toDate(a.createdAt).getTime() - toDate(b.createdAt).getTime())
+}
+
+/**
+ * Turns a pending movement into the real record, in one write: the income / fixed payment / expense, the change in the
+ * account's balance and the pending movement marked as confirmed. `accountId` overrides the one chosen in Telegram
+ * ('' = no account). A fixed payment that was already registered in the app meanwhile is refused.
+ */
+export async function confirmPendingMovement(pm: PendingMovement, accountId?: string) {
+  const chosen = accountId === undefined ? pm.accountId : accountId || undefined
+  // the account may have been deleted since: then the money simply has nowhere to move
+  const account = chosen && (await getDoc(doc(db, 'accounts', chosen))).exists() ? chosen : undefined
+  const date = toDate(pm.date)
+  const batch = writeBatch(db)
+
+  if (pm.kind === 'income') {
+    batch.set(doc(collection(db, 'incomes')), {
+      userId: pm.userId, concept: pm.concept, amount: pm.amount, month: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+      date: Timestamp.fromDate(date), kind: 'extra', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+    })
+    if (account) batch.update(doc(db, 'accounts', account), { balance: increment(pm.amount) })
+  } else if (pm.kind === 'fixed') {
+    if (!pm.fixedExpenseId || !pm.occMonth) throw new Error('Falta saber a qué gasto fijo corresponde')
+    const already = await getDocs(query(
+      collection(db, 'fixedExpensePayments'),
+      where('userId', '==', pm.userId), where('fixedExpenseId', '==', pm.fixedExpenseId), where('month', '==', pm.occMonth),
+    ))
+    if (!already.empty) throw new Error('Ese gasto fijo ya está pagado en la app. Descarta este movimiento.')
+    batch.set(doc(collection(db, 'fixedExpensePayments')), {
+      fixedExpenseId: pm.fixedExpenseId, userId: pm.userId, concept: pm.concept, paidAmount: pm.amount, month: pm.occMonth,
+      paymentDate: Timestamp.fromDate(date), notes: pm.comment ?? '', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+    })
+    if (account) batch.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
+  } else {
+    batch.set(doc(collection(db, 'expenses')), {
+      userId: pm.userId, description: pm.concept, amount: pm.amount, category: pm.category ?? 'otro', date: Timestamp.fromDate(date),
+      type: 'variable', isRecurring: false, tracked: true, ...(pm.comment ? { notes: pm.comment } : {}),
+      ...(pm.budgetId ? { variableBudgetId: pm.budgetId } : {}), ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+    })
+    if (account) batch.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
+  }
+
+  batch.update(doc(db, 'pendingMovements', pm.id), { status: 'confirmed', confirmedAt: serverTimestamp(), accountId: account ?? deleteField() })
+  await batch.commit()
+}
+
+/** The person does not want it: it stays on record as discarded, leaves the pending list, and its screenshot is deleted. */
+export async function discardPendingMovement(pm: PendingMovement) {
+  await updateDoc(doc(db, 'pendingMovements', pm.id), { status: 'discarded', discardedAt: serverTimestamp(), attachmentId: deleteField() })
+  if (pm.attachmentId) await deleteDoc(doc(db, 'attachments', pm.attachmentId)).catch(() => {})
+}
+
+/** The small copy of a screenshot sent from Telegram (base64), or null when it no longer exists. */
+export async function getAttachment(id: string): Promise<{ mime: string; data: string } | null> {
+  const snap = await getDoc(doc(db, 'attachments', id))
+  if (!snap.exists()) return null
+  const d = snap.data()
+  return typeof d.data === 'string' ? { mime: String(d.mime || 'image/jpeg'), data: d.data } : null
 }

@@ -1,3 +1,7 @@
 name = "gastos-hogar-telegram"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
+
+# Workers AI: reads the screenshots (free daily allowance, inside your own Cloudflare account)
+[ai]
+binding = "AI"

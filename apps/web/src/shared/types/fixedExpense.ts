@@ -91,6 +91,8 @@ export interface FixedExpensePayment {
   month: string;
   paymentDate: Date;
   notes: string;
+  /** Screenshot of the payment sent from Telegram (`attachments/{id}`). */
+  attachmentId?: string;
   createdAt: Date;
 }
 

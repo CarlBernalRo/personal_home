@@ -24,3 +24,4 @@ export * from './utils/dashboard';
 export * from './types/notification';
 export * from './utils/alerts';
 export * from './utils/loanPlan';
+export * from './types/pendingMovement';

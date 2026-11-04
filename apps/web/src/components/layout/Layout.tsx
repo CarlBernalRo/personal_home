@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { UserPhoto } from '@/components/ui/UserPhoto'
-import { LayoutDashboard, Receipt, CalendarCheck, Home, Wallet, User, LogOut, ShieldCheck } from 'lucide-react'
+import { LayoutDashboard, Receipt, CalendarCheck, Home, Wallet, User, LogOut, ShieldCheck, Inbox } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useRef, useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
@@ -17,6 +17,9 @@ import { ConfirmProvider } from '@/components/ui/ConfirmDialog'
 import { NotificationsProvider } from '@/hooks/useNotifications'
 import { useAutoDebits } from '@/hooks/useAutoDebits'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
+import { PendingMovementsPrompt } from '@/components/pending/PendingMovementsPrompt'
+import { PendingMovementsLink } from '@/components/pending/PendingMovementsLink'
+import { usePendingMovements } from '@/hooks/usePendingMovements'
 
 interface NavItemDef {
   to: string
@@ -25,6 +28,8 @@ interface NavItemDef {
   shortLabel?: string
   icon: any
   end?: boolean
+  /** Only in the desktop sidebar: the phone bar is already full (it has its own shortcut in the header). */
+  desktopOnly?: boolean
   accent: string
   glow: string
   gradient: string
@@ -72,6 +77,16 @@ const BASE_NAV: NavItemDef[] = [
     accent: '#76c893',
     glow: 'rgba(118, 200, 147, 0.5)',
     gradient: 'linear-gradient(145deg, rgba(118, 200, 147, 0.16), rgba(18, 45, 28, 0.08))',
+  },
+  {
+    to: '/pendientes',
+    label: 'Pendientes por confirmar',
+    shortLabel: 'Pendientes',
+    icon: Inbox,
+    desktopOnly: true,
+    accent: '#38bdf8',
+    glow: 'rgba(56, 189, 248, 0.5)',
+    gradient: 'linear-gradient(145deg, rgba(56, 189, 248, 0.16), rgba(8, 36, 56, 0.08))',
   },
 ]
 
@@ -235,9 +250,10 @@ function ProfileMenu({ variant, collapsed = false }: { variant: 'sidebar' | 'mob
 
 export default function Layout() {
   const { isAdmin } = useAuth()
+  const pendingCount = usePendingMovements().counts.total
   // due automatic debits are saved as soon as the person is in the app, whichever screen they land on
   useAutoDebits()
-  const wideScreen = ['/', '/fijos', '/gastos', '/hogar', '/notificaciones', '/perfil', '/finanzas'].includes(useLocation().pathname)
+  const wideScreen = ['/', '/fijos', '/gastos', '/hogar', '/notificaciones', '/pendientes', '/perfil', '/finanzas'].includes(useLocation().pathname)
   // The sidebar is icons only: sections are named by their tooltips, and it never expands
   const collapsed = true
 
@@ -257,6 +273,7 @@ export default function Layout() {
     <ToastProvider>
     <ConfirmProvider>
     <NotificationsProvider>
+      <PendingMovementsPrompt />
       <div className="h-dvh bg-[#051018] text-[#f0fae8] flex overflow-hidden">
 
         {/* Desktop vertical sidebar */}
@@ -283,7 +300,7 @@ export default function Layout() {
           {/* Navigation Links */}
           <nav className={clsx('flex-1 overflow-y-auto py-4 space-y-1.5', collapsed ? 'px-2' : 'px-3')}>
             {navItems.map(({ to, label, icon: Icon, end, accent, glow, gradient }) => (
-              <SideTip key={to} label={label}>
+              <SideTip key={to} label={to === '/pendientes' && pendingCount > 0 ? `${label} (${pendingCount})` : label}>
               <NavLink
                 to={to}
                 end={end}
@@ -316,6 +333,11 @@ export default function Layout() {
                           isActive ? 'text-brand-400' : 'text-[#8a929a]'
                         )}
                       />
+                      {to === '/pendientes' && pendingCount > 0 && (
+                        <span className="absolute right-0.5 top-0.5 h-4 min-w-[16px] rounded-full bg-sky-500 px-1 text-center font-mono text-[9px] font-bold leading-4 text-[#04141f] ring-2 ring-[#0a1f2f]" aria-hidden="true">
+                          {pendingCount > 99 ? '99+' : pendingCount}
+                        </span>
+                      )}
                     </div>
                     {!collapsed && <span className="tracking-tight">{label}</span>}
                   </>
@@ -352,6 +374,7 @@ export default function Layout() {
             </div>
             <div className="flex items-center gap-2">
               <SessionTimer />
+              <PendingMovementsLink />
               <NotificationBell variant="mobile" />
               <ProfileMenu variant="mobile" />
             </div>
@@ -371,7 +394,7 @@ export default function Layout() {
           {/* Mobile bottom nav */}
           <nav className="md:hidden fixed bottom-0 inset-x-0 bg-[#0a1f2f]/95 backdrop-blur-md border-t border-brand-500/20 safe-area-bottom z-30 shadow-[0_-8px_30px_rgba(5,16,24,0.7)]">
             <div className="max-w-md mx-auto flex py-1">
-              {navItems.map(({ to, label, shortLabel, icon: Icon, end, accent, glow, gradient }) => (
+              {navItems.filter((item) => !item.desktopOnly).map(({ to, label, shortLabel, icon: Icon, end, accent, glow, gradient }) => (
                 <NavLink
                   key={to}
                   to={to}

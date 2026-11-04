@@ -19,7 +19,7 @@ export function decode(v: any): any {
   return null
 }
 
-const encode = (v: string | number | boolean) =>
+const encodeFilter = (v: string | number | boolean) =>
   typeof v === 'string' ? { stringValue: v } : typeof v === 'boolean' ? { booleanValue: v } : Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v }
 
 export const toDoc = (d: { name: string; fields?: Record<string, any> }): Doc => ({
@@ -27,9 +27,26 @@ export const toDoc = (d: { name: string; fields?: Record<string, any> }): Doc =>
   ...Object.fromEntries(Object.entries(d.fields ?? {}).map(([k, v]) => [k, decode(v)])),
 })
 
+/** Plain data -> Firestore REST value. `undefined` fields are skipped; Dates become timestamps. */
+export function encode(v: unknown): any {
+  if (v === null || v === undefined) return { nullValue: null }
+  if (v instanceof Date) return { timestampValue: v.toISOString() }
+  if (typeof v === 'string') return { stringValue: v }
+  if (typeof v === 'boolean') return { booleanValue: v }
+  if (typeof v === 'number') return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v }
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(encode) } }
+  return { mapValue: { fields: encodeFields(v as Record<string, unknown>) } }
+}
+const encodeFields = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([, x]) => x !== undefined).map(([k, x]) => [k, encode(x)]))
+
 export interface Db {
   query(collection: string, filters?: Filter[], limit?: number): Promise<Doc[]>
   get(path: string): Promise<Doc | null>
+  /** Creates or replaces the document at `path` with exactly `data`. */
+  set(path: string, data: Record<string, unknown>): Promise<void>
+  /** Adds a document with a generated id; returns the id. */
+  add(collection: string, data: Record<string, unknown>): Promise<string>
+  remove(path: string): Promise<void>
 }
 
 export function createDb(projectId: string, getToken: () => Promise<string>): Db {
@@ -43,13 +60,22 @@ export function createDb(projectId: string, getToken: () => Promise<string>): Db
   return {
     async query(collection, filters = [], limit) {
       const where = filters.length === 0 ? undefined
-        : filters.length === 1 ? { fieldFilter: { field: { fieldPath: filters[0].field }, op: filters[0].op, value: encode(filters[0].value) } }
-          : { compositeFilter: { op: 'AND', filters: filters.map((f) => ({ fieldFilter: { field: { fieldPath: f.field }, op: f.op, value: encode(f.value) } })) } }
+        : filters.length === 1 ? { fieldFilter: { field: { fieldPath: filters[0].field }, op: filters[0].op, value: encodeFilter(filters[0].value) } }
+          : { compositeFilter: { op: 'AND', filters: filters.map((f) => ({ fieldFilter: { field: { fieldPath: f.field }, op: f.op, value: encodeFilter(f.value) } })) } }
       const rows: any[] = await call(`${base}:runQuery`, { method: 'POST', body: JSON.stringify({ structuredQuery: { from: [{ collectionId: collection }], where, limit } }) })
       return rows.filter((r) => r.document).map((r) => toDoc(r.document))
     },
     async get(path) {
       try { return toDoc(await call(`${base}/${path}`, { method: 'GET' })) } catch (e: any) { if (e.status === 404) return null; throw e }
+    },
+    async set(path, data) {
+      await call(`${base}/${path}`, { method: 'PATCH', body: JSON.stringify({ fields: encodeFields(data) }) })
+    },
+    async add(collection, data) {
+      return toDoc(await call(`${base}/${collection}`, { method: 'POST', body: JSON.stringify({ fields: encodeFields(data) }) })).id
+    },
+    async remove(path) {
+      await call(`${base}/${path}`, { method: 'DELETE' })
     },
   }
 }

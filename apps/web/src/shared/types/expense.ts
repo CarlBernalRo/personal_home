@@ -21,6 +21,8 @@ export interface Expense {
   tracked?: boolean;
   /** Account the money came out of; its balance went down by `amount`. */
   accountId?: string;
+  /** Screenshot of the spend sent from Telegram (`attachments/{id}`). */
+  attachmentId?: string;
   createdAt: Date;
 }
 

@@ -41,3 +41,7 @@ Thumbs.db
 
 # Caché local de wrangler (Cloudflare Worker)
 workers/**/.wrangler/
+
+# Variables locales de wrangler / pruebas (claves): nunca al repo
+.dev.vars
+workers/**/.dev.vars

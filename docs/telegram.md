@@ -208,10 +208,103 @@ El vínculo de los usuarios sigue vigente: vive en Firestore, no depende del tok
 
 ## 6. Archivos
 
-- `workers/telegram-webhook/src/index.ts` — webhook: vincular, `/stop`, comandos, `/setup`.
+- `workers/telegram-webhook/src/index.ts` — webhook: vincular, `/stop`, comandos, capturas, botones, `/setup`.
+- `workers/telegram-webhook/src/flow.ts` — conversación paso a paso para registrar desde una captura.
+- `workers/telegram-webhook/src/vision.ts` — lectura de la captura con Workers AI; `try-vision.ts` la prueba con una imagen local.
+- `workers/telegram-webhook/src/telegram.ts`, `db.ts` — clientes de Telegram y de Firestore.
+- `apps/web/src/pages/PendingMovementsPage.tsx`, `components/pending/PendingMovementsPrompt.tsx`, `hooks/usePendingMovements.ts` — confirmación en la app.
 - `workers/telegram-webhook/src/commands.ts` — comandos de consulta.
 - `workers/telegram-webhook/src/db.ts` — cliente REST de Firestore.
 - `workers/telegram-webhook/wrangler.toml` — nombre del Worker.
 - `scripts/ci/send-telegram.ts` — task de avisos.
 - `.github/workflows/telegram-avisos.yml` — cron horario.
 - `apps/web/src/components/profile/TelegramForm.tsx` — pantalla Perfil → Avisos.
+
+## 7. Registrar movimientos desde una captura
+
+El usuario envía al bot una captura (foto o imagen) de un pago o ingreso. El bot la lee con **Workers AI** (gratis, dentro de tu cuenta de Cloudflare), **ofrece** lo que vio (valor, fecha, concepto) y pide, paso a paso, lo necesario. **No registra nada**: al final deja un movimiento *pendiente* y el usuario lo confirma dentro de la app.
+
+### Flujo en el chat
+
+1. **Valor** → "Leí $X, ¿es correcto?" (Sí / Escribir otro).
+2. **Fecha** → igual (además Hoy / Ayer).
+3. **Tipo** → Ingreso · Gasto fijo · Gasto ocasional (siempre lo elige la persona; la captura solo da una pista).
+4. Según el tipo:
+   - *Ingreso*: concepto → cuenta.
+   - *Gasto fijo*: cuál gasto fijo y de qué mes (lista de los pendientes más cercanos a la fecha) → cuenta.
+   - *Gasto ocasional*: cuál presupuesto, o "Otro gasto" (concepto y categoría) → cuenta.
+5. **Comentario** (opcional) → **Confirmar** → "Enviar a la app".
+
+Cada paso tiene **⬅️ Atrás** y **❌ Cancelar**; `/cancelar` también sirve. El estado de la conversación se guarda en `telegramFlows/{chatId}` (vence a las 24 h); los botones de mensajes viejos no hacen nada.
+
+### En la app
+
+- Al iniciar sesión, si hay pendientes, sale una **modal** con cuántos ingresos, gastos fijos y gastos adicionales esperan (una vez por sesión).
+- La pantalla **`/pendientes`** (ítem *Pendientes por confirmar* en la barra lateral; en el celular, el ícono de bandeja junto a la campana) usa el mismo diseño de dos paneles que Notificaciones: a la izquierda el filtro por tipo con contadores y **Confirmar todos**; a la derecha los movimientos agrupados por Hoy / Esta semana / Antes. En cada uno se puede cambiar la cuenta, ver el comprobante, **Confirmar y registrar** (crea el ingreso, el pago del fijo o el gasto y mueve el saldo, en una sola escritura) o **Descartar**.
+- También aparece una alerta en Notificaciones ("Tienes N movimientos de Telegram por confirmar").
+- Un gasto fijo que ya se pagó en la app mientras tanto **se rechaza** al confirmar (hay que descartarlo).
+
+### Datos
+
+| Colección | Qué guarda | Quién escribe |
+|---|---|---|
+| `pendingMovements` | `kind` (`income`/`fixed`/`occasional`), `amount`, `date`, `concept`, `category`, `fixedExpenseId`+`occMonth`, `budgetId`, `accountId`, `comment`, `status` (`pending`/`confirmed`/`discarded`), `read` (lo que dijo la captura) | El Worker crea; el dueño confirma o descarta (reglas en `firestore.rules`) |
+| `telegramFlows` | Estado de la conversación en curso | Solo el Worker (sin acceso desde la app) |
+| `attachments` | Copia pequeña de la captura (`mime`, `size`, `data` en base64, `userId`) | El Worker crea; el dueño la lee o la borra |
+
+### La captura guardada (comprobante)
+
+- Para **leer** se usa la copia más nítida; para **guardar** se toma la mayor copia de hasta ~900 px y ~350 KB que Telegram ya entrega comprimida (una captura típica queda en 50–120 KB), así que no se convierte nada en el Worker.
+- Una imagen enviada como **archivo** (sin comprimir) solo se guarda si pesa ≤ 400 KB; si no, el bot avisa que se envíe como foto.
+- Se guarda en Firestore (`attachments/{id}`, tope 600 KB por documento): no usa Cloud Storage, que exige el plan Blaze.
+- Sigue al movimiento: al **confirmar** se copia `attachmentId` al ingreso, pago fijo o gasto creado (se ve con **Ver comprobante** en `/pendientes` y en el detalle de un pago fijo). Al **descartar**, al cancelar el flujo o al vencer (24 h) se borra.
+- No se borra al eliminar después el registro confirmado (queda huérfana, pesa poco).
+
+### La lectura de la imagen (Cloudflare Workers AI)
+
+El bot lee la captura con un modelo de visión de **Workers AI** (`@cf/meta/llama-4-scout-17b-16e-instruct`) que corre **dentro de tu cuenta de Cloudflare**: es gratis (cupo diario de 10.000 "neurons", que alcanza para cientos de capturas), no necesita ninguna clave y **la imagen no se envía a ninguna otra empresa**. Responde en unos 2 segundos.
+
+Lee con menos precisión que los modelos de pago, pero el flujo nunca asume: cada dato se confirma o se corrige en el chat. Si no hay lectura (por ejemplo, se acabó el cupo o falló), el bot **sigue funcionando y pregunta todo a mano**.
+
+> Se probó primero con Claude (de pago) y con Gemini (su capa gratuita exige no enviar datos sensibles y, para cuentas nuevas, pide créditos prepagados). Workers AI fue la opción que cumple: gratis, privada y sin claves.
+
+### Configuración (una sola vez)
+
+1. **No hay que crear ninguna clave.** El Worker ya declara el servicio en `workers/telegram-webhook/wrangler.toml`:
+   ```toml
+   [ai]
+   binding = "AI"
+   ```
+2. **Probar antes de desplegar** con una captura tuya (usa la sesión de `wrangler login`, sin pegar nada):
+   ```powershell
+   cd apps\web
+   npx vite-node ..\..\workers\telegram-webhook\try-vision.ts "C:\ruta\captura.png"
+   ```
+   Imprime el valor, la fecha y el concepto leídos. Una captura que no sea un comprobante sale con `is_payment_proof: false`.
+3. Opcional: cambiar el modelo con la variable `VISION_MODEL` en `wrangler.toml` (por ejemplo `@cf/mistralai/mistral-small-3.1-24b-instruct`, que también leyó bien en las pruebas):
+   ```toml
+   [vars]
+   VISION_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct"
+   ```
+4. Redesplegar el Worker y volver a publicar el menú (aparece `/cancelar`):
+   ```powershell
+   cd workers\telegram-webhook
+   npx wrangler deploy
+   curl.exe -X POST "https://gastos-hogar-telegram.TUSUBDOMINIO.workers.dev/setup" -H "X-Telegram-Bot-Api-Secret-Token: TU_WEBHOOK_SECRET"
+   ```
+5. Desplegar las reglas de Firestore y la app:
+   ```powershell
+   npx firebase-tools deploy --only hosting,firestore:rules --project personalhome-3ee06
+   ```
+
+### Diagnóstico de esta función
+
+| Síntoma | Causa probable | Qué hacer |
+|---|---|---|
+| El bot nunca "lee" nada y siempre pregunta todo | El Worker no tiene el servicio `AI` (falta `[ai]` en `wrangler.toml` o no se redesplegó) | Revisar `wrangler.toml` y ejecutar `npx wrangler deploy`. |
+| "No pude leer la captura" | Workers AI falló (cupo diario agotado — se renueva a las 00:00 UTC —, modelo retirado, imagen no legible) | `npx wrangler tail` mientras envías la captura para ver el error. Para probar fuera del bot: `try-vision.ts`. |
+| Lee mal el valor o la fecha | La captura es poco clara | Se corrige en el paso (Escribir otro); si es frecuente, prueba `VISION_MODEL` con un modelo más capaz. |
+| "Este registro ya no está activo" | Se tocó un botón de un mensaje antiguo, o pasaron 24 h | Enviar la captura otra vez. |
+| La app no muestra la modal | Ya salió en esta sesión (una vez por sesión), o no hay pendientes | Cerrar sesión y volver a entrar, o abrir `/pendientes`. |
+| Error al confirmar un gasto fijo | Ya estaba pagado en la app | Descartar el pendiente. |
+| "No guardé la imagen porque pesa mucho" | Se envió como archivo sin comprimir | Enviarla como foto (no como archivo). |

@@ -33,6 +33,8 @@ export interface AlertInput {
   /** What the user still owes in their households, one debt at a time. */
   householdLines: DebtLine[];
   householdNames: Record<string, string>;
+  /** Movements prepared in Telegram that still wait for the person to confirm them. */
+  pendingMovements?: number;
 }
 
 /**
@@ -63,6 +65,17 @@ export function deriveAlerts(i: AlertInput): AppNotification[] {
       title: 'Tus gastos superan tus ingresos',
       body: `Te pasas por ${cop(-i.ledger.remaining)} en este período de sueldo.`,
       link: '/fijos',
+    });
+  }
+
+  if ((i.pendingMovements ?? 0) > 0) {
+    const n = i.pendingMovements!;
+    add({
+      // the count is in the key: a new pending movement is a new alert even if the previous one was dismissed
+      key: `pendmov|${n}`, zone: 'gastos', severity: 'info',
+      title: n === 1 ? 'Tienes 1 movimiento de Telegram por confirmar' : `Tienes ${n} movimientos de Telegram por confirmar`,
+      body: 'Los preparaste desde Telegram: confírmalos para que se registren en tus cuentas y gastos.',
+      link: '/pendientes',
     });
   }
 

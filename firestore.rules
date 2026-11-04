@@ -78,6 +78,16 @@ service cloud.firestore {
       allow update:       if isAuth() && isOwner(resource.data.userId);
     }
 
+    // Movements read from a Telegram screenshot: created by the bot (server side), confirmed or discarded by their owner in the app
+    match /pendingMovements/{id} {
+      allow read, update, delete: if isAuth() && isOwner(resource.data.userId);
+    }
+
+    // Small copies of the screenshots sent from Telegram (created by the bot): their owner reads or deletes them
+    match /attachments/{id} {
+      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+    }
+
     // Money moved between a user's own accounts
     match /accountTransfers/{id} {
       allow read, delete: if isAuth() && isOwner(resource.data.userId);

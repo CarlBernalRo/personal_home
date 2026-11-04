@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useSalary } from '@/hooks/useSalary'
 import { useFixedData } from '@/hooks/useFixedData'
+import { usePendingMovements } from '@/hooks/usePendingMovements'
 import { useAuthStore } from '@/store/auth'
 import {
   archiveNotifications, saveDerivedNotifications, getHousehold, getHouseholdIds, getMyInvites, getNotifications, joinHousehold, markNotificationsRead, markNotificationsUnread,
@@ -65,6 +66,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const location = useLocation()
   const salary = useSalary()
   const fixed = useFixedData()
+  const pending = usePendingMovements()
 
   const uid = user?.uid
   const email = user?.email?.toLowerCase()
@@ -143,8 +145,9 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       spends: salary.spends,
       householdLines: variable.householdLines ?? [],
       householdNames: variable.householdNames ?? {},
+      pendingMovements: pending.counts.total,
     })
-  }, [salary, fixed.loading, fixed.expenses, fixed.paymentIndex])
+  }, [salary, fixed.loading, fixed.expenses, fixed.paymentIndex, pending.counts.total])
 
   const notifications = useMemo<AppNotification[]>(() => {
     const hidden = new Set(local.hidden)

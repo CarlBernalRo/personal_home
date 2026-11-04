@@ -24,6 +24,15 @@ describe('relativeDay', () => {
 });
 
 describe('deriveAlerts', () => {
+  it('reminds about movements prepared in Telegram, with the count in its key', () => {
+    expect(deriveAlerts(base({ pendingMovements: 0 }))).toEqual([]);
+    const [a] = deriveAlerts(base({ pendingMovements: 3 }));
+    expect(a.title).toBe('Tienes 3 movimientos de Telegram por confirmar');
+    expect(a.link).toBe('/pendientes');
+    expect(a.key).toBe('pendmov|3');
+    expect(deriveAlerts(base({ pendingMovements: 1 }))[0].title).toBe('Tienes 1 movimiento de Telegram por confirmar');
+  });
+
   it('has nothing to say when everything is in order', () => {
     expect(deriveAlerts(base())).toEqual([]);
   });
