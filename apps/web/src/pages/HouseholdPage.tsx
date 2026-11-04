@@ -18,6 +18,7 @@ import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthStore } from '@/store/auth'
+import { saveAttachment } from '@/lib/attachments'
 import { useDisplayName } from '@/hooks/useDisplayName'
 import {
   createHousehold, joinHousehold, getHouseholds, syncMemberPhotos, deleteHouseholdLoan,
@@ -73,6 +74,7 @@ export default function HouseholdPage() {
 
   const [crossings, setCrossings]     = useState<any[]>([])
   const [openDebt, setOpenDebt]       = useState(false)
+  const [abonoFile, setAbonoFile]     = useState<File | null>(null)
   const [openExpense, setOpenExpense] = useState(false)
   const [openLoan, setOpenLoan] = useState(false)
   const [openCreate, setOpenCreate]   = useState(false)
@@ -224,6 +226,8 @@ export default function HouseholdPage() {
         amount: data.amount, concept: data.concept, category: data.category,
       })
 
+      // one picture for the whole payment, also readable by the other members (the person who receives it can check it)
+      const attachmentId = abonoFile ? await saveAttachment(user.uid, abonoFile, members.filter((m) => m !== user.uid)) : undefined
       for (const r of plan.rows) {
         await addHouseholdDebt({
           householdId: activeId,
@@ -242,6 +246,7 @@ export default function HouseholdPage() {
           saldaId: r.saldaId,
           notas: data.notas ?? '',
           cruzado: false,
+          ...(attachmentId ? { attachmentId } : {}),
         })
       }
 
@@ -255,6 +260,7 @@ export default function HouseholdPage() {
       }
 
       tellPayment(plan.paidTo, data.amount, plan.paidLines, paymentId, paidAt)
+      setAbonoFile(null)
       debtForm.reset({ date: format(new Date(), 'yyyy-MM-dd'), tipo: 'Abono', category: 'otros_hogar', debtor: user.uid, creditor: '', accountId: defaultAccountId })
       loadAccounts()
       setSaldaTargetId(null)
@@ -539,6 +545,7 @@ export default function HouseholdPage() {
 
   function closeAbono() {
     setOpenDebt(false)
+    setAbonoFile(null)
     setSaldaTargetId(null)
     setSelectedTargetDebtId(null)
   }
@@ -883,6 +890,8 @@ export default function HouseholdPage() {
         accounts={accounts}
         debtorOptions={debtorOptions}
         saving={saving}
+        file={abonoFile}
+        onFile={setAbonoFile}
       />
 
       {activeId && (

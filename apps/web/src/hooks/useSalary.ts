@@ -14,6 +14,8 @@ interface Salary {
   id: string
   date: Date
   amount: number
+  accountId?: string
+  attachmentId?: string
 }
 
 const NO_BUDGETS: VariableBudget[] = []
@@ -74,7 +76,7 @@ export function useSalary() {
       setSalaries(
         (incomes as any[])
           .filter((i) => i.kind === 'salary')
-          .map((i) => ({ id: i.id, date: i.date instanceof Date ? i.date : new Date(i.date), amount: i.amount })),
+          .map((i) => ({ id: i.id, date: i.date instanceof Date ? i.date : new Date(i.date), amount: i.amount, accountId: i.accountId as string | undefined, attachmentId: i.attachmentId as string | undefined })),
       )
       // Any other income (older ones included) is money that came in on its date
       setExtras(
@@ -86,6 +88,7 @@ export function useSalary() {
             amount: i.amount,
             concept: i.concept ?? 'Ingreso',
             attachmentId: i.attachmentId as string | undefined,
+            accountId: i.accountId as string | undefined,
           })),
       )
     } catch {
@@ -136,7 +139,7 @@ export function useSalary() {
     try { localStorage.setItem(`pay-account-${user?.uid}`, id) } catch { /* private mode */ }
   }
 
-  async function confirm(payDate: PayDate, amount: number, accountId: string = depositAccountId) {
+  async function confirm(payDate: PayDate, amount: number, accountId: string = depositAccountId, attachmentId?: string) {
     if (!user) return
     const account = validAccount(accountId)
     await addIncome({
@@ -147,14 +150,15 @@ export function useSalary() {
       date:    payDate.date,
       kind:    'salary',
       ...(account ? { accountId: account } : {}),
+      ...(attachmentId ? { attachmentId } : {}),
     })
     await load()
   }
 
-  async function addExtra(concept: string, amount: number, date: Date, accountId: string = depositAccountId) {
+  async function addExtra(concept: string, amount: number, date: Date, accountId: string = depositAccountId, attachmentId?: string) {
     if (!user) return
     const account = validAccount(accountId)
-    await addIncome({ userId: user.uid, concept, amount, month: monthKey(date), date, kind: 'extra', ...(account ? { accountId: account } : {}) })
+    await addIncome({ userId: user.uid, concept, amount, month: monthKey(date), date, kind: 'extra', ...(account ? { accountId: account } : {}), ...(attachmentId ? { attachmentId } : {}) })
     await load()
   }
 
@@ -207,7 +211,7 @@ export function useSalary() {
   const removeBudget = (id: string) => saveBudgets(budgets.filter((b) => b.id !== id))
   const removeBudgets = (ids: string[]) => saveBudgets(budgets.filter((b) => !ids.includes(b.id)))
 
-  async function registerSpend(budget: VariableBudget, amount: number, date: Date, accountId = '') {
+  async function registerSpend(budget: VariableBudget, amount: number, date: Date, accountId = '', attachmentId?: string) {
     if (!user) return
     const account = validAccount(accountId)
     await addExpense({
@@ -220,12 +224,13 @@ export function useSalary() {
       type: 'variable',
       isRecurring: false,
       variableBudgetId: budget.id,
+      ...(attachmentId ? { attachmentId } : {}),
     })
     await load()
   }
 
   /** A spend from the Gastos screen: not tied to a budget, but it counts toward the balance. */
-  async function addPersonalExpense(data: { description: string; amount: number; category: string; date: Date; accountId?: string }) {
+  async function addPersonalExpense(data: { description: string; amount: number; category: string; date: Date; accountId?: string; attachmentId?: string }) {
     if (!user) return
     const account = validAccount(data.accountId)
     await addExpense({
@@ -238,6 +243,7 @@ export function useSalary() {
       type: 'variable',
       isRecurring: false,
       tracked: true,
+      ...(data.attachmentId ? { attachmentId: data.attachmentId } : {}),
     })
     await load()
   }

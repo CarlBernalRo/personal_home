@@ -200,6 +200,8 @@ export interface ExtraIncome {
   concept: string;
   /** Screenshot of the income (`attachments/{id}`), when it was registered from Telegram. */
   attachmentId?: string;
+  /** Account the money went into. */
+  accountId?: string;
 }
 
 export const entryKey = (e: Pick<MonthEntry<{ id: string }>, 'fe' | 'hostMonth'>) => `${e.fe.id}|${e.hostMonth}`;

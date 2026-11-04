@@ -23,6 +23,9 @@ import { ExpenseTimeline, type ExpenseRow } from '@/components/expenses/ExpenseT
 import { buildExpenseRows } from '@/components/expenses/rows'
 import { AccountFilter, NO_ACCOUNT } from '@/components/ui/AccountFilter'
 import { useSalary } from '@/hooks/useSalary'
+import { useAuth } from '@/hooks/useAuth'
+import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
+import { withAttachment } from '@/lib/attachments'
 import { useFixedData } from '@/hooks/useFixedData'
 import { usePayProjection } from '@/hooks/usePayProjection'
 import { usePeriodStore } from '@/store/period'
@@ -52,6 +55,8 @@ export default function ExpensesPage() {
 
   const [open, setOpen]     = useState(false)
   const [accountId, setAccountId] = useState('')
+  const { user } = useAuth()
+  const [file, setFile] = useState<File | null>(null)
   // The spend being edited (null = a new one)
   const [editing, setEditing] = useState<ExpenseRow | null>(null)
   const [saving, setSaving] = useState(false)
@@ -96,6 +101,7 @@ export default function ExpensesPage() {
 
   function openCreate() {
     setEditing(null)
+    setFile(null)
     reset({ date: format(new Date(), 'yyyy-MM-dd'), category: 'otro', description: '', amount: undefined as any })
     setOpen(true)
   }
@@ -120,7 +126,7 @@ export default function ExpensesPage() {
       if (editing) {
         await salary.editPersonalExpense(editing.id, values, { amount: editing.amount, accountId: editing.accountId })
       } else {
-        await salary.addPersonalExpense(values)
+        await withAttachment(user!.uid, file, (attachmentId) => salary.addPersonalExpense({ ...values, attachmentId }))
       }
       salary.rememberAccount(accountId)
       reset({ date: format(new Date(), 'yyyy-MM-dd'), category: 'otro', description: '', amount: undefined as any })
@@ -331,6 +337,7 @@ export default function ExpensesPage() {
           <Select label="Categoría" options={CATEGORY_OPTIONS} {...register('category')} />
           <Input label="Fecha" type="date" {...register('date')} error={errors.date?.message} />
           <AccountSelect label="¿De qué cuenta sale el dinero?" accounts={salary.accounts} value={accountId} onChange={setAccountId} outflow={Number(watch('amount')) || 0} />
+          {!editing && <AttachmentPicker file={file} onChange={setFile} />}
 
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpen(false)}>

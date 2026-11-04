@@ -8,6 +8,8 @@ export interface HouseholdAbono {
   householdId: string
   date: Date
   amount: number
+  accountId?: string
+  attachmentId?: string
 }
 
 interface HouseholdRecords {
@@ -95,6 +97,8 @@ export function useHouseholdOwed(enabled: boolean) {
         householdId: r.householdId,
         date: d.date instanceof Date ? d.date : new Date(d.date),
         amount: d.amount as number,
+        accountId: (d.accountId as string | null) || undefined,
+        attachmentId: d.attachmentId as string | undefined,
       }))),
     [records, user],
   )

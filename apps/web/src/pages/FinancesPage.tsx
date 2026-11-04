@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AccountSelect } from '@/components/ui/AccountSelect'
+import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
+import { withAttachment } from '@/lib/attachments'
 import { TransferModal } from '@/components/fixed/TransferModal'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -198,24 +200,26 @@ export default function FinancesPage() {
   }
 
   useEffect(() => {
-    if (openInc) setIncAccount((accounts.find((a) => a.isDefault) ?? accounts[0])?.id ?? '')
+    if (openInc) { setIncAccount((accounts.find((a) => a.isDefault) ?? accounts[0])?.id ?? ''); setIncFile(null) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openInc])
 
+  const [incFile, setIncFile] = useState<File | null>(null)
   // ── Incomes ────────────────────────────────────────────────────────────────
   async function onSubmitInc(data: IncomeForm) {
     if (!user) return
     setSavingInc(true)
     try {
       const date = new Date(data.date + 'T12:00:00')
-      await addIncome({
+      await withAttachment(user.uid, incFile, (attachmentId) => addIncome({
         userId:  user.uid,
         concept: data.concept,
         amount:  data.amount,
         month:   format(date, 'yyyy-MM'),
         date,
         ...(incAccount ? { accountId: incAccount } : {}),
-      })
+        ...(attachmentId ? { attachmentId } : {}),
+      }))
       incForm.reset({ date: format(new Date(), 'yyyy-MM-dd') })
       setOpenInc(false)
       loadIncomes()
@@ -641,6 +645,7 @@ export default function FinancesPage() {
           <Input label="Monto (COP)" money placeholder="0" {...incForm.register('amount')} error={incForm.formState.errors.amount?.message} />
           <Input label="Fecha" type="date" {...incForm.register('date')} />
           <AccountSelect label="¿A qué cuenta llegó?" accounts={accounts} value={incAccount} onChange={setIncAccount} noneLabel="Sin sumar a una cuenta" />
+          <AttachmentPicker file={incFile} onChange={setIncFile} />
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenInc(false)}>Cancelar</Button>
             <Button type="submit" className="flex-1" disabled={savingInc} notched={true}>{savingInc ? 'Guardando…' : 'Guardar Ingreso'}</Button>

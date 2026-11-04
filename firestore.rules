@@ -83,9 +83,16 @@ service cloud.firestore {
       allow read, update, delete: if isAuth() && isOwner(resource.data.userId);
     }
 
-    // Small copies of the screenshots sent from Telegram (created by the bot): their owner reads or deletes them
+    // Small copies of receipts: the ones from Telegram are created by the bot, the ones attached by hand by their owner
+    // (only small images: the picture travels inside the document as base64)
     match /attachments/{id} {
-      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+      allow read:         if isAuth() && (isOwner(resource.data.userId) || request.auth.uid in resource.data.get('sharedWith', []));
+      allow delete:       if isAuth() && isOwner(resource.data.userId);
+      allow create:       if isAuth() && isOwner(request.resource.data.userId)
+                          && request.resource.data.source == 'app'
+                          && request.resource.data.mime.matches('image/.*')
+                          && request.resource.data.data is string
+                          && request.resource.data.data.size() < 900000;
     }
 
     // Money moved between a user's own accounts

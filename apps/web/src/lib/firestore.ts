@@ -114,6 +114,9 @@ export async function deleteExpense(id: string) {
   const snap = await getDoc(ref)
   const accountId = snap.exists() ? (snap.data().accountId as string | undefined) : undefined
   const amount = snap.exists() ? (snap.data().amount as number) : 0
+  // its receipt goes with it (nothing else points to it)
+  const attachmentId = snap.exists() ? (snap.data().attachmentId as string | undefined) : undefined
+  if (attachmentId) deleteDoc(doc(db, 'attachments', attachmentId)).catch(() => {})
   if (!accountId || !(await getDoc(doc(db, 'accounts', accountId))).exists()) return deleteDoc(ref)
   const batch = writeBatch(db)
   batch.delete(ref)
@@ -287,6 +290,9 @@ export async function deleteIncome(id: string) {
   const snap = await getDoc(ref)
   const accountId = snap.exists() ? (snap.data().accountId as string | undefined) : undefined
   const amount = snap.exists() ? (snap.data().amount as number) : 0
+  // its receipt goes with it (nothing else points to it)
+  const attachmentId = snap.exists() ? (snap.data().attachmentId as string | undefined) : undefined
+  if (attachmentId) deleteDoc(doc(db, 'attachments', attachmentId)).catch(() => {})
   if (!accountId || !(await getDoc(doc(db, 'accounts', accountId))).exists()) return deleteDoc(ref)
   const batch = writeBatch(db)
   batch.delete(ref)

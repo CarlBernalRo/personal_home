@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import { AttachmentButton } from '@/components/pending/AttachmentButton'
+import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
+import { withAttachment } from '@/lib/attachments'
 import { Link } from 'react-router-dom'
 import { format, isToday } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -46,6 +48,8 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
   // Account the salary / extra income is deposited into
   const [salaryAccount, setSalaryAccount] = useState('')
   const [extraAccount, setExtraAccount] = useState('')
+  const [salaryFile, setSalaryFile] = useState<File | null>(null)
+  const [extraFile, setExtraFile] = useState<File | null>(null)
   const accountOptions = salary.accounts.map((a: any) => ({ value: a.id as string, label: `${a.name} · ${formatCOP(a.balance as number)}` }))
 
   // Chained over all periods, so the current one starts with what the previous one left over
@@ -82,6 +86,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
     if (!pending) return
     setAmount(String(pending.amount))
     setSalaryAccount(salary.depositAccountId)
+    setSalaryFile(null)
     setError(null)
     setOpen(true)
   }
@@ -95,7 +100,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
     }
     setSaving(true)
     try {
-      await confirm(pending, value, salaryAccount)
+      await withAttachment(user!.uid, salaryFile, (attachmentId) => confirm(pending, value, salaryAccount, attachmentId))
       setOpen(false)
       showToast('Sueldo confirmado', 'success')
     } catch {
@@ -108,6 +113,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
   function openExtra() {
     setExtra({ concept: '', amount: '', date: format(new Date(), 'yyyy-MM-dd') })
     setExtraAccount(salary.depositAccountId)
+    setExtraFile(null)
     setExtraError(null)
     setExtraOpen(true)
   }
@@ -120,7 +126,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
     const [y, m, d] = extra.date.split('-').map(Number)
     setSaving(true)
     try {
-      await addExtra(extra.concept.trim(), value, new Date(y, m - 1, d), extraAccount)
+      await withAttachment(user!.uid, extraFile, (attachmentId) => addExtra(extra.concept.trim(), value, new Date(y, m - 1, d), extraAccount, attachmentId))
       setExtraOpen(false)
       showToast('Ingreso agregado', 'success')
     } catch {
@@ -303,7 +309,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
           {periodExtras.length > 0 && (
             <div className="space-y-1 border-t border-white/10 pt-2">
               {periodExtras.map((x) => (
-                <div key={x.id} className="flex items-start justify-between gap-2 text-xs">
+                <div key={x.id} className="flex items-center justify-between gap-2 text-xs">
                   <span className="min-w-0 flex-1 text-violet-200">
                     <span className="flex items-start gap-1"><Plus size={12} className="mt-0.5 flex-shrink-0" aria-hidden="true" /> <span className="break-words">{x.concept} <span className="text-[#8a929a]">· {shortDate(x.date)}</span></span></span>
                   </span>
@@ -341,6 +347,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
           {accountOptions.length > 0 && (
             <Select label="¿A qué cuenta llegó?" value={extraAccount} onChange={(e) => setExtraAccount(e.target.value)} options={[...accountOptions, { value: '', label: 'Sin sumar a una cuenta' }]} />
           )}
+          <AttachmentPicker file={extraFile} onChange={setExtraFile} />
           {extraError && <p className="text-xs text-red-400">{extraError}</p>}
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setExtraOpen(false)}>Cancelar</Button>
@@ -365,6 +372,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
           {accountOptions.length > 0 && (
             <Select label="¿A qué cuenta se consignó?" value={salaryAccount} onChange={(e) => setSalaryAccount(e.target.value)} options={[...accountOptions, { value: '', label: 'Sin sumar a una cuenta' }]} />
           )}
+          <AttachmentPicker file={salaryFile} onChange={setSalaryFile} />
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpen(false)}>Cancelar</Button>
             <Button type="submit" className="flex-1" disabled={saving} notched>{saving ? 'Confirmando…' : 'Confirmar sueldo'}</Button>

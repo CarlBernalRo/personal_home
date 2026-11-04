@@ -21,6 +21,8 @@ import { SegmentedBar } from '@/components/ui/SegmentedBar'
 import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/hooks/useAuth'
+import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
+import { withAttachment } from '@/lib/attachments'
 import {
   getFixedExpenses, getAllFixedExpensePayments, updateFixedExpense,
   addFixedExpensePayments, deleteFixedExpensePayment, deleteFixedExpense, materializeAutoPayments, updateFixedExpensePayment,
@@ -98,6 +100,7 @@ export default function FixedExpensesPage() {
   const [accountId, setAccountId] = useState('')
   // Comment left on the payment being registered (the expense's annotations are configured elsewhere)
   const [comment, setComment] = useState('')
+  const [payFile, setPayFile] = useState<File | null>(null)
 
   const today        = new Date()
   const currentMonth = monthKey(today)
@@ -202,6 +205,7 @@ export default function FixedExpensesPage() {
       setChecked(owed.map((l) => l.occMonth))
       setLineError(null)
       setComment('')
+      setPayFile(null)
       // The expense's own account, else the one used last time, else where the salary goes
       setAccountId(salary.pickAccount(fe.accountId))
     }
@@ -237,7 +241,8 @@ export default function FixedExpensesPage() {
     try {
       const [y, m, d] = data.paymentDate.split('-').map(Number)
       // One payment per owed month, so each month keeps its own history
-      await addFixedExpensePayments(toPay.map((l) => ({
+      // one picture for the whole payment: every month paid in it points to the same copy
+      await withAttachment(user.uid, payFile, (attachmentId) => addFixedExpensePayments(toPay.map((l) => ({
         fixedExpenseId: selected.fe.id,
         userId:         user.uid,
         concept:        selected.fe.concept,
@@ -246,7 +251,8 @@ export default function FixedExpensesPage() {
         month:          l.occMonth,
         paymentDate:    new Date(y, m - 1, d),
         notes:          comment.trim(),
-      })))
+        ...(attachmentId ? { attachmentId } : {}),
+      }))))
       salary.rememberAccount(accountId)
       setSelected(null)
       await load()
@@ -747,6 +753,7 @@ export default function FixedExpensesPage() {
                 className="w-full bg-[#0d263a] border border-white/10 rounded-xl px-3 py-2 text-sm text-[#f3f5f6] placeholder-[#5f6a72] outline-none focus:border-brand-400 transition resize-y"
               />
             </div>
+            <AttachmentPicker file={payFile} onChange={setPayFile} />
             <div className="flex gap-2 pt-2">
               <Button type="button" variant="secondary" className="flex-1" onClick={() => setSelected(null)}>Cancelar</Button>
               <Button type="submit" className="flex-1" disabled={saving} notched>{saving ? 'Confirmando…' : checked.length > 1 ? 'Pagar seleccionados' : 'Confirmar pago'}</Button>

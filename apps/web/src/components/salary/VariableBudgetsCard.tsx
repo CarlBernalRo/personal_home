@@ -11,6 +11,9 @@ import { ProgressBar } from '@/components/ui/ProgressBar'
 import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import type { SalaryState } from '@/hooks/useSalary'
+import { useAuth } from '@/hooks/useAuth'
+import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
+import { withAttachment } from '@/lib/attachments'
 import { HouseholdDebtCard } from '@/components/fixed/HouseholdDebtCard'
 import { followsHousehold, formatCOP, isPaused, monthKey, type VariableBudget } from '@/shared'
 
@@ -25,6 +28,8 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
   const [spendFor, setSpendFor] = useState<VariableBudget | null>(null)
   const [spend, setSpend] = useState({ amount: '', date: format(new Date(), 'yyyy-MM-dd') })
   const [accountId, setAccountId] = useState('')
+  const { user } = useAuth()
+  const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -43,6 +48,7 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
   function openSpend(b: VariableBudget) {
     setSpend({ amount: '', date: format(new Date(), 'yyyy-MM-dd') })
     setAccountId(salary.pickAccount(b.accountId))
+    setFile(null)
     setError(null)
     setSpendFor(b)
   }
@@ -55,7 +61,7 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
     const [y, m, d] = spend.date.split('-').map(Number)
     setSaving(true)
     try {
-      await registerSpend(spendFor, amount, new Date(y, m - 1, d), accountId)
+      await withAttachment(user!.uid, file, (attachmentId) => registerSpend(spendFor, amount, new Date(y, m - 1, d), accountId, attachmentId))
       salary.rememberAccount(accountId)
       setSpendFor(null)
       showToast('Gasto registrado', 'success')
@@ -169,6 +175,7 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
           <Input label="Monto gastado (COP)" money placeholder="0" value={spend.amount} onChange={(e) => { setSpend({ ...spend, amount: e.target.value }); setError(null) }} />
           <Input label="Fecha" type="date" value={spend.date} onChange={(e) => setSpend({ ...spend, date: e.target.value })} />
           <AccountSelect label="¿De qué cuenta sale el dinero?" accounts={salary.accounts} value={accountId} onChange={setAccountId} outflow={Number(spend.amount) || 0} />
+          <AttachmentPicker file={file} onChange={setFile} />
           {error && <p className="text-xs text-red-400">{error}</p>}
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setSpendFor(null)}>Cancelar</Button>

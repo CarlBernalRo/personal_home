@@ -5,6 +5,8 @@ import { es } from 'date-fns/locale'
 import { ListChecks } from 'lucide-react'
 import type { DashboardData } from '@/hooks/useDashboardData'
 import { useFocusToday } from '@/hooks/useFocusToday'
+import { useHouseholdOwed } from '@/hooks/useHouseholdOwed'
+import { useMyHouseholds } from '@/hooks/useMyHouseholds'
 import { Modal } from '@/components/ui/Modal'
 import { inkOn } from '@/components/ui/SegmentedBar'
 import { AccountChip } from '@/components/ui/AccountChip'
@@ -19,6 +21,10 @@ const DAY_MS = 86_400_000
 const DAY_W = 34
 /** A run of days with nothing in it is not drawn day by day: it is squeezed into one short break of this width. */
 const GAP_W = 24
+/** The left column with the name of each row, and the height of a row of circles. */
+const LABEL_W = 76
+const LANE_H = 30
+const LANES_TOP = 46
 
 interface Item {
   id: string
@@ -40,13 +46,21 @@ interface Item {
   attachmentId?: string
 }
 
-type Track = 'fixed' | 'additional'
+/** Sky blue: what moves in the household (abonos paid and debts still to pay). */
+const HOUSEHOLD = '#38bdf8'
+
+/** Green, like "te queda": money that came in. */
+const INCOME = '#199e70'
+
+type Track = 'fixed' | 'additional' | 'household' | 'income'
 
 interface Day {
   day: number
   date: Date
   fixed: Item[]
   additional: Item[]
+  household: Item[]
+  income: Item[]
 }
 
 const dayKey = (d: Date) => startOfDay(d).getTime()
@@ -63,6 +77,8 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
   const { salary, fixed } = data
   const today = new Date()
   const [selected, setSelected] = useState<{ track: Track; day: number } | null>(null)
+  const household = useHouseholdOwed(true)
+  const householdList = useMyHouseholds(true)
   const scroller = useRef<HTMLDivElement>(null)
 
   const earliest = [...salary.periods].sort((a, b) => a.start.getTime() - b.start.getTime())[0]?.start
@@ -75,7 +91,7 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
     const map = new Map<number, Day>()
     const at = (date: Date) => {
       const k = dayKey(date)
-      const d = map.get(k) ?? { day: k, date: new Date(k), fixed: [], additional: [] }
+      const d = map.get(k) ?? { day: k, date: new Date(k), fixed: [], additional: [], household: [], income: [] }
       map.set(k, d)
       return d
     }
@@ -126,9 +142,50 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
         attachmentId: e.attachmentId as string | undefined,
       })
     }
+    // money that came in: the confirmed salaries and the extra incomes
+    for (const s of salary.salaries as any[]) {
+      if (!inRange(s.date)) continue
+      at(s.date).income.push({ id: `sal|${s.id}`, label: 'Sueldo', sub: 'Sueldo', amount: s.amount, color: INCOME, state: 'Recibido', rank: 0, accountId: s.accountId, attachmentId: s.attachmentId })
+    }
+    for (const x of salary.extras as any[]) {
+      if (!inRange(x.date)) continue
+      at(x.date).income.push({ id: `ext|${x.id}`, label: x.concept, sub: 'Ingreso adicional', amount: x.amount, color: INCOME, state: 'Recibido', rank: 0, accountId: x.accountId, attachmentId: x.attachmentId })
+    }
+
+    // household: the abonos the user paid (real money out) and the debts still to pay, on their agreed date
+    const houseName = (id: string) => householdList.find((h) => h.id === id)?.name ?? 'Hogar'
+    for (const a of household.abonos) {
+      if (!inRange(a.date)) continue
+      at(a.date).household.push({
+        id: `abono|${a.id}`,
+        label: 'Abono en el hogar',
+        sub: houseName(a.householdId),
+        amount: a.amount,
+        color: HOUSEHOLD,
+        state: 'Pagado',
+        rank: 0,
+        accountId: a.accountId,
+        attachmentId: a.attachmentId,
+      })
+    }
+    for (const l of household.lines) {
+      if (!l.dueDate || !inRange(l.dueDate)) continue
+      const left = Math.round((startOfDay(l.dueDate).getTime() - startOfDay(today).getTime()) / DAY_MS)
+      const key: StatusKey = left < 0 ? 'overdue' : left <= 7 ? 'due-soon' : 'upcoming'
+      at(l.dueDate).household.push({
+        id: `debt|${l.id}`,
+        label: l.concept,
+        sub: `Deuda · ${houseName(l.householdId)}`,
+        amount: l.remaining,
+        color: STATUS_META[key].dot,
+        state: STATUS_META[key].label,
+        rank: RANK[key] ?? 0,
+        planned: true,
+      })
+    }
     return [...map.values()].sort((a, b) => a.day - b.day)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fixed.expenses, fixed.paymentIndex, salary.personal, from.getTime()])
+  }, [fixed.expenses, fixed.paymentIndex, salary.personal, salary.salaries, salary.extras, household.abonos, household.lines, householdList, from.getTime()])
 
   // The axis: only the days that have something (and today, so its mark has a place) take room; the empty stretches
   // between them are squeezed into a short break. `x` maps any date onto it, so months and salary periods follow along.
@@ -178,7 +235,7 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
     if (!selected) return null
     const d = days.find((b) => b.day === selected.day)
     if (!d) return null
-    const items = selected.track === 'fixed' ? d.fixed : d.additional
+    const items = d[selected.track]
     return { date: d.date, items, total: items.reduce((s, i) => s + i.amount, 0) }
   })()
 
@@ -205,7 +262,10 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
       if (n === 1 || !t || t.startsWith('anterior') || t === 'por vencer') return t
       return t.startsWith('pagado autom') ? t.replace('pagado', 'pagados') : `${t}s`
     }
-    const kind = track === 'fixed' ? (items.length === 1 ? 'gasto fijo' : 'gastos fijos') : (items.length === 1 ? 'gasto adicional' : 'gastos adicionales')
+    const kind = track === 'fixed' ? (items.length === 1 ? 'gasto fijo' : 'gastos fijos')
+      : track === 'income' ? (items.length === 1 ? 'ingreso' : 'ingresos')
+      : track === 'household' ? (items.length === 1 ? 'movimiento del hogar' : 'movimientos del hogar')
+      : (items.length === 1 ? 'gasto adicional' : 'gastos adicionales')
     const mix = mixed ? ` (${parts.map((g) => `${g.count} ${g.state ? plural(g.state, g.count) : 'adicionales'}`).join(', ')})` : ''
     const total = items.reduce((sum, i) => sum + i.amount, 0)
     const label = `${format(d.date, "d 'de' MMMM", { locale: es })} · ${items.length} ${kind}${mix} · ${formatCOP(total)}`
@@ -229,71 +289,100 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
     )
   }
 
+  // The rows of the chart: only those that have something at some point, each labeled on the left
+  const lanes = ([
+    { track: 'income', label: 'Ingresos', color: INCOME },
+    { track: 'fixed', label: 'Gastos fijos', color: SERIES.fixed },
+    { track: 'additional', label: 'Adicionales', color: SERIES.additional },
+    { track: 'household', label: 'Hogar', color: HOUSEHOLD },
+  ] as { track: Track; label: string; color: string }[]).filter((l) => days.some((d) => d[l.track].length > 0))
+  const axisY = LANES_TOP + lanes.length * LANE_H + 2
+  const chartH = axisY + 24
+
   return (
     <DashCard
       title="Cronograma de gastos"
       eyebrow="Histórico completo"
       icon={ListChecks}
       tone="#52b69a"
-      info="Tus gastos a lo largo del tiempo en una sola línea. Cada círculo es un día con pagos y dice cuántos son: el de gastos fijos va coloreado por su estado de pago y el de gastos adicionales en naranja. Si un día tiene de los dos, aparecen dos círculos. Haz clic en uno para ver el detalle. Desliza para recorrer los meses."
+      info="Tus gastos a lo largo del tiempo en una sola línea. Cada círculo es un día con pagos y dice cuántos son: el de gastos fijos va coloreado por su estado de pago y el de gastos adicionales en naranja, el del hogar en azul cielo (abonos que pagaste y deudas con fecha límite) y los ingresos (sueldo e ingresos adicionales) en verde. Si un día tiene de varios tipos, aparecen varios círculos. Haz clic en uno para ver el detalle. Desliza para recorrer los meses."
     >
       {days.length === 0 ? (
         <EmptyNote icon={ListChecks}>Aún no hay gastos para dibujar.</EmptyNote>
       ) : (
         <div>
-          <div ref={scroller} className="overflow-x-auto scrollbar-none -mx-1 px-1 pb-1">
-            <div className="relative" style={{ width: axisW, height: 150 }}>
-              {/* today's line goes first so it sits under the period ranges and the circles */}
-              {todayX >= 0 && (
-                <>
-                  <span className="absolute top-[50px] bottom-0 w-px bg-white/70 pointer-events-none" style={{ left: todayX }} aria-hidden="true" />
-                  <span className="absolute bottom-0 -translate-x-1/2 rounded bg-white/90 px-1 text-[9px] font-bold uppercase text-[#06131d] pointer-events-none" style={{ left: todayX }}>Hoy</span>
-                </>
-              )}
-
-              {/* month axis: only the months that have something (the others were squeezed away) */}
-              {months.filter((m) => axis.cells.some((c) => c >= m.getTime() && c < addMonths(m, 1).getTime())).map((m, i) => (
-                <span key={m.getTime()} className="absolute top-0 text-[10px] font-semibold capitalize text-[#9aa4ac] border-l border-white/15 pl-1.5 h-4" style={{ left: x(m) }}>
-                  {format(m, i === 0 || m.getMonth() === 0 ? 'MMMM yyyy' : 'MMMM', { locale: es })}
+          <p className="-mt-1 mb-2 text-[11px] leading-snug text-[#6f7a83]">
+            El número es la cantidad de movimientos del día; si hay varios estados, el círculo se reparte en proporción.
+          </p>
+          <div className="flex">
+            {/* the Y axis: what each row of circles is */}
+            <div className="relative flex-shrink-0" style={{ width: LABEL_W, height: chartH }} aria-hidden="true">
+              {lanes.map((l, i) => (
+                <span key={l.track} className="absolute left-0 flex items-center gap-1.5 text-[10px] font-semibold leading-none text-[#c7ccd1]" style={{ top: LANES_TOP + i * LANE_H, height: LANE_H - 4, width: LABEL_W - 4 }}>
+                  <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ backgroundColor: l.color }} />
+                  <span className="truncate">{l.label}</span>
                 </span>
               ))}
+            </div>
+            <div ref={scroller} className="min-w-0 flex-1 overflow-x-auto scrollbar-none pb-1">
+              <div className="relative" style={{ width: axisW, height: chartH }}>
+                {/* today's line goes first so it sits under the period ranges and the circles */}
+                {todayX >= 0 && (
+                  <>
+                    <span className="absolute w-px bg-white/70 pointer-events-none" style={{ left: todayX, top: 44, bottom: 0 }} aria-hidden="true" />
+                    <span className="absolute bottom-0 -translate-x-1/2 rounded bg-white/90 px-1 text-[9px] font-bold uppercase text-[#06131d] pointer-events-none" style={{ left: todayX }}>Hoy</span>
+                  </>
+                )}
 
-              {/* the salary periods, as context for the dates */}
-              {periods.map((p) => {
-                const left = Math.max(0, x(p.start))
-                const right = Math.min(axisW, x(p.end))
-                if (right <= left) return null
-                return (
-                  <span key={p.id} className="absolute top-5 h-5 rounded border border-white/10 bg-[#0e2434] px-1.5 text-[9px] font-mono leading-5 text-[#8a929a] truncate" style={{ left, width: right - left - 2 }}>
-                    {format(p.start, 'd MMM', { locale: es })} – {format(new Date(p.end.getTime() - DAY_MS), 'd MMM', { locale: es })}
+                {/* month axis: only the months that have something (the others were squeezed away) */}
+                {months.filter((m) => axis.cells.some((c) => c >= m.getTime() && c < addMonths(m, 1).getTime())).map((m, i) => (
+                  <span key={m.getTime()} className="absolute top-0 text-[10px] font-semibold capitalize text-[#9aa4ac] border-l border-white/15 pl-1.5 h-4" style={{ left: x(m) }}>
+                    {format(m, i === 0 || m.getMonth() === 0 ? 'MMMM yyyy' : 'MMMM', { locale: es })}
                   </span>
-                )
-              })}
+                ))}
 
-              {/* the line, with a tick and the day number under every day that has payments */}
-              <span className="absolute left-0 right-0 top-[88px] h-px bg-white/15" aria-hidden="true" />
-              {/* a stretch of days with nothing in it, squeezed: a small break in the line says how long it was */}
-              {axis.breaks.map((b) => (
-                <span
-                  key={b.at}
-                  title={`${b.days} ${b.days === 1 ? 'día' : 'días'} sin pagos`}
-                  aria-label={`${b.days} ${b.days === 1 ? 'día' : 'días'} sin pagos`}
-                  className="absolute top-[79px] h-[18px] -translate-x-1/2 cursor-default bg-[#0a1f2f] px-0.5 text-[12px] font-bold leading-[18px] tracking-[-0.08em] text-[#7d8a94]"
-                  style={{ left: b.at }}
-                >
-                  ···
-                </span>
-              ))}
-              {days.map((d) => (
-                <div key={d.day} className="absolute top-[28px] flex flex-col items-center" style={{ left: x(d.date), width: DAY_W, height: 120 }}>
-                  <div className="flex flex-col items-center gap-1" style={{ marginTop: d.fixed.length > 0 && d.additional.length > 0 ? 32 : 47 }}>{/* centered on the line; two circles stack: fixed over additional */}
-                    {circle('fixed', d, d.fixed)}
-                    {circle('additional', d, d.additional)}
+                {/* the salary periods, as context for the dates */}
+                {periods.map((p) => {
+                  const left = Math.max(0, x(p.start))
+                  const right = Math.min(axisW, x(p.end))
+                  if (right <= left) return null
+                  return (
+                    <span key={p.id} className="absolute top-5 h-5 rounded border border-white/10 bg-[#0e2434] px-1.5 text-[9px] font-mono leading-5 text-[#8a929a] truncate" style={{ left, width: right - left - 2 }}>
+                      {format(p.start, 'd MMM', { locale: es })} – {format(new Date(p.end.getTime() - DAY_MS), 'd MMM', { locale: es })}
+                    </span>
+                  )
+                })}
+
+                {/* one band per row, so each circle can be read against the label at the left */}
+                {lanes.map((l, i) => (
+                  <span key={l.track} className="absolute left-0 right-0 rounded-md bg-white/[0.035] pointer-events-none" style={{ top: LANES_TOP + i * LANE_H, height: LANE_H - 4 }} aria-hidden="true" />
+                ))}
+
+                {/* the line of days, with the day number under every day that has something */}
+                <span className="absolute left-0 right-0 h-px bg-white/15" style={{ top: axisY }} aria-hidden="true" />
+                {/* a stretch of days with nothing in it, squeezed: a small break in the line says how long it was */}
+                {axis.breaks.map((b) => (
+                  <span
+                    key={b.at}
+                    title={`${b.days} ${b.days === 1 ? 'día' : 'días'} sin movimientos`}
+                    aria-label={`${b.days} ${b.days === 1 ? 'día' : 'días'} sin movimientos`}
+                    className="absolute h-[18px] -translate-x-1/2 cursor-default bg-[#0a1f2f] px-0.5 text-[12px] font-bold leading-[18px] tracking-[-0.08em] text-[#7d8a94]"
+                    style={{ left: b.at, top: axisY - 9 }}
+                  >
+                    ···
+                  </span>
+                ))}
+                {days.map((d) => (
+                  <div key={d.day}>
+                    {lanes.map((l, i) => d[l.track].length > 0 && (
+                      <div key={l.track} className="absolute flex items-center justify-center" style={{ left: x(d.date), width: DAY_W, top: LANES_TOP + i * LANE_H, height: LANE_H - 4 }}>
+                        {circle(l.track, d, d[l.track])}
+                      </div>
+                    ))}
+                    <span className="absolute text-center text-[10px] font-mono text-[#8a929a]" style={{ left: x(d.date), width: DAY_W, top: axisY + 5 }}>{d.date.getDate()}</span>
                   </div>
-                  <span className="absolute bottom-1 text-[10px] font-mono text-[#8a929a]">{d.date.getDate()}</span>
-                </div>
-              ))}
-
+                ))}
+              </div>
             </div>
           </div>
 
@@ -307,13 +396,18 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
             <span className="inline-flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SERIES.additional }} aria-hidden="true" /> Gasto adicional
             </span>
-            <span className="text-[#6f7a83]">· el número es la cantidad de pagos del día; si hay varios estados, el círculo se reparte en proporción</span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: HOUSEHOLD }} aria-hidden="true" /> Abono al hogar
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: INCOME }} aria-hidden="true" /> Ingreso
+            </span>
           </div>
         </div>
       )}
 
       {picked && selected && (
-        <Modal open onClose={() => setSelected(null)} title={selected.track === 'fixed' ? 'Gastos fijos del día' : 'Gastos adicionales del día'}>
+        <Modal open onClose={() => setSelected(null)} title={selected.track === 'fixed' ? 'Gastos fijos del día' : selected.track === 'income' ? 'Ingresos del día' : selected.track === 'household' ? 'Hogar del día' : 'Gastos adicionales del día'}>
           <p className="text-xs text-[#9aa4ac] capitalize -mt-1">{longDay(picked.date)}</p>
           <ul className="space-y-2">
             {picked.items.map((i) => (
@@ -328,7 +422,7 @@ export function ExpensesSchedule({ data }: { data: Pick<DashboardData, 'salary' 
                 </span>
                 <span className="flex items-center gap-2 flex-shrink-0">
                   {i.attachmentId && <AttachmentButton compact attachmentId={i.attachmentId} />}
-                  <span className="font-mono text-sm font-bold text-rose-300 whitespace-nowrap">−{formatCOP(i.amount)}</span>
+                  <span className={`font-mono text-sm font-bold whitespace-nowrap ${selected.track === 'income' ? 'text-emerald-300' : 'text-rose-300'}`}>{selected.track === 'income' ? '+' : '−'}{formatCOP(i.amount)}</span>
                 </span>
               </li>
             ))}

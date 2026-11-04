@@ -6,6 +6,7 @@ import { MoneyInput } from '@/components/ui/MoneyInput'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { AccountSelect } from '@/components/ui/AccountSelect'
+import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
 import { Button } from '@/components/ui/Button'
 import { formatCOP, HOUSEHOLD_DEBT_CATEGORIES, remainingOf, isPendingDebt, inPaymentOrder, creditorOf, owedByCreditor } from '@/shared'
 import type { Rec } from './ledger'
@@ -45,12 +46,15 @@ interface Props {
   nameOf: (uid?: string | null) => string
   debtorOptions: { value: string; label: string }[]
   saving: boolean
+  /** Receipt of the payment, optional. */
+  file: File | null
+  onFile: (file: File | null) => void
 }
 
 const quickBtn = 'px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[#f3f5f6] text-[11px] font-semibold transition'
 
 /** Abono modal with live simulation of the remaining balance. */
-export function AbonoModal({ open, onClose, form, onSubmit, debts, saldaTargetId, selectedTargetDebtId, onPickTarget, members, accounts, nameOf, debtorOptions, saving }: Props) {
+export function AbonoModal({ open, onClose, form, onSubmit, debts, saldaTargetId, selectedTargetDebtId, onPickTarget, members, accounts, nameOf, debtorOptions, saving, file, onFile }: Props) {
   const watchedAmount = Number(form.watch('amount')) || 0
   const watchedDebtor = form.watch('debtor')
   const effectiveTargetId = saldaTargetId || selectedTargetDebtId
@@ -216,6 +220,7 @@ export function AbonoModal({ open, onClose, form, onSubmit, debts, saldaTargetId
         <Select label="Categoría" options={CAT_OPTIONS} {...form.register('category')} />
         <Input label="Fecha del abono" type="date" {...form.register('date')} />
         <Input label="Notas (opcional)" placeholder="ej. Transferencia Nequi…" {...form.register('notas')} />
+        <AttachmentPicker file={file} onChange={onFile} />
 
         <div className="flex gap-2 pt-1">
           <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>Cancelar</Button>
