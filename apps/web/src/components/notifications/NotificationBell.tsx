@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Bell, BellOff } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useNotifications } from '@/hooks/useNotifications'
@@ -22,6 +22,7 @@ interface Props {
 export function NotificationBell({ variant }: Props) {
   const { notifications, unread, markAllRead, loading } = useNotifications()
   const isMobile = useIsMobile()
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<{ top: number; left: number; maxH: number; narrow: boolean } | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -132,9 +133,14 @@ export function NotificationBell({ variant }: Props) {
               {latest.map((n) => <NotificationCard key={n.key} n={n} compact onNavigate={() => setOpen(false)} />)}
             </div>
           )}
-          <Link to="/notificaciones" onClick={() => setOpen(false)} className="block text-center rounded-xl border border-white/10 bg-[#0d263a] px-4 py-2.5 text-xs font-semibold text-brand-300">
+          {/* A button that navigates (like the profile menu does) instead of a <Link>: the sheet closes after the route changes */}
+          <button
+            type="button"
+            onClick={() => { navigate('/notificaciones'); setOpen(false) }}
+            className="block w-full text-center rounded-xl border border-white/10 bg-[#0d263a] px-4 py-2.5 text-xs font-semibold text-brand-300"
+          >
             Ver todas
-          </Link>
+          </button>
         </Modal>
       )}
       {open && !isMobile && pos && createPortal(
