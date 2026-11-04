@@ -68,6 +68,7 @@ export function useSalary() {
             date: e.date instanceof Date ? e.date : new Date(e.date),
             amount: e.amount,
             concept: e.description ?? '',
+            attachmentId: e.attachmentId as string | undefined,
           })),
       )
       setSalaries(
@@ -84,6 +85,7 @@ export function useSalary() {
             date: i.date instanceof Date ? i.date : new Date(i.date),
             amount: i.amount,
             concept: i.concept ?? 'Ingreso',
+            attachmentId: i.attachmentId as string | undefined,
           })),
       )
     } catch {

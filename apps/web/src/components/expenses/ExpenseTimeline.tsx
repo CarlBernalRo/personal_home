@@ -1,4 +1,5 @@
 import { Fragment } from 'react'
+import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { format, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
@@ -21,6 +22,8 @@ export interface ExpenseRow {
   budget: boolean
   /** Account the money came out of. */
   accountId?: string
+  /** Screenshot of the spend, when it came from Telegram. */
+  attachmentId?: string
 }
 
 interface Props {
@@ -121,6 +124,7 @@ export function ExpenseTimeline({ rows, showToday, onDelete, onEdit, accounts = 
                         </span>
                         <span className="flex items-center gap-3 flex-shrink-0">
                           {/* fixed-width columns so amounts and kinds line up from row to row */}
+                          {r.attachmentId && <AttachmentButton compact attachmentId={r.attachmentId} />}
                           <span className="min-w-[5.5rem] sm:w-28 text-right text-sm font-mono tabular-nums">{formatCOP(r.amount)}</span>
                           <span className={clsx('hidden sm:block sm:w-[11.5rem] text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', KIND[kind].chip)}>
                             {KIND[kind].label}

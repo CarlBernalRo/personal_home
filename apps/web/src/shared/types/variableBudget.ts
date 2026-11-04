@@ -30,6 +30,8 @@ export interface VariableSpend {
   date: Date;
   amount: number;
   concept: string;
+  /** Screenshot of the spend (`attachments/{id}`), when it was registered from Telegram. */
+  attachmentId?: string;
 }
 
 /** What the user still owes on one household debt (after crossings and abonos). */

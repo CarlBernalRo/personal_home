@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { Link } from 'react-router-dom'
 import { format, isToday } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -305,6 +306,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
                 <div key={x.id} className="flex items-center justify-between gap-2 text-xs">
                   <span className="inline-flex items-center gap-1 text-violet-200 truncate"><Plus size={12} className="flex-shrink-0" aria-hidden="true" /> {x.concept} <span className="text-[#8a929a]">· {shortDate(x.date)}</span></span>
                   <span className="flex items-center gap-2 flex-shrink-0">
+                    {x.attachmentId && <AttachmentButton compact attachmentId={x.attachmentId} />}
                     <span className="font-mono text-violet-200">+{formatCOP(x.amount)}</span>
                     <button
                       type="button"

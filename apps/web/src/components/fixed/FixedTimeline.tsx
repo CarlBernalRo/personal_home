@@ -1,4 +1,5 @@
 import { Fragment } from 'react'
+import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { format, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
@@ -199,7 +200,10 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
                   {(spendDays.get(day) ?? []).map((x) => (
                     <div key={x.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-amber-400/40 bg-amber-500/10">
                       <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-amber-200 truncate"><Receipt size={13} className="flex-shrink-0" aria-hidden="true" /> {x.concept}</span>
-                      <span className="text-sm font-mono font-bold text-amber-200">−{formatCOP(x.amount)}</span>
+                      <span className="flex items-center gap-2">
+                        {x.attachmentId && <AttachmentButton compact attachmentId={x.attachmentId} />}
+                        <span className="text-sm font-mono font-bold text-amber-200">−{formatCOP(x.amount)}</span>
+                      </span>
                     </div>
                   ))}
                   {group.map((entry) => {
@@ -227,7 +231,12 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
                           <AppIcon name={cat?.icon} size={16} className="text-brand-300 flex-shrink-0" />
                           <span className="min-w-0">
                             <span className="block text-sm font-semibold text-[#f0fae8] truncate">{fe.concept}{fe.oneTime && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">programado</span>}</span>
-                            {paidOn && <span className="block text-[10px] font-mono text-brand-400">{payment?.auto ? 'debitado' : 'pagado'} el {paidOn}{paidOffDue(entry) && entry.due ? ` · vencía el ${format(entry.due, 'd MMM', { locale: es })}` : ''}</span>}
+                            {paidOn && (
+                              <span className="flex items-center gap-2 text-[10px] font-mono text-brand-400">
+                                <span>{payment?.auto ? 'debitado' : 'pagado'} el {paidOn}{paidOffDue(entry) && entry.due ? ` · vencía el ${format(entry.due, 'd MMM', { locale: es })}` : ''}</span>
+                                {(payment as any)?.attachmentId && <AttachmentButton compact attachmentId={(payment as any).attachmentId} />}
+                              </span>
+                            )}
                             <AccountChip account={accounts.find((a) => a.id === entryAccountId(entry))} planned={!payment} />
                             {hasArrears && (
                               <span className="block text-[10px] font-mono text-red-300 capitalize">

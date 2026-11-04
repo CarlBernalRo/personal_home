@@ -9,6 +9,7 @@ import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
 import { Card } from '@/components/ui/Card'
+import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
@@ -473,6 +474,7 @@ export default function FinancesPage() {
                   </div>
 
                   <div className="flex items-center gap-3 flex-shrink-0">
+                    {inc.attachmentId && <AttachmentButton compact attachmentId={inc.attachmentId as string} />}
                     <span className="text-xs sm:text-sm font-bold text-brand-400 font-mono">
                       +{formatCOP(inc.amount as number)}
                     </span>

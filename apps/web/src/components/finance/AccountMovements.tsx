@@ -80,11 +80,11 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
     const out: Movement[] = []
     for (const i of raw.incomes) {
       if (!i.accountId) continue
-      out.push({ id: `in|${i.id}`, zone: 'income', date: asDate(i.date), concept: i.concept ?? 'Ingreso', sub: i.kind === 'salary' ? 'Sueldo' : 'Ingreso adicional', amount: i.amount, accountId: i.accountId })
+      out.push({ id: `in|${i.id}`, zone: 'income', date: asDate(i.date), concept: i.concept ?? 'Ingreso', sub: i.kind === 'salary' ? 'Sueldo' : 'Ingreso adicional', amount: i.amount, accountId: i.accountId, attachmentId: i.attachmentId })
     }
     for (const p of raw.payments) {
       if (!p.accountId) continue
-      out.push({ id: `pay|${p.id}`, zone: 'fixed', date: asDate(p.paymentDate), concept: p.concept ?? 'Pago', sub: p.auto ? 'Débito automático' : 'Gasto fijo', amount: -p.paidAmount, accountId: p.accountId })
+      out.push({ id: `pay|${p.id}`, zone: 'fixed', date: asDate(p.paymentDate), concept: p.concept ?? 'Pago', sub: p.auto ? 'Débito automático' : 'Gasto fijo', amount: -p.paidAmount, accountId: p.accountId, attachmentId: p.attachmentId })
     }
     for (const e of raw.expenses) {
       if (!e.accountId) continue
@@ -97,6 +97,7 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
         sub: occasional ? 'Gasto ocasional' : (PERSONAL_CATEGORIES.find((c) => c.id === e.category)?.label ?? e.category ?? 'Gasto adicional'),
         amount: -e.amount,
         accountId: e.accountId,
+        attachmentId: e.attachmentId,
       })
     }
     for (const t of raw.transfers) {

@@ -20,6 +20,7 @@ export function buildExpenseRows(personal: any[], bounds: { start: Date; end: Da
       household: false,
       budget: false,
       accountId: e.accountId as string | undefined,
+      attachmentId: e.attachmentId as string | undefined,
     }))
     .filter((r) => r.date >= bounds.start && r.date < bounds.end)
     .sort((a, b) => b.date.getTime() - a.date.getTime())

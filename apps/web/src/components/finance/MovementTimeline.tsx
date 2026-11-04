@@ -1,4 +1,5 @@
 import { Fragment } from 'react'
+import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { format, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { ArrowLeftRight, Banknote, CalendarCheck, Home, Receipt } from 'lucide-react'
@@ -18,6 +19,8 @@ export interface Movement {
   /** Positive when money came into the account, negative when it left. */
   amount: number
   accountId?: string
+  /** Screenshot of the movement (`attachments/{id}`), when it came from Telegram. */
+  attachmentId?: string
 }
 
 export const MOVEMENT_ZONES: { id: MovementZone; label: string; color: string; icon: typeof Receipt }[] = [
@@ -103,6 +106,7 @@ export function MovementTimeline({ items, accounts }: Props) {
                           </span>
                         </span>
                         <span className="flex items-center justify-between gap-3 sm:justify-end sm:flex-shrink-0">
+                          {m.attachmentId && <AttachmentButton compact attachmentId={m.attachmentId} />}
                           <span className={clsx('sm:w-28 text-left sm:text-right text-sm font-mono tabular-nums font-semibold', m.amount >= 0 ? 'text-brand-300' : 'text-[#f3f5f6]')}>
                             {m.amount >= 0 ? '+' : '−'}{formatCOP(Math.abs(m.amount))}
                           </span>
