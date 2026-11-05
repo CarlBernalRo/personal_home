@@ -197,6 +197,17 @@ async function handle(env: Env, msg: any) {
     return
   }
 
+  // /setup from a linked chat: publishes the command menu (same as the POST route, without needing the secret)
+  if (/^\/setup\b/i.test(text)) {
+    const owner = (await usersWhere(env, 'telegramChatId', String(chatId)))[0]
+    if (!owner) { await say(env, chatId, 'Primero vincula tu cuenta: entra a la app → <b>Perfil → Avisos</b> y toca <b>Vincular Telegram</b>.'); return }
+    const r = await publishCommands(env)
+    await say(env, chatId, r.ok
+      ? `✅ Menú de comandos actualizado.\n<i>${r.seen.map((x) => `${x.language}: ${x.commands.map((c: string) => '/' + c).join(' ')}`).join('\n')}</i>\n\nCierra y abre el chat para verlo.`
+      : 'No pude actualizar el menú ahora. Intenta de nuevo en un momento.')
+    return
+  }
+
   // read-only commands (/saldo, /proximos…): only for a chat that is linked to a profile
   if (/^\/(?!start\b|stop\b)\w+/i.test(text)) {
     const owner = (await usersWhere(env, 'telegramChatId', String(chatId)))[0]
@@ -250,11 +261,40 @@ async function handle(env: Env, msg: any) {
   await say(env, chatId, `✅ <b>Telegram vinculado.</b> Aquí te llegarán tus avisos de Gastos Hogar.\n\n${HELP}`)
 }
 
+/**
+ * Publishes the command list so Telegram shows it in the "/" menu. It is idempotent and harmless, so it runs from the POST /setup route,
+ * from the /setup command of a linked chat, and every morning with the daily job (a new command shows up without anyone doing anything).
+ */
+async function publishCommands(env: Env) {
+  // Telegram keeps one command list per scope AND language, and the most specific one wins. Something else may have
+  // left lists in narrower scopes, so every scope/language is cleared first, then ours is set where it matters.
+  const call = (method: string, body: Record<string, unknown>) =>
+    fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const scopes = ['default', 'all_private_chats', 'all_group_chats', 'all_chat_administrators']
+  const langs: (string | undefined)[] = [undefined, 'es', 'en', 'pt']
+  await Promise.all(scopes.flatMap((scope) => langs.map((language_code) => call('deleteMyCommands', { scope: { type: scope }, ...(language_code ? { language_code } : {}) }))))
+  // A list set for ONE chat is the most specific of all and beats everything above: it would keep an old menu in that chat
+  // forever. The chats linked to a profile are cleared too.
+  const sa = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT)
+  const linked = (await createDb(sa.project_id, () => accessToken(sa)).query('users', [{ field: 'telegramChatId', op: 'GREATER_THAN', value: '' }]).catch(() => []))
+    .map((u) => Number(u.telegramChatId)).filter(Boolean)
+  await Promise.all(linked.flatMap((chat_id) => langs.map((language_code) => call('deleteMyCommands', { scope: { type: 'chat', chat_id }, ...(language_code ? { language_code } : {}) }))))
+  const set = await Promise.all([undefined, 'es'].flatMap((language_code) =>
+    ['default', 'all_private_chats'].map(async (scope) => (await call('setMyCommands', { commands: COMMANDS, scope: { type: scope }, ...(language_code ? { language_code } : {}) })).ok)))
+  // what Telegram now has for the private chats, to see at a glance that the menu really has the new command
+  const seen = await Promise.all([undefined, 'es'].map(async (language_code) => {
+    const r: any = await (await call('getMyCommands', { scope: { type: 'all_private_chats' }, ...(language_code ? { language_code } : {}) })).json().catch(() => ({}))
+    return { language: language_code ?? 'default', commands: (r.result ?? []).map((c: any) => c.command) }
+  }))
+  return { ok: set.every(Boolean), cleared: scopes.length * langs.length, chatsCleared: linked.length, set: set.length, seen }
+}
+
 export default {
   // Cloudflare fires this on the exact minute of each Cron Trigger
   async scheduled(event: { cron: string }, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) {
     const job = CRON_JOBS[event.cron]
     if (job) ctx.waitUntil(runJob(env, job, true).catch((e) => console.error(`job ${job}:`, e)))
+    if (job === 'daily') ctx.waitUntil(publishCommands(env).catch((e) => console.error('commands:', e)))
   },
 
   async fetch(request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
@@ -262,27 +302,7 @@ export default {
     // POST /setup (same secret header): publishes the command list so Telegram shows the "/" menu
     if (new URL(request.url).pathname === '/setup') {
       if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('forbidden', { status: 403 })
-      // Telegram keeps one command list per scope AND language, and the most specific one wins. Something else may have
-      // left lists in narrower scopes, so every scope/language is cleared first, then ours is set where it matters.
-      const call = (method: string, body: Record<string, unknown>) =>
-        fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      const scopes = ['default', 'all_private_chats', 'all_group_chats', 'all_chat_administrators']
-      const langs: (string | undefined)[] = [undefined, 'es', 'en', 'pt']
-      await Promise.all(scopes.flatMap((scope) => langs.map((language_code) => call('deleteMyCommands', { scope: { type: scope }, ...(language_code ? { language_code } : {}) }))))
-      // A list set for ONE chat is the most specific of all and beats everything above: it would keep an old menu in that chat
-      // forever. The chats linked to a profile are cleared too.
-      const sa = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT)
-      const linked = (await createDb(sa.project_id, () => accessToken(sa)).query('users', [{ field: 'telegramChatId', op: 'GREATER_THAN', value: '' }]).catch(() => []))
-        .map((u) => Number(u.telegramChatId)).filter(Boolean)
-      await Promise.all(linked.flatMap((chat_id) => langs.map((language_code) => call('deleteMyCommands', { scope: { type: 'chat', chat_id }, ...(language_code ? { language_code } : {}) }))))
-      const set = await Promise.all([undefined, 'es'].flatMap((language_code) =>
-        ['default', 'all_private_chats'].map(async (scope) => (await call('setMyCommands', { commands: COMMANDS, scope: { type: scope }, ...(language_code ? { language_code } : {}) })).ok)))
-      // what Telegram now has for the private chats, to see at a glance that the menu really has the new command
-      const seen = await Promise.all([undefined, 'es'].map(async (language_code) => {
-        const r: any = await (await call('getMyCommands', { scope: { type: 'all_private_chats' }, ...(language_code ? { language_code } : {}) })).json().catch(() => ({}))
-        return { language: language_code ?? 'default', commands: (r.result ?? []).map((c: any) => c.command) }
-      }))
-      return new Response(JSON.stringify({ ok: set.every(Boolean), cleared: scopes.length * langs.length, chatsCleared: linked.length, set: set.length, seen }), { status: set.every(Boolean) ? 200 : 502 })
+      return Response.json(await publishCommands(env), { status: 200 })
     }
     // POST /run/telegram | /run/debits | /run/daily (same secret header): runs a job now. Add ?apply=1 to really send / store;
     // without it the job only reports what it would do.
