@@ -1,11 +1,13 @@
 import type { AppNotification } from '../types/notification';
 import type { DebtLine, VariableBudget, VariableSpend } from '../types/variableBudget';
-import type { MonthEntry } from './fixedExpenses';
+import { effectiveDue, type MonthEntry } from './fixedExpenses';
 import type { PayDate, PeriodLedger } from './paySchedule';
 
 const DAY_MS = 86_400_000;
 /** Payments due within this many days count as coming up. */
 const SOON_DAYS = 3;
+/** Overdue bills are told on days 1, 3, 5, 7 and 9 late (stages 0 to 4); after that no more. */
+const OVERDUE_LAST_STAGE = 4;
 
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
@@ -79,26 +81,37 @@ export function deriveAlerts(i: AlertInput): AppNotification[] {
     });
   }
 
-  // Fixed expenses
+  // Fixed expenses. Each bill is told in stages, so a notice is not repeated until the situation moves on:
+  //  · coming up (1 to 3 days left): one notice;  · due today: one notice;
+  //  · overdue: one notice the day after, then one every two days (days 1, 3, 5, 7, 9), and no more after 10 days.
   const owed = i.entries.filter((e) => e.owed.length > 0);
-  const overdue = owed.filter((e) => e.arrears.length > 0 || e.status === 'overdue');
-  if (overdue.length > 0) {
-    const total = overdue.reduce((s, e) => s + e.total, 0);
-    const names = overdue.slice(0, 3).map((e) => e.fe.concept as string).join(', ');
-    add({
-      key: `fx-overdue|${overdue.map((e) => `${e.fe.id}:${e.hostMonth}`).sort().join(',')}`, zone: 'fijos', severity: 'critical',
-      title: overdue.length === 1 ? '1 pago vencido' : `${overdue.length} pagos vencidos`,
-      body: `${names}${overdue.length > 3 ? '…' : ''} · ${cop(total)} por pagar.`,
-      link: '/fijos',
-    });
-  }
-  for (const e of owed.filter((x) => x.status === 'due-soon' && x.arrears.length === 0 && x.due)) {
-    add({
-      key: `fx-soon|${e.fe.id}|${e.hostMonth}`, zone: 'fijos', severity: 'warning',
-      title: `${e.fe.concept} vence ${relativeDay(e.due!, today)}`,
-      body: `${cop(e.total)} · ${(e.fe.autoDebit ?? []).length > 0 ? 'se debita automáticamente si tienes el saldo' : 'recuerda pagarlo'}.`,
-      link: '/fijos',
-    });
+  for (const e of owed) {
+    const idKey = `${e.fe.id}|${e.hostMonth}`;
+    // how long the oldest unpaid month has been overdue
+    const oldest = e.owed[0];
+    const oldestDue = oldest ? effectiveDue(e.fe, oldest.occMonth) : e.due;
+    const late = oldestDue ? Math.round((startOfDay(today).getTime() - startOfDay(oldestDue).getTime()) / DAY_MS) : 0;
+
+    if (late >= 1 && (e.arrears.length > 0 || e.status === 'overdue')) {
+      const stage = Math.min(OVERDUE_LAST_STAGE, Math.floor((late - 1) / 2));
+      const months = e.owed.length > 1 ? ` · ${e.owed.length} meses atrasados` : '';
+      add({
+        key: `fx-overdue|${e.fe.id}:${e.hostMonth}|${stage}`, zone: 'fijos', severity: 'critical',
+        title: `${e.fe.concept as string} lleva ${late} ${late === 1 ? 'día' : 'días'} vencido`,
+        body: `${cop(e.total)} por pagar${months}.`,
+        link: '/fijos',
+      });
+      continue;
+    }
+    if (e.status === 'due-soon' && e.arrears.length === 0 && e.due) {
+      const left = Math.round((startOfDay(e.due).getTime() - startOfDay(today).getTime()) / DAY_MS);
+      add({
+        key: `${left <= 0 ? 'fx-today' : 'fx-soon'}|${idKey}`, zone: 'fijos', severity: 'warning',
+        title: `${e.fe.concept as string} vence ${relativeDay(e.due, today)}`,
+        body: `${cop(e.total)} · ${(e.fe.autoDebit ?? []).length > 0 ? 'se debita automáticamente si tienes el saldo' : 'recuerda pagarlo'}.`,
+        link: '/fijos',
+      });
+    }
   }
 
   // Occasional expenses that already spent more than their estimate

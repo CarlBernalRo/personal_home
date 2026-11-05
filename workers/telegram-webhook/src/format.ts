@@ -289,7 +289,7 @@ function plainNotice(d: FormatDeps, n: Doc): Msg {
 export async function buildNotice(d: FormatDeps, user: Doc, n: Doc, ctx = new Ctx(d, user)): Promise<Msg> {
   try {
     const key = typeof n.derivedKey === 'string' ? n.derivedKey : ''
-    if (key.startsWith('fx-soon|')) { const [, id, month] = key.split('|'); return await fixedSoon(ctx, n, id, month) }
+    if (key.startsWith('fx-soon|') || key.startsWith('fx-today|')) { const [, id, month] = key.split('|'); return await fixedSoon(ctx, n, id, month) }
     if (key.startsWith('fx-overdue|')) return await fixedOverdue(ctx, n, key)
     if (key.startsWith('pay|')) return await payDay(ctx, n, key)
     if (key.startsWith('over|')) return await overBudget(ctx, n)
