@@ -213,6 +213,13 @@ async function pendingMovements(c: Ctx, n: Doc): Promise<Msg> {
   }
 }
 
+/**
+ * The reminder of what is waiting to be confirmed. It does not depend on a notice created by the app (those only exist
+ * while the app is open): the Worker looks at the pending movements itself and sends this when they have been waiting.
+ */
+export const pendingReminder = (d: FormatDeps, user: Doc, ctx: Ctx): Promise<Msg> =>
+  pendingMovements(ctx, { zone: 'gastos', severity: 'info', title: '' } as unknown as Doc)
+
 // ── household ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** "Tu situación en Casa: debes $X a A · te deben $Y" for the household a notice points at. */

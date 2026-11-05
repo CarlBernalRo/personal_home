@@ -12,7 +12,7 @@
 import { autoDebitFloor, planAutoPayments } from '../../../apps/web/src/shared/index'
 import { bogotaToday } from './commands'
 import type { Db, Doc } from './db'
-import { Ctx, buildNotice, fixedDigest, type FormatDeps, type Msg } from './format'
+import { Ctx, buildNotice, fixedDigest, pendingReminder, type FormatDeps, type Msg } from './format'
 import type { Telegram } from './telegram'
 
 export interface JobDeps {
@@ -28,6 +28,7 @@ const clock = (d: JobDeps) => (d.now ? d.now() : Date.now())
 
 /** Notices older than this are never sent: a late "vence mañana" is noise, and it keeps each run cheap to read. */
 const NOTICE_WINDOW_MS = 48 * HOUR
+const BOGOTA_HOURS = 5
 
 export interface TelegramResult { users: number; sent: number; skipped: number }
 
@@ -81,6 +82,28 @@ export async function sendTelegramAvisos(d: JobDeps & { tg: Telegram; appUrl: st
         // the person blocked the bot or deleted the chat: forget it instead of failing every run (the rest stay pending)
         if (/forbidden|blocked|chat not found|deactivated/i.test(String(e?.message))) { await d.db.patch(`users/${u.id}`, {}, ['telegramChatId', 'telegramLinkedAt']); break }
       }
+    }
+
+    // Reminder of what waits in Pendientes. The notice the app creates only exists while the app is open and its id repeats
+    // for the same count, so it can never be trusted to arrive: the Worker looks at the pending movements itself.
+    // At most once a day, in waking hours, for movements that have waited a while (not for one that was just sent).
+    const hourNow = new Date(clock(d) - BOGOTA_HOURS * HOUR).getUTCHours()
+    const waitingList = await ctx.pending()
+    const oldest = waitingList[0]?.createdAt instanceof Date ? waitingList[0].createdAt.getTime() : clock(d)
+    const lastReminder = u.pendingReminderAt instanceof Date ? u.pendingReminderAt.getTime() : 0
+    const covered = toSend.some((n) => typeof n.derivedKey === 'string' && n.derivedKey.startsWith('pendmov|'))
+    if (waitingList.length > 0 && !covered && (!zones || zones.includes('gastos'))
+        && hourNow >= 8 && hourNow < 21
+        && clock(d) - oldest >= 2 * HOUR && clock(d) - lastReminder >= 20 * HOUR) {
+      try {
+        const msg = await pendingReminder(fd, u, ctx)
+        if (!apply) out.sent++
+        else {
+          await d.tg.send(Number(u.telegramChatId), msg.text, msg.keyboard, { silent: msg.silent })
+          await d.db.patch(`users/${u.id}`, { pendingReminderAt: new Date(clock(d)) })
+          out.sent++
+        }
+      } catch (e: any) { console.error(`reminder ${u.id.slice(0, 6)}…: ${e?.message}`) }
     }
 
     /** The digest could not be built: each of its notices goes alone. */
