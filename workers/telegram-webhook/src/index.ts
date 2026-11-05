@@ -281,12 +281,17 @@ async function publishCommands(env: Env) {
   await Promise.all(linked.flatMap((chat_id) => langs.map((language_code) => call('deleteMyCommands', { scope: { type: 'chat', chat_id }, ...(language_code ? { language_code } : {}) }))))
   const set = await Promise.all([undefined, 'es'].flatMap((language_code) =>
     ['default', 'all_private_chats'].map(async (scope) => (await call('setMyCommands', { commands: COMMANDS, scope: { type: scope }, ...(language_code ? { language_code } : {}) })).ok)))
+  // The button next to the message box that opens the list: forced to the "commands" type, for everyone and for each linked chat
+  // (a chat can keep a different button, or none, from something done earlier and the list would never show)
+  const menuButton = { type: 'commands' }
+  const menuSet = await Promise.all([call('setChatMenuButton', { menu_button: menuButton }), ...linked.map((chat_id) => call('setChatMenuButton', { chat_id, menu_button: menuButton }))])
+  const menuOk = (await Promise.all(menuSet.map((r) => r.json().then((j: any) => !!j.ok).catch(() => false)))).every(Boolean)
   // what Telegram now has for the private chats, to see at a glance that the menu really has the new command
   const seen = await Promise.all([undefined, 'es'].map(async (language_code) => {
     const r: any = await (await call('getMyCommands', { scope: { type: 'all_private_chats' }, ...(language_code ? { language_code } : {}) })).json().catch(() => ({}))
     return { language: language_code ?? 'default', commands: (r.result ?? []).map((c: any) => c.command) }
   }))
-  return { ok: set.every(Boolean), cleared: scopes.length * langs.length, chatsCleared: linked.length, set: set.length, seen }
+  return { ok: set.every(Boolean), menuButton: menuOk, cleared: scopes.length * langs.length, chatsCleared: linked.length, set: set.length, seen }
 }
 
 export default {
