@@ -25,5 +25,7 @@ export async function signInAdmin(username: string, pass: string) {
 }
 
 export async function logout() {
+  // the saved last activity belongs to the session that ends: a later login starts a new hour
+  try { Object.keys(localStorage).filter((k) => k.startsWith('last-activity-')).forEach((k) => localStorage.removeItem(k)) } catch { /* private mode */ }
   await signOut(auth)
 }

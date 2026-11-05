@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { getPendingMovements } from '@/lib/firestore'
+import { useOnReturn } from '@/hooks/useOnReturn'
 import type { PendingMovement } from '@/shared'
 
 /** Fired when pending movements were confirmed or discarded, so every screen that shows them refreshes. */
@@ -21,9 +22,10 @@ export function usePendingMovements() {
   useEffect(() => {
     const refresh = () => { load() }
     window.addEventListener(PENDING_CHANGED, refresh)
-    window.addEventListener('focus', refresh)
-    return () => { window.removeEventListener(PENDING_CHANGED, refresh); window.removeEventListener('focus', refresh) }
+    return () => window.removeEventListener(PENDING_CHANGED, refresh)
   }, [load])
+  // what was prepared in Telegram while the app was in the background shows up as soon as the person is back
+  useOnReturn(load)
 
   const counts = useMemo(() => ({
     income: items.filter((p) => p.kind === 'income').length,

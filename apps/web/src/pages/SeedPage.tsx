@@ -191,40 +191,33 @@ export default function SeedPage() {
     return count
   }
 
-  async function runHouseholdSeed() {
-    if (!user || !isCarlos) return
+  async function runRolesSeed() {
     setStatus('running')
     setLogs([])
     setError(null)
     try {
-      // Get or create household first — we need the ID before any Firestore query on householdDebts
-      let hhId = householdId
-      if (!hhId) {
-        const { id } = await createHousehold(user.uid, 'Casa Carlos y Alexandra')
-        hhId = id
-      }
+      await setDoc(doc(db, 'roles', 'admin'), {
+        name: 'Administrador',
+        slug: 'admin',
+        description: 'Control total de la plataforma, usuarios, hogares y finanzas',
+        permissions: ['all', 'manage_users', 'manage_households', 'manage_finances'],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, { merge: true })
 
-      // Safe check: filter by householdId so Firestore can verify membership for all results
-      const existingSnap = await getDocs(query(
-        collection(db, 'householdDebts'),
-        where('householdId', '==', hhId),
-      ))
-      if (!existingSnap.empty) {
-        setError(`Ya hay ${existingSnap.size} deudas en este hogar. Elimínalas desde la página Hogar (⚙️ → Eliminar hogar) antes de reimportar.`)
-        setStatus('error')
-        return
-      }
+      await setDoc(doc(db, 'roles', 'integrante'), {
+        name: 'Integrante',
+        slug: 'integrante',
+        description: 'Miembro del hogar con acceso a gastos, deudas y finanzas compartidas',
+        permissions: ['view_households', 'manage_expenses', 'manage_debts', 'view_finances'],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, { merge: true })
 
-      const hh      = await getHousehold(hhId)
-      const members = (hh?.members as string[] | undefined) ?? []
-      const aleUid  = members.find((m) => m !== user.uid) ?? ALE_EMAIL
-      const idMap   = await seedHouseholdDebts(hhId, user.uid, aleUid)
-      log('Deudas del hogar', HOUSEHOLD_DEBTS.length)
-      const crossCount = await seedHouseholdCrossings(hhId, user.uid, aleUid, idMap)
-      log('Cruces aplicados', crossCount)
+      log('Roles creados ("admin", "integrante")', 2, 'ok')
       setStatus('done')
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Error desconocido')
+      setError(e instanceof Error ? e.message : 'Error al sembrar roles')
       setStatus('error')
     }
   }
@@ -377,9 +370,11 @@ export default function SeedPage() {
                 <Database size={16} /> Importar todos los datos
               </Button>
               {isCarlos && (
-                <Button onClick={runHouseholdSeed} variant="secondary" className="w-full">
-                  <Users size={16} /> Importar solo deudas del hogar
-                </Button>
+                <>
+                  <Button onClick={runRolesSeed} variant="secondary" className="w-full">
+                    <Users size={16} /> Sembrar Colección Roles (admin, integrante)
+                  </Button>
+                </>
               )}
             </div>
           )}

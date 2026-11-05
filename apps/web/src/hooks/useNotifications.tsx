@@ -1,3 +1,4 @@
+import { useOnReturn } from '@/hooks/useOnReturn'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
@@ -121,11 +122,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
 
   // on sign-in, on every navigation (so what you just did is reflected) and when the tab comes back
   useEffect(() => { refresh() }, [refresh, location.pathname])
-  useEffect(() => {
-    const onFocus = () => { refresh() }
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
-  }, [refresh])
+  useOnReturn(refresh)
 
   // ── alerts worked out from the user's own data ─────────────────────────────
   const derived = useMemo<AppNotification[]>(() => {

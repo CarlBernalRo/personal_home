@@ -114,7 +114,7 @@ export type HouseholdDebtSeed = {
 
 // NOTE on `cruzado`: in the source Excel this flag only meant "reviewed in a
 // monthly closing", NOT "paid" — it does not reduce the balance, so it's false
-// here for everything except the two debts that have a REAL crossing (see
+// here for everything except the debts that have a REAL bilateral crossing (see
 // HOUSEHOLD_CROSSINGS below, which the seeder applies after creating the debts,
 // properly syncing crossedAmount + cruzado together instead of just copying a
 // textual flag that was never backed by an actual amount).
@@ -140,9 +140,8 @@ export const HOUSEHOLD_DEBTS: HouseholdDebtSeed[] = [
 ]
 
 // Real crossings (compensación bilateral) to apply after the debts above exist.
-// `debtId` references HOUSEHOLD_DEBTS[].id. `debt2Person` is the counterpart
-// whose own balance also gets reduced by `amount` (same mutual-offset mechanic
-// as the in-app "Cruzar deuda" button).
+// Only the September crossing of Regalos Jhon ($78.000) was crossed in the Excel.
+// Crash Bandicoot ($90.000) was NOT crossed (M: NO), keeping Ale's debt at $102.500 ($12.500 + $90.000).
 export type HouseholdCrossingSeed = {
   debtId: string
   amount: number
@@ -153,6 +152,5 @@ export type HouseholdCrossingSeed = {
 }
 
 export const HOUSEHOLD_CROSSINGS: HouseholdCrossingSeed[] = [
-  { debtId: '1311c0ba11', amount: 78000, debt2Person: 'carlos', initiatedBy: 'ale',    notes: 'Cruce de cuentas', date: '2026-09-01' },
-  { debtId: 'bd1fc459b9', amount: 90000, debt2Person: 'carlos', initiatedBy: 'carlos', notes: '',                 date: '2026-10-26' },
+  { debtId: '1311c0ba11', amount: 78000, debt2Person: 'carlos', initiatedBy: 'ale', notes: 'Cruce de cuentas (Regalos Jhon)', date: '2026-09-01' },
 ]
