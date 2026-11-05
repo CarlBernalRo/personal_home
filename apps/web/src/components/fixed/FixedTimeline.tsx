@@ -120,6 +120,9 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
     ? [...groups.keys()]
     : [...new Set([...groups.keys(), ...spendDays.keys(), ...reminderDays.keys(), ...linkedDays.keys()])]
   ).sort((a, b) => a - b)
+  // Newest first, so what just happened is at the top; the expenses without a day go last
+  const dated = days.filter((d) => d !== NO_DAY).reverse()
+  const daysShown = days.includes(NO_DAY) ? [...dated, NO_DAY] : dated
 
   if (items.length === 0) {
     return (
@@ -136,11 +139,17 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
 
   const shown = (i: MonthEntry<any>) => (i.owed.length > 0 ? i.total : (i.payment?.paidAmount ?? amountFor(i.fe, i.hostMonth)))
   const totalDue = items.reduce((s, i) => s + shown(i), 0)
+  // "acumulado" adds up from the start of the period (oldest day first), whatever the order shown
+  const accumulated = new Map<number, number>()
   let running = 0
-  // The "today" marker goes before the first day that is still ahead of us.
+  for (const day of days) {
+    for (const entry of groups.get(day) ?? []) running += shown(entry)
+    accumulated.set(day, running)
+  }
+  // The "today" marker goes before the first day that is not in the future (newest first: the future is above it).
   const todayKey = key(today)
   const showToday = inRange(today) && !filtering
-  const markerBefore = showToday ? (days.find((d) => d >= todayKey) ?? null) : null
+  const markerBefore = showToday ? (daysShown.find((d) => d !== NO_DAY && d <= todayKey) ?? null) : null
   const markerAtEnd = showToday && markerBefore === null
 
   const marker = (
@@ -165,7 +174,7 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
           </li>
         )}
 
-        {days.map((day) => {
+        {daysShown.map((day) => {
           const group = groups.get(day) ?? []
           const date = day === NO_DAY ? null : new Date(day)
           return (
@@ -209,7 +218,6 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
                   {group.map((entry) => {
                     const { fe, payment, status, arrears } = entry
                     const cat = FIXED_EXPENSE_CATEGORIES.find((c) => c.id === fe.category)
-                    running += shown(entry)
                     const paidOn = payment && entry.owed.length === 0
                       ? format(payment.paymentDate instanceof Date ? payment.paymentDate : new Date(payment.paymentDate ?? 0), 'd MMM', { locale: es })
                       : null
@@ -266,7 +274,7 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
                 </div>
 
                 <p className="max-lg:hidden text-[10px] font-mono text-[#5f6a72] mt-1">
-                  acumulado {formatCOP(running)} de {formatCOP(totalDue)}
+                  acumulado {formatCOP(accumulated.get(day) ?? 0)} de {formatCOP(totalDue)}
                 </p>
               </li>
             </Fragment>

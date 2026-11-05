@@ -57,13 +57,20 @@ export function ExpenseTimeline({ rows, showToday, onDelete, onEdit, accounts = 
     const k = startOfDay(r.date).getTime()
     byDay.set(k, [...(byDay.get(k) ?? []), r])
   }
-  const days = [...byDay.keys()].sort((a, b) => a - b)
+  // Newest first, so what was just registered is at the top. The "acumulado" still adds up from the start of the period.
+  const daysAsc = [...byDay.keys()].sort((a, b) => a - b)
+  const days = [...daysAsc].reverse()
 
   const total = rows.filter((r) => r.counted).reduce((s, r) => s + r.amount, 0)
+  const accumulated = new Map<number, number>()
   let running = 0
+  for (const day of daysAsc) {
+    for (const r of byDay.get(day)!) if (r.counted) running += r.amount
+    accumulated.set(day, running)
+  }
 
-  // The "today" marker goes before the first day that is still ahead of us
-  const markerBefore = showToday ? (days.find((d) => d >= today.getTime()) ?? null) : null
+  // The "today" marker goes before the first day that is not in the future (newest first: the future is above it)
+  const markerBefore = showToday ? (days.find((d) => d <= today.getTime()) ?? null) : null
   const markerAtEnd = showToday && days.length > 0 && markerBefore === null
 
   const marker = (
@@ -104,7 +111,6 @@ export function ExpenseTimeline({ rows, showToday, onDelete, onEdit, accounts = 
                   {items.map((r) => {
                     const kind = kindOf(r)
                     const cat = PERSONAL_CATEGORIES.find((c) => c.id === r.category)
-                    if (r.counted) running += r.amount
                     return (
                       <div
                         key={r.id}
@@ -161,7 +167,7 @@ export function ExpenseTimeline({ rows, showToday, onDelete, onEdit, accounts = 
                 </div>
 
                 <p className="max-lg:hidden text-[10px] font-mono text-[#5f6a72] mt-1">
-                  acumulado {formatCOP(running)} de {formatCOP(total)}
+                  acumulado {formatCOP(accumulated.get(day) ?? 0)} de {formatCOP(total)}
                 </p>
               </li>
             </Fragment>

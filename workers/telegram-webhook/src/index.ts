@@ -269,9 +269,20 @@ export default {
       const scopes = ['default', 'all_private_chats', 'all_group_chats', 'all_chat_administrators']
       const langs: (string | undefined)[] = [undefined, 'es', 'en', 'pt']
       await Promise.all(scopes.flatMap((scope) => langs.map((language_code) => call('deleteMyCommands', { scope: { type: scope }, ...(language_code ? { language_code } : {}) }))))
+      // A list set for ONE chat is the most specific of all and beats everything above: it would keep an old menu in that chat
+      // forever. The chats linked to a profile are cleared too.
+      const sa = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT)
+      const linked = (await createDb(sa.project_id, () => accessToken(sa)).query('users', [{ field: 'telegramChatId', op: 'GREATER_THAN', value: '' }]).catch(() => []))
+        .map((u) => Number(u.telegramChatId)).filter(Boolean)
+      await Promise.all(linked.flatMap((chat_id) => langs.map((language_code) => call('deleteMyCommands', { scope: { type: 'chat', chat_id }, ...(language_code ? { language_code } : {}) }))))
       const set = await Promise.all([undefined, 'es'].flatMap((language_code) =>
         ['default', 'all_private_chats'].map(async (scope) => (await call('setMyCommands', { commands: COMMANDS, scope: { type: scope }, ...(language_code ? { language_code } : {}) })).ok)))
-      return new Response(JSON.stringify({ ok: set.every(Boolean), cleared: scopes.length * langs.length, set: set.length }), { status: set.every(Boolean) ? 200 : 502 })
+      // what Telegram now has for the private chats, to see at a glance that the menu really has the new command
+      const seen = await Promise.all([undefined, 'es'].map(async (language_code) => {
+        const r: any = await (await call('getMyCommands', { scope: { type: 'all_private_chats' }, ...(language_code ? { language_code } : {}) })).json().catch(() => ({}))
+        return { language: language_code ?? 'default', commands: (r.result ?? []).map((c: any) => c.command) }
+      }))
+      return new Response(JSON.stringify({ ok: set.every(Boolean), cleared: scopes.length * langs.length, chatsCleared: linked.length, set: set.length, seen }), { status: set.every(Boolean) ? 200 : 502 })
     }
     // POST /run/telegram | /run/debits | /run/daily (same secret header): runs a job now. Add ?apply=1 to really send / store;
     // without it the job only reports what it would do.
