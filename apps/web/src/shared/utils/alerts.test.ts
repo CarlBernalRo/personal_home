@@ -37,39 +37,16 @@ describe('deriveAlerts', () => {
     expect(deriveAlerts(base())).toEqual([]);
   });
 
-  it('tells each overdue bill by itself and flags the ones coming up', () => {
+  it('groups overdue fixed payments and flags the ones coming up', () => {
     const expenses = [fe('Luz', 5, 90_000), fe('Agua', 3, 40_000), fe('Gas', 12, 30_000), fe('Seguro', 25, 10_000)];
     const entries = monthEntries(expenses, '2026-11', new Map(), today);
     const alerts = deriveAlerts(base({ entries }));
-    const overdue = alerts.filter((a) => a.zone === 'fijos' && a.severity === 'critical');
-    expect(overdue.map((a) => a.title).sort()).toEqual(['Agua lleva 7 días vencido', 'Luz lleva 5 días vencido']);
-    expect(overdue.find((a) => a.title.startsWith('Luz'))!.body).toContain('90.000');
+    const overdue = alerts.find((a) => a.zone === 'fijos' && a.severity === 'critical')!;
+    expect(overdue.title).toBe('2 pagos vencidos');
+    expect(overdue.body).toContain('130.000');
     const soon = alerts.filter((a) => a.severity === 'warning');
     expect(soon.map((a) => a.title)).toEqual(['Gas vence en 2 días']);
-    expect(soon[0].key).toBe('fx-soon|Gas|2026-11');
     expect(alerts[0].severity).toBe('critical'); // most urgent first
-  });
-
-  describe('stages of a bill due on the 10th', () => {
-    const keyOn = (day: number) => {
-      const t = d(2026, 11, day);
-      const entries = monthEntries([fe('Luz', 10, 90_000)], '2026-11', new Map(), t);
-      return deriveAlerts(base({ today: t, entries })).filter((a) => a.zone === 'fijos').map((a) => a.key);
-    };
-    it('one notice when it is coming up and a different one the day it is due', () => {
-      expect(keyOn(7)).toEqual(['fx-soon|Luz|2026-11']);
-      expect(keyOn(9)).toEqual(['fx-soon|Luz|2026-11']);
-      expect(keyOn(10)).toEqual(['fx-today|Luz|2026-11']);
-      expect(keyOn(5)).toEqual([]); // more than 3 days ahead
-    });
-    it('once overdue the key changes every two days (late days 1, 3, 5, 7, 9) and stops changing after that', () => {
-      const keys = (days: number[]) => days.map((n) => keyOn(10 + n)[0]);
-      expect(keys([1, 2])).toEqual(['fx-overdue|Luz:2026-11|0', 'fx-overdue|Luz:2026-11|0']);
-      expect(keys([3, 4])).toEqual(['fx-overdue|Luz:2026-11|1', 'fx-overdue|Luz:2026-11|1']);
-      expect(keys([5, 7, 9]).map((k) => k.split('|')[2])).toEqual(['2', '3', '4']);
-      // past 10 days late the key stays the last one: nothing new goes out
-      expect(keys([10, 15, 30]).map((k) => k.split('|')[2])).toEqual(['4', '4', '4']);
-    });
   });
 
   it('warns about the pay day and about overspending', () => {

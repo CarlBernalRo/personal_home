@@ -13,6 +13,7 @@ export const COMMANDS: { command: string; description: string }[] = [
   { command: 'proximos', description: 'Pagos que vencen en los próximos 7 días' },
   { command: 'debo', description: 'Lo que debes en tus hogares' },
   { command: 'medeben', description: 'Lo que te deben en tus hogares' },
+  { command: 'pendientes', description: 'Todo lo que tienes pendiente por hacer' },
   { command: 'resumen', description: 'Cómo vas este mes' },
   { command: 'cancelar', description: 'Cancelar el registro en curso' },
   { command: 'ayuda', description: 'Ver los comandos' },

@@ -14,9 +14,10 @@
  */
 
 import { createDb } from './db'
+import { pendingSummaryNow } from './format'
 import { COMMANDS, HELP, bogotaToday, runCommand } from './commands'
 import { clearFlow, onCallback, onText, startFromImage, type FlowDeps } from './flow'
-import { saveAutoDebits, sendTelegramAvisos, type JobName } from './jobs'
+import { saveAutoDebits, sendDailyPending, sendTelegramAvisos, type JobName } from './jobs'
 import { createTelegram } from './telegram'
 import { EMPTY_EXTRACTED, extractFromImage, type AiRunner } from './vision'
 
@@ -98,8 +99,8 @@ const say = (env: Env, chatId: number, text: string) =>
 
 const APP_URL = 'https://personalhome-3ee06.web.app'
 
-/** The Cron Triggers declared in wrangler.toml, UTC (Colombia is UTC-5: 12:07 UTC = 7:07 a.m.). */
-const CRON_JOBS: Record<string, JobName> = { '*/10 * * * *': 'telegram', '7 12 * * *': 'debits' }
+/** The Cron Triggers declared in wrangler.toml, UTC (Colombia is UTC-5: 12:07 UTC = 7:07 a.m.; 13:00 UTC = 8:00 a.m.). */
+const CRON_JOBS: Record<string, JobName> = { '*/10 * * * *': 'telegram', '7 12 * * *': 'debits', '0 13 * * *': 'daily' }
 
 /**
  * Runs one scheduled job and leaves its trace in `system/jobs` (when it ran, how long it took, what it did, or the error),
@@ -109,7 +110,9 @@ async function runJob(env: Env, name: JobName, apply: boolean) {
   const { db, tg } = flowDeps(env)
   const started = Date.now()
   try {
-    const result = name === 'telegram' ? await sendTelegramAvisos({ db, tg, appUrl: APP_URL }, apply) : await saveAutoDebits({ db }, apply)
+    const result = name === 'telegram' ? await sendTelegramAvisos({ db, tg, appUrl: APP_URL }, apply)
+      : name === 'daily' ? await sendDailyPending({ db, tg, appUrl: APP_URL }, apply)
+      : await saveAutoDebits({ db }, apply)
     if (apply) await db.patch('system/jobs', { [name]: { at: new Date(), ms: Date.now() - started, ok: true, ...result } })
     return { ok: true, job: name, apply, ...result }
   } catch (e: any) {
@@ -203,6 +206,15 @@ async function handle(env: Env, msg: any) {
     }
     const sa = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT)
     const db = createDb(sa.project_id, () => accessToken(sa))
+    // /pendientes: the daily message on demand (with a note when there is nothing)
+    if (/^\/pendientes(?:@\w+)?(?:\s|$)/i.test(text)) {
+      try {
+        const user = await db.get(`users/${owner.name.split('/').pop()!}`)
+        const msg = await pendingSummaryNow({ db, appUrl: APP_URL, now: Date.now() }, user!)
+        await flowDeps(env).tg.send(chatId, msg.text, msg.keyboard, { silent: msg.silent })
+      } catch (e) { console.error(e); await say(env, chatId, 'No pude consultar tus pendientes ahora. Intenta de nuevo en un momento.') }
+      return
+    }
     let answer: string | null
     try { answer = await runCommand(db, owner.name.split('/').pop()!, text) } catch (e) { console.error(e); answer = 'No pude consultar tus datos ahora. Intenta de nuevo en un momento.' }
     await say(env, chatId, answer ?? `No conozco ese comando.\n\n${HELP}`)
@@ -261,9 +273,9 @@ export default {
         ['default', 'all_private_chats'].map(async (scope) => (await call('setMyCommands', { commands: COMMANDS, scope: { type: scope }, ...(language_code ? { language_code } : {}) })).ok)))
       return new Response(JSON.stringify({ ok: set.every(Boolean), cleared: scopes.length * langs.length, set: set.length }), { status: set.every(Boolean) ? 200 : 502 })
     }
-    // POST /run/telegram | /run/debits (same secret header): runs a job now. Add ?apply=1 to really send / store;
+    // POST /run/telegram | /run/debits | /run/daily (same secret header): runs a job now. Add ?apply=1 to really send / store;
     // without it the job only reports what it would do.
-    const run = new URL(request.url).pathname.match(/^\/run\/(telegram|debits)$/)
+    const run = new URL(request.url).pathname.match(/^\/run\/(telegram|debits|daily)$/)
     if (run) {
       if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('forbidden', { status: 403 })
       try {

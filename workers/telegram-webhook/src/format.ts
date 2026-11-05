@@ -11,7 +11,7 @@
  * waited a few minutes still says what is true now. If anything fails, the plain version of the notice is sent.
  */
 import {
-  FIXED_EXPENSE_CATEGORIES, creditorOf, isAutoDebit, isPendingDebt, owedByCreditor, relativeDay, remainingOf,
+  FIXED_EXPENSE_CATEGORIES, creditorOf, effectiveDue, isAutoDebit, isPendingDebt, isScheduleUsable, latestPayDate, owedByCreditor, relativeDay, remainingOf,
 } from '../../../apps/web/src/shared/index'
 import { bogotaToday, fixedFor, households } from './commands'
 import type { Db, Doc } from './db'
@@ -105,25 +105,119 @@ async function fixedSoon(c: Ctx, n: Doc, feId: string, hostMonth: string): Promi
   return { text: lines.join('\n'), keyboard: buttons(c.d, '/fijos', 'Abrir Fijos', n.id), silent: false }
 }
 
-/** Several "vence pronto" notices of one run become one message. */
-export async function fixedDigest(d: FormatDeps, user: Doc, notices: Doc[]): Promise<Msg> {
-  const c = new Ctx(d, user)
-  const rows: { fe: any; e: any; acc: Doc | null }[] = []
-  for (const n of notices) {
-    const [, feId, month] = String(n.derivedKey).split('|')
-    const e = await c.entry(feId, month)
-    if (e) rows.push({ fe: e.fe, e, acc: await c.accountFor(e.fe) })
+/**
+ * EVERYTHING the person has left to do, in ONE message with no rules about days: payments (fixed ones overdue / coming up,
+ * and what they owe in households), unread notifications, movements prepared in Telegram that wait for confirmation, and
+ * the salary that arrived and is not confirmed yet. It is the daily message (8 a.m. Colombia) and the /pendientes command.
+ * It throws NOTHING_PENDING when there is nothing at all.
+ */
+export const NOTHING_PENDING = 'nothing pending'
+
+export async function pendingSummary(d: FormatDeps, user: Doc, ctx = new Ctx(d, user)): Promise<Msg> {
+  const c = ctx
+  const { entries } = await c.fixed()
+  const dayDiff = (date: Date) => Math.round((date.getTime() - c.today.getTime()) / 86_400_000)
+  const monthName = (m: string) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`
+  const late = (n: number) => `${n} día${n === 1 ? '' : 's'} de atraso`
+  const section = (title: string, count: number, rows: string[]) => [`\n<b>${title}</b>${count ? ` (${count})` : ''}`, quote(rows)]
+
+  // ── PAGOS: fixed payments
+  type Row = { text: string; amount: number; at: number }
+  const before: Row[] = [], current: Row[] = [], upcoming: Row[] = []
+  for (const e of entries) {
+    const fe = e.fe as any
+    for (const a of e.arrears) {
+      const due = effectiveDue(fe, a.occMonth)
+      const n = due ? -dayDiff(due) : 0
+      before.push({ amount: a.amount, at: due?.getTime() ?? 0, text: `• <b>${esc(fe.concept)}</b> — ${cop(a.amount)}\n   ${monthName(a.occMonth)}${n > 0 ? ` · ${late(n)}` : ''}` })
+    }
+    const host = e.owed.filter((l) => !e.arrears.includes(l)).reduce((sum, l) => sum + l.amount, 0)
+    if (host <= 0) continue
+    const left = e.due ? dayDiff(e.due) : null
+    const auto = isAutoDebit(fe, e.hostMonth) ? ' · 🤖 automático' : ''
+    if (e.due && left! < 0) current.push({ amount: host, at: e.due.getTime(), text: `• <b>${esc(fe.concept)}</b> — ${cop(host)}\n   ${late(-left!)} (vencía ${dayShort(e.due)})` })
+    else upcoming.push({ amount: host, at: e.due?.getTime() ?? Infinity, text: `• <b>${esc(fe.concept)}</b> — ${cop(host)}\n   ${e.due ? `${relativeDay(e.due, c.today)} (${dayShort(e.due)})` : 'sin fecha'}${auto}` })
   }
-  if (rows.length < 2) throw new Error('not enough live entries')
-  rows.sort((a, b) => (a.e.due?.getTime() ?? 0) - (b.e.due?.getTime() ?? 0))
-  const total = rows.reduce((s, r) => s + r.e.total, 0)
-  const lines = rows.map((r) => `• <b>${esc(r.fe.concept)}</b> — ${cop(r.e.total)}\n   ${r.e.due ? `${relativeDay(r.e.due, c.today)} (${dayShort(r.e.due)})` : 'sin fecha'}${isAutoDebit(r.fe, r.e.hostMonth) ? ' · 🤖 automático' : ''}`)
-  const out = [`🟠 <b>${rows.length} pagos por vencer</b>\n<i>📅 Gastos fijos</i>`, rule, quote(lines), `\n💵 Total: <b>${cop(total)}</b>`]
-  // what each account would be left with after paying what comes out of it
-  const byAccount = new Map<string, { acc: Doc; amount: number }>()
-  for (const r of rows) if (r.acc) byAccount.set(r.acc.id, { acc: r.acc, amount: (byAccount.get(r.acc.id)?.amount ?? 0) + r.e.total })
-  for (const { acc, amount } of byAccount.values()) out.push(balanceLine(acc, amount))
-  return { text: out.join('\n'), keyboard: buttons(d, '/fijos', 'Abrir Fijos'), silent: false }
+  for (const rows of [before, current, upcoming]) rows.sort((a, b) => a.at - b.at)
+  const fixedTotal = [...before, ...current, ...upcoming].reduce((sum, r) => sum + r.amount, 0)
+
+  // what the person owes in their households
+  const owes: string[] = []
+  for (const hh of await c.households()) {
+    for (const l of owedByCreditor(hh.debts as any[], c.user.id, hh.members).filter((x) => x.owed > 0)) {
+      owes.push(`• <b>${esc(hh.h.name)}</b>: debes ${cop(l.owed)} a ${esc(hh.name(l.creditor))}`)
+    }
+  }
+
+  // ── NOTIFICACIONES: unread ones that are not already said in another section
+  const covered = /^(fx-|pendmov\||pay\|)/
+  const unread = (await c.d.db.query('notifications', [{ field: 'userId', op: 'EQUAL', value: c.user.id }]))
+    .filter((n) => !n.read && !n.archived && !(typeof n.derivedKey === 'string' && covered.test(n.derivedKey)))
+    .sort((a, b) => b.createdAt - a.createdAt)
+
+  // ── PENDIENTES POR CONFIRMAR: movements prepared in Telegram
+  const waiting = await c.pending()
+
+  // ── CONFIRMACIÓN DE SALARIO: a pay day that arrived and was not confirmed
+  let salaryLine = ''
+  const schedule = (c.user.paySchedule ?? null) as any
+  if (schedule && isScheduleUsable(schedule)) {
+    const latest = latestPayDate(schedule, c.today)
+    if (latest) {
+      const salaries = (await c.d.db.query('incomes', [{ field: 'userId', op: 'EQUAL', value: c.user.id }])).filter((i) => i.kind === 'salary')
+      const same = (a: Date, b: Date) => a.getUTCFullYear() === b.getFullYear() && a.getUTCMonth() === b.getMonth() && a.getUTCDate() === b.getDate()
+      // incomes are stored at Colombia midnight (05:00Z): shift them into the same calendar frame as `latest`
+      if (!salaries.some((s) => same(new Date(s.date.getTime() - 5 * 3600_000), latest.date))) {
+        salaryLine = `• Sueldo de <b>${cop(latest.amount)}</b> del ${dayShort(latest.date)}: aún no lo has confirmado`
+      }
+    }
+  }
+
+  const nothing = before.length + current.length + upcoming.length + owes.length + unread.length + waiting.length === 0 && !salaryLine
+  if (nothing) throw new Error(NOTHING_PENDING)
+
+  const out: string[] = [`${before.length + current.length > 0 ? '🔴' : '🟡'} <b>Tus pendientes</b>\n<i>📋 Todo lo que te falta por hacer</i>`, rule]
+
+  if (before.length + current.length + upcoming.length + owes.length > 0) {
+    out.push('\n💳 <b>PAGOS</b>')
+    if (before.length) out.push(...section('🔴 Vencidos de períodos anteriores', before.length, before.map((r) => r.text)))
+    if (current.length) out.push(...section('🔴 Vencidos del período actual', current.length, current.map((r) => r.text)))
+    if (upcoming.length) out.push(...section('🟡 Próximos a pagar', upcoming.length, upcoming.map((r) => r.text)))
+    if (owes.length) out.push(...section('🏠 Deudas del hogar', owes.length, owes))
+    if (fixedTotal > 0) {
+      out.push(`\n💵 Gastos fijos por pagar: <b>${cop(fixedTotal)}</b>`)
+      const accounts = await c.accounts()
+      const have = accounts.reduce((sum, a) => sum + (a.balance ?? 0), 0)
+      if (accounts.length) out.push(`🏦 En tus cuentas: ${cop(have)} ${have >= fixedTotal ? '✅ alcanza para todo' : `⚠️ faltan ${cop(fixedTotal - have)}`}`)
+    }
+  }
+  if (unread.length) {
+    out.push('\n🔔 <b>NOTIFICACIONES</b>')
+    out.push(...section('Sin leer', unread.length, unread.slice(0, 6).map((n) => `• ${zoneOf(n.zone).icon} ${esc(n.title)}`).concat(unread.length > 6 ? [`… y ${unread.length - 6} más`] : [])))
+  }
+  if (waiting.length) {
+    out.push('\n📥 <b>PENDIENTES POR CONFIRMAR</b>')
+    out.push(...section('Preparados desde Telegram', waiting.length, waiting.slice(0, 8).map((p) => `${KIND_ICON[p.kind] ?? '•'} <b>${esc(p.concept || KIND_NAME[p.kind])}</b> — ${cop(p.amount)}\n   ${KIND_NAME[p.kind] ?? p.kind} · ${dayShort(new Date(p.date.getTime() - 5 * 3600_000))}${p.attachmentId ? ' · 📎' : ''}`).concat(waiting.length > 8 ? [`… y ${waiting.length - 8} más`] : [])))
+  }
+  if (salaryLine) {
+    out.push('\n💼 <b>CONFIRMACIÓN DE SALARIO</b>')
+    out.push(quote([salaryLine]))
+  }
+  out.push('\n<i>Nada se registra hasta que lo confirmes en la app.</i>')
+
+  // the button goes where the most pressing thing is
+  const path = salaryLine && before.length + current.length + upcoming.length === 0 ? '/' : waiting.length && before.length + current.length === 0 ? '/pendientes' : '/fijos'
+  return { text: out.join('\n'), keyboard: buttons(d, path, path === '/pendientes' ? 'Revisar y confirmar' : path === '/' ? 'Confirmar sueldo' : 'Abrir Fijos'), silent: false }
+}
+
+/** /pendientes: the same message, but when there is nothing it says so instead of staying quiet. */
+export async function pendingSummaryNow(d: FormatDeps, user: Doc): Promise<Msg> {
+  try {
+    return await pendingSummary(d, user)
+  } catch (e) {
+    if ((e as Error)?.message !== NOTHING_PENDING) throw e
+    return { text: '✅ <b>Estás al día</b>\nNo tienes pagos, notificaciones, movimientos por confirmar ni sueldo pendiente.', keyboard: buttons(d, '/', 'Abrir la app'), silent: true }
+  }
 }
 
 async function fixedOverdue(c: Ctx, n: Doc, key: string): Promise<Msg> {

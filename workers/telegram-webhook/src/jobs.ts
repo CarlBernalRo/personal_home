@@ -12,7 +12,7 @@
 import { autoDebitFloor, debtLines, deriveAlerts, planAutoPayments } from '../../../apps/web/src/shared/index'
 import { bogotaToday, fixedFor, households } from './commands'
 import type { Db, Doc } from './db'
-import { Ctx, buildNotice, fixedDigest, pendingReminder, type FormatDeps, type Msg } from './format'
+import { Ctx, NOTHING_PENDING, buildNotice, pendingReminder, pendingSummary, type FormatDeps, type Msg } from './format'
 import type { Telegram } from './telegram'
 
 export interface JobDeps {
@@ -72,8 +72,8 @@ export async function createServerNotices(d: JobDeps, users: Doc[], apply = true
         budgets: [], spends: [], householdLines, householdNames,
       })
       for (const a of alerts) {
-        // the app's own alerts about sueldo / estimados need data the Worker does not read: they stay with the app
-        if (a.zone !== 'fijos' && a.zone !== 'hogar') continue
+        // fixed payments are told once a day (sendDailyFixed); sueldo / estimados need data the Worker does not read
+        if (a.zone !== 'hogar') continue
         created++
         if (!apply) continue
         try {
@@ -117,16 +117,13 @@ export async function sendTelegramAvisos(d: JobDeps & { tg: Telegram; appUrl: st
     const toSend: Doc[] = []
     for (const n of pending) {
       let why = n.archived ? 'descartado' : zones && !zones.includes(n.zone) ? 'zona apagada' : ''
+      if (!why && typeof n.derivedKey === 'string' && /^fx-(soon|today|overdue)\|/.test(n.derivedKey)) why = 'lo cubre el resumen diario de las 8 a.m.'
       if (!why && typeof n.derivedKey === 'string' && n.derivedKey.startsWith('pendmov|') && waiting === 0) why = 'ya no hay movimientos pendientes'
       if (why) { out.skipped++; await mark(n.id, 'skipped'); continue }
       toSend.push(n)
     }
 
-    // several "vence pronto" of this run are one message (a list, the total and what each account would be left with)
-    const soon = toSend.filter((n) => typeof n.derivedKey === 'string' && n.derivedKey.startsWith('fx-soon|'))
-    const messages: { notices: Doc[]; build: () => Promise<Msg> }[] = []
-    if (soon.length >= 2) messages.push({ notices: soon, build: () => fixedDigest(fd, u, soon) })
-    for (const n of toSend) if (!(soon.length >= 2 && soon.includes(n))) messages.push({ notices: [n], build: () => buildNotice(fd, u, n, ctx) })
+    const messages: { notices: Doc[]; build: () => Promise<Msg> }[] = toSend.map((n) => ({ notices: [n], build: () => buildNotice(fd, u, n, ctx) }))
 
     for (const m of messages) {
       // a digest that cannot be built (the data changed) is sent notice by notice instead
@@ -243,4 +240,32 @@ export async function saveAutoDebits(d: JobDeps, apply = true): Promise<DebitsRe
   return out
 }
 
-export type JobName = 'telegram' | 'debits'
+/**
+ * The daily message: once a day (8 a.m. Colombia) each person with Telegram gets ONE message with everything they still
+ * have to do (payments, notifications, movements to confirm, salary to confirm). No rules about days; if there is nothing
+ * pending, nothing is sent.
+ */
+export async function sendDailyPending(d: JobDeps & { tg: Telegram; appUrl: string }, apply = true): Promise<TelegramResult> {
+  const users = await d.db.query('users', [{ field: 'telegramChatId', op: 'GREATER_THAN', value: '' }])
+  const out: TelegramResult = { users: users.length, sent: 0, skipped: 0 }
+  for (const u of users) {
+    const fd: FormatDeps = { db: d.db, appUrl: d.appUrl, now: clock(d) }
+    let msg: Msg
+    try { msg = await pendingSummary(fd, u, new Ctx(fd, u)) } catch (e: any) {
+      if (e?.message !== NOTHING_PENDING) console.error(`daily ${u.id.slice(0, 6)}…: ${e?.message}`)
+      out.skipped++
+      continue
+    }
+    if (!apply) { out.sent++; continue }
+    try {
+      await d.tg.send(Number(u.telegramChatId), msg.text, msg.keyboard, { silent: msg.silent })
+      out.sent++
+    } catch (e: any) {
+      console.error(`daily ${u.id.slice(0, 6)}…: ${e?.message}`)
+      if (/forbidden|blocked|chat not found|deactivated/i.test(String(e?.message))) await d.db.patch(`users/${u.id}`, {}, ['telegramChatId', 'telegramLinkedAt'])
+    }
+  }
+  return out
+}
+
+export type JobName = 'telegram' | 'debits' | 'daily'
