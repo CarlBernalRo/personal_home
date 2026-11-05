@@ -299,8 +299,9 @@ export default function Layout() {
 
           {/* Navigation Links */}
           <nav className={clsx('flex-1 overflow-y-auto py-4 space-y-1.5', collapsed ? 'px-2' : 'px-3')}>
-            {navItems.map(({ to, label, icon: Icon, end, accent, glow, gradient }) => (
-              <SideTip key={to} label={to === '/pendientes' && pendingCount > 0 ? `${label} (${pendingCount})` : label}>
+            {/* Pendientes por confirmar lives next to the bell in the footer (same level), not in this list */}
+            {navItems.filter((i) => i.to !== '/pendientes').map(({ to, label, icon: Icon, end, accent, glow, gradient }) => (
+              <SideTip key={to} label={label}>
               <NavLink
                 to={to}
                 end={end}
@@ -349,7 +350,8 @@ export default function Layout() {
 
           {/* Footer with Session & Profile */}
           <div className={clsx('pb-4 pt-3 border-t border-white/[0.08] space-y-2.5 flex-shrink-0', collapsed ? 'px-2' : 'px-3.5')}>
-            <div className="flex justify-center">
+            <div className={clsx('flex items-center justify-center gap-1.5', collapsed && 'flex-col')}>
+              <PendingMovementsLink variant="sidebar" />
               <NotificationBell variant="sidebar" />
             </div>
             <SessionTimer collapsed={collapsed} />

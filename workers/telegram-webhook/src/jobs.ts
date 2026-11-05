@@ -9,8 +9,8 @@
  * Both are safe to run any number of times: a notification carries a Telegram status, and every debit has a fixed id per
  * expense and month that can only be created once, together with the balance change, in one all-or-nothing write.
  */
-import { autoDebitFloor, planAutoPayments } from '../../../apps/web/src/shared/index'
-import { bogotaToday } from './commands'
+import { autoDebitFloor, debtLines, deriveAlerts, planAutoPayments } from '../../../apps/web/src/shared/index'
+import { bogotaToday, fixedFor, households } from './commands'
 import type { Db, Doc } from './db'
 import { Ctx, buildNotice, fixedDigest, pendingReminder, type FormatDeps, type Msg } from './format'
 import type { Telegram } from './telegram'
@@ -30,12 +30,73 @@ const clock = (d: JobDeps) => (d.now ? d.now() : Date.now())
 const NOTICE_WINDOW_MS = 48 * HOUR
 const BOGOTA_HOURS = 5
 
-export interface TelegramResult { users: number; sent: number; skipped: number }
+export interface TelegramResult { users: number; sent: number; skipped: number; created?: number }
+
+/** Same net balance the app shows for a household: debts (less what was crossed) minus abonos, minus total-balance crossings. */
+function netOwed(debts: any[], crossings: any[], uid: string) {
+  let net = 0
+  for (const x of debts) {
+    if (x.debtor !== uid) continue
+    net += x.tipo === 'Deuda' ? (x.amount || 0) - (x.crossedAmount || 0) : -(x.amount || 0)
+  }
+  for (const c of crossings) if (c.debt2PersonId === uid && !c.debt2Id) net -= c.amount || 0
+  return Math.max(0, net)
+}
+
+/**
+ * The app works out its alerts (a payment about to be due, an overdue one, a household debt with a date...) only while
+ * it is open, so nobody who does not open it would ever be told. The Worker works out the ones that come from the
+ * fixed payments and the household debts itself, with the same shared function, and stores them in the same place and
+ * with the same id the app uses: the app finds them already there and never repeats them, and they go out with the rest.
+ * Only between 8 a.m. and 9 p.m. in Colombia, so nothing wakes anyone up at night.
+ */
+export async function createServerNotices(d: JobDeps, users: Doc[], apply = true): Promise<number> {
+  const now = clock(d)
+  const hour = new Date(now - BOGOTA_HOURS * HOUR).getUTCHours()
+  if (hour < 8 || hour >= 21) return 0
+  const today = bogotaToday(now)
+  let created = 0
+  for (const u of users) {
+    try {
+      const fixed = await fixedFor(d.db, u.id, today)
+      const hhs = await households(d.db, u.id)
+      const householdLines: any[] = []
+      const householdNames: Record<string, string> = {}
+      for (const { h, debts } of hhs) {
+        const crossings = await d.db.query('householdCrossings', [{ field: 'householdId', op: 'EQUAL', value: h.id }]).catch(() => [])
+        householdNames[h.id] = h.name ?? 'Hogar'
+        householdLines.push(...debtLines(debts as any[], u.id, h.id, netOwed(debts as any[], crossings as any[], u.id)))
+      }
+      const alerts = deriveAlerts({
+        today, period: null, entries: [...fixed.entries, ...fixed.next.filter((e) => e.arrears.length === 0)] as any, pending: null, ledger: null,
+        budgets: [], spends: [], householdLines, householdNames,
+      })
+      for (const a of alerts) {
+        // the app's own alerts about sueldo / estimados need data the Worker does not read: they stay with the app
+        if (a.zone !== 'fijos' && a.zone !== 'hogar') continue
+        created++
+        if (!apply) continue
+        try {
+          await d.db.batch([{
+            create: `notifications/${u.id}_${encodeURIComponent(a.key)}`,
+            data: { userId: u.id, fromUid: u.id, zone: a.zone, severity: a.severity, title: a.title, body: a.body, ...(a.link ? { link: a.link } : {}), read: false, derivedKey: a.key, createdAt: new Date(now) },
+          }])
+        } catch (e: any) {
+          if (e?.status === 409) { created--; continue } // already there (made by the app or by an earlier run)
+          throw e
+        }
+      }
+    } catch (e: any) { console.error(`notices ${u.id.slice(0, 6)}…: ${e?.message}`) }
+  }
+  return created
+}
 
 export async function sendTelegramAvisos(d: JobDeps & { tg: Telegram; appUrl: string }, apply = true): Promise<TelegramResult> {
   const users = await d.db.query('users', [{ field: 'telegramChatId', op: 'GREATER_THAN', value: '' }])
   const out: TelegramResult = { users: users.length, sent: 0, skipped: 0 }
   if (users.length === 0) return out
+  // first the notices the app would only make if it were open, so they go out in this same run
+  out.created = await createServerNotices(d, users, apply)
 
   const since = new Date(clock(d) - NOTICE_WINDOW_MS)
   const recent = await d.db.query('notifications', [{ field: 'createdAt', op: 'GREATER_THAN_OR_EQUAL', value: since }])

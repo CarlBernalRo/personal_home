@@ -2,13 +2,14 @@ import { NavLink } from 'react-router-dom'
 import { Inbox } from 'lucide-react'
 import { clsx } from 'clsx'
 import { usePendingMovements } from '@/hooks/usePendingMovements'
+import { IconTip } from '@/components/ui/IconTip'
 
-/** Header shortcut (phones) to the movements waiting for confirmation, with how many there are. */
-export function PendingMovementsLink() {
+/** Shortcut to the movements waiting for confirmation, with how many there are: in the phone header and, on desktop, next to the bell. */
+export function PendingMovementsLink({ variant = 'mobile' }: { variant?: 'mobile' | 'sidebar' }) {
   const { counts } = usePendingMovements()
   const n = counts.total
   const label = n > 0 ? `Pendientes por confirmar: ${n}` : 'Pendientes por confirmar'
-  return (
+  const link = (
     <NavLink
       to="/pendientes"
       aria-label={label}
@@ -18,7 +19,7 @@ export function PendingMovementsLink() {
         isActive ? 'bg-brand-500/15 text-brand-300' : n > 0 ? 'text-sky-300 hover:brightness-125' : 'text-[#9aa4ac] hover:bg-white/5 hover:text-[#f3f5f6]',
       )}
     >
-      <Inbox size={19} />
+      <Inbox size={variant === 'mobile' ? 19 : 17} />
       {n > 0 && (
         <span className="absolute -right-1 -top-1 h-4 min-w-[16px] rounded-full bg-sky-500 px-1 text-center font-mono text-[9px] font-bold leading-4 text-[#04141f] ring-2 ring-[#0a1f2f]" aria-hidden="true">
           {n > 99 ? '99+' : n}
@@ -26,4 +27,5 @@ export function PendingMovementsLink() {
       )}
     </NavLink>
   )
+  return variant === 'sidebar' ? <IconTip text={label} className="inline-flex" placement="right">{link}</IconTip> : link
 }
