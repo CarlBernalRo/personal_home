@@ -138,9 +138,13 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, cur
       onCreated()
       showToast('Gasto compartido registrado', 'success')
       const me = members.find((m) => m.uid === currentUserUid)?.name || 'Alguien'
+      // Same split the preview already showed before saving: equal share, or what the counterpart owes otherwise
+      const shareText = mode === 'equal'
+        ? `A cada uno le corresponden ${formatCOP(Math.round(data.amount / participants.length))}.`
+        : `${counterpart.name} debe ${formatCOP(Math.round(mode === 'percentage' ? (data.amount * otherShare) / 100 : otherShare))}.`
       notifyHouseholdMembers(participants.map((m) => m.uid), {
         fromUid: currentUserUid, zone: 'hogar', severity: 'info',
-        title: `${me} registró un gasto compartido`, body: `${data.description} · ${formatCOP(data.amount)}.`, link: `/hogar?id=${householdId}`,
+        title: `${me} registró un gasto compartido`, body: `${data.description} · ${formatCOP(data.amount)}. ${shareText}`, link: `/hogar?id=${householdId}`,
       }).catch(() => { /* never undo what was saved */ })
     } catch (err: any) {
       showToast(err?.message ?? 'Error al registrar el gasto', 'error')
