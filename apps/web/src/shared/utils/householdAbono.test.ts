@@ -53,4 +53,16 @@ describe('planAbono', () => {
     const p = planAbono({ debts: [debt('d1')], members, debtor: 'carlos', creditor: 'ale', targetDebtId: 'gone', amount: 10000, category: 'otros' });
     expect(p.kind).toBe('allocated');
   });
+
+  it('clamps a chosen debt to what it still owes and records the excess as a general row', () => {
+    const debts = [debt('d1', { amount: 30000 })];
+    const p = planAbono({ debts, members, debtor: 'carlos', targetDebtId: 'd1', amount: 50000, category: 'otros' });
+    expect(p.kind).toBe('target');
+    expect(p.rows).toEqual([
+      { concept: 'Abono: d1', amount: 30000, creditor: 'ale', category: 'mercado', saldaId: 'd1' },
+      { concept: 'Abono al hogar', amount: 20000, creditor: 'ale', category: 'otros', saldaId: null },
+    ]);
+    expect(p.remainingAfter).toBe(0);
+    expect(p.paidLines).toEqual([{ concept: 'd1', amount: 30000 }, { concept: 'Abono al hogar', amount: 20000 }]);
+  });
 });

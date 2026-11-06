@@ -9,7 +9,7 @@ export interface MyHousehold {
 
 /** The households the user belongs to (id and name), for pickers and labels. */
 export function useMyHouseholds(enabled = true): MyHousehold[] {
-  const { profile } = useAuth()
+  const { user, profile } = useAuth()
   const ids = getHouseholdIds(profile)
   const idsKey = ids.join(',')
   const [households, setHouseholds] = useState<MyHousehold[]>([])
@@ -20,7 +20,7 @@ export function useMyHouseholds(enabled = true): MyHousehold[] {
       return
     }
     let cancelled = false
-    getHouseholds(ids)
+    getHouseholds(ids, user?.uid)
       .then((docs) => {
         if (!cancelled) setHouseholds(docs.map((h) => ({ id: h.id as string, name: (h.name as string) || 'Hogar' })))
       })

@@ -169,7 +169,11 @@ export async function sendTelegramAvisos(d: JobDeps & { tg: Telegram; appUrl: st
       const msg = await buildNotice(fd, u, n, ctx)
       if (!apply) { out.sent++; return }
       try { const id = await d.tg.send(Number(u.telegramChatId), msg.text, msg.keyboard, { silent: msg.silent }); await mark(n.id, 'sent', id); out.sent++ }
-      catch (e: any) { console.error(`telegram ${u.id.slice(0, 6)}…: ${e?.message}`) }
+      catch (e: any) {
+        console.error(`telegram ${u.id.slice(0, 6)}…: ${e?.message}`)
+        // same as the main send loop: the person blocked the bot or deleted the chat, forget it instead of retrying forever
+        if (/forbidden|blocked|chat not found|deactivated/i.test(String(e?.message))) await d.db.patch(`users/${u.id}`, {}, ['telegramChatId', 'telegramLinkedAt'])
+      }
     }
   }
   return out

@@ -50,7 +50,7 @@ export function allocateCrossing(
   const out: CrossingAllocation[] = [];
   for (const d of debts) {
     if (left <= 0) break;
-    const take = Math.min(remainingOf(d), left);
+    const take = Math.max(0, Math.min(remainingOf(d), left));
     if (take > 0) out.push({ debtId: d.id, amount: take });
     left -= take;
   }

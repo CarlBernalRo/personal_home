@@ -440,16 +440,27 @@ export async function getHousehold(id: string) {
   return mapDoc<Record<string, unknown>>(snap)
 }
 
-export async function getHouseholds(ids: string[]) {
+/**
+ * @param repairForUid When given, any id that no longer resolves (the household was deleted, or this
+ * user was dropped from it) is removed from that uid's own `householdIds` — e.g. after another member
+ * deletes a shared household, everyone else's profile only gets cleaned up the next time they load it.
+ */
+export async function getHouseholds(ids: string[], repairForUid?: string) {
   if (ids.length === 0) return []
   // A stale/deleted id makes Firestore rules deny the read (permission-denied,
   // not "not found"), which would reject the whole Promise.all. Use allSettled
   // so one bad id doesn't wipe out every other household the user can see.
   const results = await Promise.allSettled(ids.map(id => getHousehold(id)))
-  return results
-    .filter((r): r is PromiseFulfilledResult<Record<string, unknown> | null> => r.status === 'fulfilled')
-    .map((r) => r.value)
-    .filter(Boolean) as Record<string, unknown>[]
+  const households: Record<string, unknown>[] = []
+  const stale: string[] = []
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled' && r.value) households.push(r.value)
+    else stale.push(ids[i])
+  })
+  if (repairForUid && stale.length > 0) {
+    updateDoc(doc(db, 'users', repairForUid), { householdIds: arrayRemove(...stale) }).catch(() => { /* best effort */ })
+  }
+  return households
 }
 
 /**
@@ -669,6 +680,11 @@ export function calcNetBalance(
  * (so each debt's own crossing history stays accurate), and debt1's
  * crossedAmount is bumped once by the combined total.
  */
+/**
+ * Everything but `crossedAmount` itself is read fresh inside the transaction below, which Firestore re-runs
+ * automatically if any of those documents change before it commits — so two crossings submitted at nearly the
+ * same moment against the same debt can never read the same stale `crossedAmount` and overwrite one another.
+ */
 export async function addHouseholdCrossing(data: {
   householdId: string
   debt1Id: string
@@ -679,52 +695,55 @@ export async function addHouseholdCrossing(data: {
 }) {
   if (data.allocations.length === 0) throw new Error('Selecciona al menos una deuda para cruzar')
 
-  // what was already abonado to a debt (its abonos) no longer counts as owed, so it can't be crossed either
+  // what was already abonado to a debt (its abonos) no longer counts as owed, so it can't be crossed either —
+  // transactions can't run queries, so this (slower-moving than crossedAmount) is read outside it
   const abonadoTo = async (debtId: string) => {
     const s = await getDocs(query(collection(db, 'householdDebts'), where('householdId', '==', data.householdId), where('saldaId', '==', debtId)))
     return s.docs.filter((d) => d.data().tipo === 'Abono').reduce((sum, d) => sum + (d.data().amount as number), 0)
   }
-
-  const snap1 = await getDoc(doc(db, 'householdDebts', data.debt1Id))
-  if (!snap1.exists()) throw new Error('Deuda no encontrada')
-  const d1   = snap1.data()
-  const rem1 = (d1.amount as number) - ((d1.crossedAmount as number) || 0) - (await abonadoTo(data.debt1Id))
-
-  const total = data.allocations.reduce((s, a) => s + a.amount, 0)
-  if (total > rem1) throw new Error(`El cruce supera el saldo pendiente (${formatCOPRaw(rem1)})`)
-
-  const snaps2 = await Promise.all(data.allocations.map((a) => getDoc(doc(db, 'householdDebts', a.debtId))))
+  const paidTo1 = await abonadoTo(data.debt1Id)
   const paid2 = await Promise.all(data.allocations.map((a) => abonadoTo(a.debtId)))
+  const total = data.allocations.reduce((s, a) => s + a.amount, 0)
 
-  const batch = writeBatch(db)
-  snaps2.forEach((snap2, i) => {
-    const alloc = data.allocations[i]
-    if (!snap2.exists()) throw new Error('Deuda contraparte no encontrada')
-    const d2   = snap2.data()
-    const rem2 = (d2.amount as number) - ((d2.crossedAmount as number) || 0) - paid2[i]
-    if (alloc.amount > rem2) {
-      throw new Error(`El cruce supera el saldo pendiente de "${d2.concept}" (${formatCOPRaw(rem2)})`)
-    }
+  await runTransaction(db, async (tx) => {
+    const ref1 = doc(db, 'householdDebts', data.debt1Id)
+    const refs2 = data.allocations.map((a) => doc(db, 'householdDebts', a.debtId))
+    const snap1 = await tx.get(ref1)
+    const snaps2 = await Promise.all(refs2.map((r) => tx.get(r)))
 
-    batch.set(doc(collection(db, 'householdCrossings')), {
-      householdId:   data.householdId,
-      debt1Id:       data.debt1Id,
-      debt2Id:       alloc.debtId,
-      debt2PersonId: data.debt2PersonId,
-      amount:        alloc.amount,
-      initiatedBy:   data.initiatedBy,
-      notes:         data.notes,
-      createdAt:     serverTimestamp(),
+    if (!snap1.exists()) throw new Error('Deuda no encontrada')
+    const d1   = snap1.data()
+    const rem1 = (d1.amount as number) - ((d1.crossedAmount as number) || 0) - paidTo1
+    if (total > rem1) throw new Error(`El cruce supera el saldo pendiente (${formatCOPRaw(rem1)})`)
+
+    snaps2.forEach((snap2, i) => {
+      const alloc = data.allocations[i]
+      if (!snap2.exists()) throw new Error('Deuda contraparte no encontrada')
+      const d2   = snap2.data()
+      const rem2 = (d2.amount as number) - ((d2.crossedAmount as number) || 0) - paid2[i]
+      if (alloc.amount > rem2) {
+        throw new Error(`El cruce supera el saldo pendiente de "${d2.concept}" (${formatCOPRaw(rem2)})`)
+      }
+
+      tx.set(doc(collection(db, 'householdCrossings')), {
+        householdId:   data.householdId,
+        debt1Id:       data.debt1Id,
+        debt2Id:       alloc.debtId,
+        debt2PersonId: data.debt2PersonId,
+        amount:        alloc.amount,
+        initiatedBy:   data.initiatedBy,
+        notes:         data.notes,
+        createdAt:     serverTimestamp(),
+      })
+
+      const nc2 = ((d2.crossedAmount as number) || 0) + alloc.amount
+      tx.update(snap2.ref, { crossedAmount: nc2, cruzado: nc2 >= (d2.amount as number) })
     })
 
-    const nc2 = ((d2.crossedAmount as number) || 0) + alloc.amount
-    batch.update(snap2.ref, { crossedAmount: nc2, cruzado: nc2 >= (d2.amount as number) })
+    const nc1 = ((d1.crossedAmount as number) || 0) + total
+    tx.update(snap1.ref, { crossedAmount: nc1, cruzado: nc1 >= (d1.amount as number) })
   })
 
-  const nc1 = ((d1.crossedAmount as number) || 0) + total
-  batch.update(snap1.ref, { crossedAmount: nc1, cruzado: nc1 >= (d1.amount as number) })
-
-  await batch.commit()
   // every debt touched keeps its stored figures in step with its movements
   await Promise.all([data.debt1Id, ...data.allocations.map((a) => a.debtId)].map((id) => syncDebtFigures(id, data.householdId).catch(() => {})))
 }
@@ -929,6 +948,10 @@ export async function notifyHouseholdMembers(members: string[], payload: Omit<Ne
  * The receiver confirms a payment they were sent: the money becomes an income in the account they pick (its balance goes
  * up) and the abonos of that payment are marked as received. Everything is written together, and only if nobody
  * confirmed it before and every abono of it was addressed to the person confirming.
+ *
+ * The "nobody confirmed it before" check and every write happen inside one transaction, gated on one of the abono
+ * rows (picked deterministically) still not being 'confirmed' — a double-tap or a retried request can only ever
+ * win that race once, so the account is never credited twice for the same payment.
  */
 export async function confirmPaymentReceipt(data: {
   householdId: string
@@ -940,31 +963,35 @@ export async function confirmPaymentReceipt(data: {
   notificationId?: string
 }) {
   const snap = await getDocs(query(collection(db, 'householdDebts'), where('householdId', '==', data.householdId), where('paymentId', '==', data.paymentId)))
-  const abonos = snap.docs.filter((d) => d.data().tipo === 'Abono')
+  const abonos = snap.docs.filter((d) => d.data().tipo === 'Abono').sort((a, b) => a.id.localeCompare(b.id))
   if (abonos.length === 0) throw new Error('No se encontró ese pago')
   if (abonos.some((d) => d.data().creditor !== data.userId)) throw new Error('Ese pago no fue dirigido a ti')
-  if (abonos.every((d) => d.data().receiptStatus === 'confirmed')) throw new Error('Ya confirmaste este pago')
 
   const total = abonos.reduce((s, d) => s + (d.data().amount as number), 0)
   const date = new Date()
   const incomeRef = doc(collection(db, 'incomes'))
-  const batch = writeBatch(db)
-  batch.set(incomeRef, {
-    userId: data.userId,
-    concept: `Pago recibido de ${data.fromName}`,
-    amount: total,
-    month: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
-    date: Timestamp.fromDate(date),
-    kind: 'extra',
-    ...(data.accountId ? { accountId: data.accountId } : {}),
-    createdAt: serverTimestamp(),
+  const lockRef = abonos[0].ref
+
+  await runTransaction(db, async (tx) => {
+    const lockSnap = await tx.get(lockRef)
+    if (!lockSnap.exists() || lockSnap.data().receiptStatus === 'confirmed') throw new Error('Ya confirmaste este pago')
+
+    tx.set(incomeRef, {
+      userId: data.userId,
+      concept: `Pago recibido de ${data.fromName}`,
+      amount: total,
+      month: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+      date: Timestamp.fromDate(date),
+      kind: 'extra',
+      ...(data.accountId ? { accountId: data.accountId } : {}),
+      createdAt: serverTimestamp(),
+    })
+    if (data.accountId) tx.update(doc(db, 'accounts', data.accountId), { balance: increment(total) })
+    for (const a of abonos) {
+      tx.update(a.ref, { receiptStatus: 'confirmed', receivedAccountId: data.accountId ?? null, incomeId: incomeRef.id, receivedAt: serverTimestamp() })
+    }
+    if (data.notificationId) tx.update(doc(db, 'notifications', data.notificationId), { read: true, 'receipt.confirmed': true })
   })
-  if (data.accountId) batch.update(doc(db, 'accounts', data.accountId), { balance: increment(total) })
-  for (const a of abonos) {
-    batch.update(a.ref, { receiptStatus: 'confirmed', receivedAccountId: data.accountId ?? null, incomeId: incomeRef.id, receivedAt: serverTimestamp() })
-  }
-  if (data.notificationId) batch.update(doc(db, 'notifications', data.notificationId), { read: true, 'receipt.confirmed': true })
-  await batch.commit()
   return { total }
 }
 
@@ -1063,38 +1090,35 @@ export async function getPendingMovements(userId: string): Promise<PendingMoveme
  * Turns a pending movement into the real record, in one write: the income / fixed payment / expense, the change in the
  * account's balance and the pending movement marked as confirmed. `accountId` overrides the one chosen in Telegram
  * ('' = no account). A fixed payment that was already registered in the app meanwhile is refused.
+ *
+ * The actual commit runs inside a transaction gated on `pendingMovements/{pm.id}.status` still being 'pending' — a
+ * double-tap or a retried request that races itself only ever gets to apply the write once; the loser's transaction
+ * sees 'confirmed' already and throws instead of double-crediting an account or duplicating the record.
  */
 export async function confirmPendingMovement(pm: PendingMovement, accountId?: string) {
   const chosen = accountId === undefined ? pm.accountId : accountId || undefined
   // the account may have been deleted since: then the money simply has nowhere to move
   const account = chosen && (await getDoc(doc(db, 'accounts', chosen))).exists() ? chosen : undefined
   const date = toDate(pm.date)
-  const batch = writeBatch(db)
-  // work that needs the committed data (figures of the debts, telling the person who was paid)
-  let after: (() => Promise<void>) | null = null
+  const pmRef = doc(db, 'pendingMovements', pm.id)
 
-  if (pm.kind === 'income') {
-    batch.set(doc(collection(db, 'incomes')), {
-      userId: pm.userId, concept: pm.concept, amount: pm.amount, month: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
-      date: Timestamp.fromDate(date), kind: 'extra', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
-    })
-    if (account) batch.update(doc(db, 'accounts', account), { balance: increment(pm.amount) })
-  } else if (pm.kind === 'fixed') {
+  // Transactions can't run queries, so anything that needs one is resolved up front.
+  let plan: ReturnType<typeof planAbono> | null = null
+  let hh: Record<string, unknown> | null = null
+  let members: string[] = []
+  let paymentId = ''
+
+  if (pm.kind === 'fixed') {
     if (!pm.fixedExpenseId || !pm.occMonth) throw new Error('Falta saber a qué gasto fijo corresponde')
     const already = await getDocs(query(
       collection(db, 'fixedExpensePayments'),
       where('userId', '==', pm.userId), where('fixedExpenseId', '==', pm.fixedExpenseId), where('month', '==', pm.occMonth),
     ))
     if (!already.empty) throw new Error('Ese gasto fijo ya está pagado en la app. Descarta este movimiento.')
-    batch.set(doc(collection(db, 'fixedExpensePayments')), {
-      fixedExpenseId: pm.fixedExpenseId, userId: pm.userId, concept: pm.concept, paidAmount: pm.amount, month: pm.occMonth,
-      paymentDate: Timestamp.fromDate(date), notes: pm.comment ?? '', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
-    })
-    if (account) batch.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
   } else if (pm.kind === 'abono') {
     if (!pm.householdId) throw new Error('Falta saber a qué hogar corresponde')
-    const hh = await getHousehold(pm.householdId)
-    const members = ((hh?.members as string[] | undefined) ?? [])
+    hh = await getHousehold(pm.householdId)
+    members = ((hh?.members as string[] | undefined) ?? [])
     if (!hh || !members.includes(pm.userId)) throw new Error('Ya no perteneces a ese hogar. Descarta este movimiento.')
     if (pm.creditorId && !members.includes(pm.creditorId)) throw new Error('La persona a la que pagaste ya no está en el hogar. Descarta este movimiento.')
     // the debts as they are NOW: another payment may have changed what is owed since the screenshot was sent
@@ -1104,46 +1128,66 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
     const debts = raw.map((d) => (d.tipo === 'Deuda' ? { ...d, paidAbono: paid.get(d.id) || 0 } : d))
     if (pm.targetDebtId && !debts.some((d) => d.id === pm.targetDebtId && isPendingDebt(d))) throw new Error('Esa deuda ya está saldada. Descarta este movimiento.')
 
-    const plan = planAbono({ debts, members, debtor: pm.userId, creditor: pm.creditorId ?? null, targetDebtId: pm.targetDebtId ?? null, amount: pm.amount, category: 'otros_hogar' })
+    plan = planAbono({ debts, members, debtor: pm.userId, creditor: pm.creditorId ?? null, targetDebtId: pm.targetDebtId ?? null, amount: pm.amount, category: 'otros_hogar' })
     // everything this confirmation writes is ONE payment, even when it is spread over several debts
-    const paymentId = crypto.randomUUID()
-    for (const r of plan.rows) {
-      batch.set(doc(collection(db, 'householdDebts')), {
-        householdId: pm.householdId, concept: r.concept, tipo: 'Abono', amount: r.amount, debtor: pm.userId, creditor: r.creditor, paymentId,
-        accountId: account ?? null, receiptStatus: r.creditor && r.creditor !== pm.userId ? 'pending' : null, category: r.category,
-        date: Timestamp.fromDate(date), registeredBy: pm.userId, estado: '', saldaId: r.saldaId, notas: pm.comment ?? '', cruzado: false, crossedAmount: 0,
-        ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
-      })
-    }
-    if (account) batch.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
-
-    const myName = ((hh.memberNames as Record<string, string> | undefined) ?? {})[pm.userId] || 'Alguien'
-    after = async () => {
-      for (const id of new Set(plan.rows.map((r) => r.saldaId).filter(Boolean) as string[])) await syncDebtFigures(id, pm.householdId!).catch(() => { /* the screen computes it from the movements anyway */ })
-      // the person who was paid is told, with the detail, so they can confirm it and say in which account they got it
-      const link = `/hogar?id=${pm.householdId}`
-      if (!plan.paidTo || plan.paidTo === pm.userId) {
-        await notifyHouseholdMembers(members, { fromUid: pm.userId, zone: 'hogar', severity: 'info', title: `${myName} registró un abono`, body: `${pm.amount.toLocaleString('es-CO')}.`, link }).catch(() => {})
-      } else {
-        await notifyHouseholdMembers([plan.paidTo], {
-          fromUid: pm.userId, zone: 'hogar', severity: 'info', title: `${myName} te pagó $${pm.amount.toLocaleString('es-CO')}`,
-          body: `${plan.paidLines.map((l) => `${l.concept} ($${l.amount.toLocaleString('es-CO')})`).join(' · ')}. Confirma que lo recibiste y en qué cuenta.`,
-          link, receipt: { householdId: pm.householdId!, paymentId, amount: pm.amount, fromName: myName, lines: plan.paidLines, date: date.toISOString() },
-        }).catch(() => {})
-      }
-    }
-  } else {
-    batch.set(doc(collection(db, 'expenses')), {
-      userId: pm.userId, description: pm.concept, amount: pm.amount, category: pm.category ?? 'otro', date: Timestamp.fromDate(date),
-      type: 'variable', isRecurring: false, tracked: true, ...(pm.comment ? { notes: pm.comment } : {}),
-      ...(pm.budgetId ? { variableBudgetId: pm.budgetId } : {}), ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
-    })
-    if (account) batch.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
+    paymentId = crypto.randomUUID()
   }
 
-  batch.update(doc(db, 'pendingMovements', pm.id), { status: 'confirmed', confirmedAt: serverTimestamp(), accountId: account ?? deleteField() })
-  await batch.commit()
-  if (after) await (after as () => Promise<void>)()
+  await runTransaction(db, async (tx) => {
+    const pmSnap = await tx.get(pmRef)
+    if (!pmSnap.exists()) throw new Error('Ese movimiento ya no existe')
+    if (pmSnap.data().status !== 'pending') throw new Error('Ese movimiento ya fue registrado')
+
+    if (pm.kind === 'income') {
+      tx.set(doc(collection(db, 'incomes')), {
+        userId: pm.userId, concept: pm.concept, amount: pm.amount, month: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+        date: Timestamp.fromDate(date), kind: 'extra', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+      })
+      if (account) tx.update(doc(db, 'accounts', account), { balance: increment(pm.amount) })
+    } else if (pm.kind === 'fixed') {
+      tx.set(doc(collection(db, 'fixedExpensePayments')), {
+        fixedExpenseId: pm.fixedExpenseId, userId: pm.userId, concept: pm.concept, paidAmount: pm.amount, month: pm.occMonth,
+        paymentDate: Timestamp.fromDate(date), notes: pm.comment ?? '', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+      })
+      if (account) tx.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
+    } else if (pm.kind === 'abono') {
+      for (const r of plan!.rows) {
+        tx.set(doc(collection(db, 'householdDebts')), {
+          householdId: pm.householdId, concept: r.concept, tipo: 'Abono', amount: r.amount, debtor: pm.userId, creditor: r.creditor, paymentId,
+          accountId: account ?? null, receiptStatus: r.creditor && r.creditor !== pm.userId ? 'pending' : null, category: r.category,
+          date: Timestamp.fromDate(date), registeredBy: pm.userId, estado: '', saldaId: r.saldaId, notas: pm.comment ?? '', cruzado: false, crossedAmount: 0,
+          ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+        })
+      }
+      if (account) tx.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
+    } else {
+      tx.set(doc(collection(db, 'expenses')), {
+        userId: pm.userId, description: pm.concept, amount: pm.amount, category: pm.category ?? 'otro', date: Timestamp.fromDate(date),
+        type: 'variable', isRecurring: false, tracked: true, ...(pm.comment ? { notes: pm.comment } : {}),
+        ...(pm.budgetId ? { variableBudgetId: pm.budgetId } : {}), ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+      })
+      if (account) tx.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
+    }
+
+    tx.update(pmRef, { status: 'confirmed', confirmedAt: serverTimestamp(), accountId: account ?? deleteField() })
+  })
+
+  // work that only needs to happen once the commit above actually landed (figures of the debts, telling the person who was paid)
+  if (pm.kind === 'abono' && plan && hh) {
+    const myName = ((hh.memberNames as Record<string, string> | undefined) ?? {})[pm.userId] || 'Alguien'
+    for (const id of new Set(plan.rows.map((r) => r.saldaId).filter(Boolean) as string[])) await syncDebtFigures(id, pm.householdId!).catch(() => { /* the screen computes it from the movements anyway */ })
+    // the person who was paid is told, with the detail, so they can confirm it and say in which account they got it
+    const link = `/hogar?id=${pm.householdId}`
+    if (!plan.paidTo || plan.paidTo === pm.userId) {
+      await notifyHouseholdMembers(members, { fromUid: pm.userId, zone: 'hogar', severity: 'info', title: `${myName} registró un abono`, body: `${pm.amount.toLocaleString('es-CO')}.`, link }).catch(() => {})
+    } else {
+      await notifyHouseholdMembers([plan.paidTo], {
+        fromUid: pm.userId, zone: 'hogar', severity: 'info', title: `${myName} te pagó $${pm.amount.toLocaleString('es-CO')}`,
+        body: `${plan.paidLines.map((l) => `${l.concept} ($${l.amount.toLocaleString('es-CO')})`).join(' · ')}. Confirma que lo recibiste y en qué cuenta.`,
+        link, receipt: { householdId: pm.householdId!, paymentId, amount: pm.amount, fromName: myName, lines: plan.paidLines, date: date.toISOString() },
+      }).catch(() => {})
+    }
+  }
 }
 
 /** The person does not want it: it stays on record as discarded, leaves the pending list, and its screenshot is deleted. */

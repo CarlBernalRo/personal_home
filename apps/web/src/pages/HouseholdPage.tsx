@@ -157,7 +157,7 @@ export default function HouseholdPage() {
     if (!user) return
     async function loadHouseholds() {
       try {
-        const hhs = await getHouseholds(hhIds)
+        const hhs = await getHouseholds(hhIds, user!.uid)
         setHouseholds(hhs)
         // make sure my own photo is in every household I belong to (the others see me with it)
         syncMemberPhotos(hhs as any[], user!.uid, user!.photoURL)

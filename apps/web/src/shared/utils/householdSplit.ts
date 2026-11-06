@@ -45,16 +45,21 @@ export function resolveExpenseShares(
     }
   }
 
-  // Equal/percentage can leave a few pesos unassigned due to flooring — hand
-  // them to the payer first so nobody else's share silently grows.
+  // Equal/percentage can leave a few pesos unassigned (or, for percentage,
+  // slightly over-assigned when the percentages round to just over 100%) due
+  // to flooring — hand them out one peso at a time starting with the payer,
+  // cycling through everyone as many times as it takes so no amount of slack
+  // (in either direction) is ever left untracked.
   let remainder = amount - rawShares.reduce((s, v) => s + v, 0);
-  if (remainder > 0) {
+  if (remainder !== 0) {
+    const step = remainder > 0 ? 1 : -1;
     const payerIdx = shareInputs.findIndex((s) => s.memberId === paidBy);
     const order = [payerIdx, ...shareInputs.map((_, i) => i).filter((i) => i !== payerIdx)];
-    for (const idx of order) {
-      if (remainder <= 0) break;
-      rawShares[idx] += 1;
-      remainder -= 1;
+    let i = 0;
+    while (remainder !== 0) {
+      rawShares[order[i % order.length]] += step;
+      remainder -= step;
+      i++;
     }
   }
 

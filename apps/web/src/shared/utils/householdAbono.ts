@@ -51,13 +51,23 @@ export function planAbono(i: AbonoInput): AbonoPlan {
 
   if (target) {
     const creditor = creditorOf(target, i.members) ?? null;
+    const remaining = Math.max(0, remainingOf(target));
+    const applied = Math.min(i.amount, remaining);
+    const rows: AbonoRowPlan[] = [{ concept: i.concept?.trim() || `Abono: ${target.concept}`, amount: applied, creditor, category: target.category || i.category, saldaId: target.id }];
+    const paidLines: { concept: string; amount: number }[] = [{ concept: target.concept, amount: applied }];
+    const leftover = i.amount - applied;
+    if (leftover > 0) {
+      const concept = i.concept || 'Abono al hogar';
+      paidLines.push({ concept, amount: leftover });
+      rows.push({ concept, amount: leftover, creditor, category: i.category, saldaId: null });
+    }
     return {
-      rows: [{ concept: i.concept?.trim() || `Abono: ${target.concept}`, amount: i.amount, creditor, category: target.category || i.category, saldaId: target.id }],
-      paidLines: [{ concept: target.concept, amount: i.amount }],
+      rows,
+      paidLines,
       paidTo: creditor,
       kind: 'target',
       allocations: 1,
-      remainingAfter: Math.max(0, remainingOf(target) - i.amount),
+      remainingAfter: remaining - applied,
       targetConcept: target.concept,
     };
   }

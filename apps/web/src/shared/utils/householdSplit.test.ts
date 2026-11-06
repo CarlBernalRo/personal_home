@@ -78,6 +78,18 @@ describe('resolveExpenseShares — percentage split', () => {
     expect(shares.find((s) => s.memberId === alexandra)!.amount).toBe(33333);
     expect(shares.find((s) => s.memberId === tercero)!.amount).toBe(33333);
   });
+
+  it('takes back the over-rounding when percentages round to just over 100%, however large the gap', () => {
+    // 50.001 + 50.001 = 100.002, within the 0.01 tolerance; each floored share
+    // on a huge amount overshoots by 20000 total — none of it may be left dangling.
+    const inputs: ExpenseShareInput[] = [
+      { memberId: carlos, percentage: 50.001 },
+      { memberId: alexandra, percentage: 50.001 },
+    ];
+    const amount = 1_000_000_000;
+    const shares = resolveExpenseShares(amount, carlos, 'percentage', inputs);
+    expect(shares.reduce((s, v) => s + v.amount, 0)).toBe(amount);
+  });
 });
 
 describe('resolveExpenseShares — fixed split', () => {

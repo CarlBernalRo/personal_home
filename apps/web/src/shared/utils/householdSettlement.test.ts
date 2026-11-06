@@ -117,6 +117,17 @@ describe('allocateCrossing and allocateAbono', () => {
     const allocation = allocateAbono(200000, debts);
     expect(allocation).toEqual([{ debtId: 'mercadito', amount: 200000 }]);
   });
+
+  it('never grows the remaining amount when an earlier debt is already over-crossed', () => {
+    const debts = [
+      { id: 'over', amount: 100000, crossedAmount: 150000 }, // remainingOf = -50000
+      { id: 'next', amount: 80000 },
+    ];
+    const result = allocateCrossing(80000, debts);
+    expect(result).toEqual([{ debtId: 'next', amount: 80000 }]);
+    const total = result.reduce((s, a) => s + a.amount, 0);
+    expect(total).toBeLessThanOrEqual(80000);
+  });
 });
 
 describe('inPaymentOrder (what an abono pays first)', () => {
