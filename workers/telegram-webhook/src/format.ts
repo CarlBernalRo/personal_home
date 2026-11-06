@@ -32,8 +32,8 @@ export const dayLong = (d: Date) => fmt(d, { weekday: 'long', day: 'numeric', mo
 /** A bar of 10 blocks: ▰▰▰▰▱▱▱▱▱▱ */
 export const bar = (ratio: number) => { const n = Math.max(0, Math.min(10, Math.round(ratio * 10))); return '▰'.repeat(n) + '▱'.repeat(10 - n) }
 /** A block of lines as a quote; long ones start collapsed so the message stays short. */
-const quote = (lines: string[]) => `<blockquote${lines.length > 4 ? ' expandable' : ''}>${lines.join('\n')}</blockquote>`
-const rule = '━━━━━━━━━━━━━━'
+export const quote = (lines: string[]) => `<blockquote${lines.length > 4 ? ' expandable' : ''}>${lines.join('\n')}</blockquote>`
+export const rule = '━━━━━━━━━━━━━━'
 /** Blurs a saldo on screen until the person taps it (Telegram's own "spoiler" entity). */
 const spoiler = (s: string) => `<tg-spoiler>${s}</tg-spoiler>`
 
@@ -114,7 +114,10 @@ async function fixedSoon(c: Ctx, n: Doc, feId: string, hostMonth: string): Promi
   if (acc) lines.push(balanceLine(acc, e.total))
   lines.push(auto ? '\n🤖 <i>Se debita automáticamente ese día si la cuenta tiene el saldo.</i>' : '\n🕐 <i>No es automático: recuerda pagarlo.</i>')
   if (fe.notes) lines.push(`\n📝 <i>${esc(String(fe.notes).slice(0, 160))}</i>`)
-  return { text: lines.join('\n'), keyboard: buttons(c.d, '/fijos', 'Abrir Fijos', n), silent: false }
+  // An automatic debit pays itself; a manual button here could double-register the same month
+  const kb: Keyboard = auto ? [] : [[{ text: '✅ Marcar como pagado', data: `x:p:${feId}:${hostMonth}` }]]
+  kb.push(...buttons(c.d, '/fijos', 'Abrir Fijos', n))
+  return { text: lines.join('\n'), keyboard: kb, silent: false }
 }
 
 /**
@@ -248,7 +251,13 @@ async function fixedOverdue(c: Ctx, n: Doc, key: string): Promise<Msg> {
   const accounts = await c.accounts()
   const have = accounts.reduce((s, a) => s + (a.balance ?? 0), 0)
   if (accounts.length) out.push(`🏦 En tus cuentas: ${spoiler(cop(have))} ${have >= total ? '✅ alcanza para ponerte al día' : `⚠️ faltan ${spoiler(cop(total - have))}`}`)
-  return { text: out.join('\n'), keyboard: buttons(c.d, '/fijos', 'Pagar en Fijos', n), silent: false }
+  // Only for the simple case (one expense, one owed month, not an automatic debit): several at once is ambiguous
+  // for a single button, and an automatic debit pays itself.
+  const kb: Keyboard = rows.length === 1 && rows[0].e.owed.length === 1 && !isAutoDebit(rows[0].fe, rows[0].e.hostMonth)
+    ? [[{ text: '✅ Marcar como pagado', data: `x:p:${rows[0].fe.id}:${rows[0].e.hostMonth}` }]]
+    : []
+  kb.push(...buttons(c.d, '/fijos', 'Pagar en Fijos', n))
+  return { text: out.join('\n'), keyboard: kb, silent: false }
 }
 
 // ── salary, budgets, spending ────────────────────────────────────────────────────────────────────────────────────

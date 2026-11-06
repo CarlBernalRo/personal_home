@@ -17,8 +17,8 @@ import { createDb } from './db'
 import { pendingSummaryNow } from './format'
 import { COMMANDS, HELP, bogotaToday, runCommand } from './commands'
 import { clearFlow, onCallback, onText, startFromImage, type FlowDeps } from './flow'
-import { onActionCallback, onActionText } from './actions'
-import { saveAutoDebits, sendDailyPending, sendTelegramAvisos, type JobName } from './jobs'
+import { onActionCallback, onActionText, onPayFixedCallback } from './actions'
+import { saveAutoDebits, sendDailyPending, sendTelegramAvisos, sendWeeklyClose, type JobName } from './jobs'
 import { createTelegram } from './telegram'
 import { EMPTY_EXTRACTED, extractFromImage, type AiRunner } from './vision'
 
@@ -100,8 +100,11 @@ const say = (env: Env, chatId: number, text: string) =>
 
 const APP_URL = 'https://personalhome-3ee06.web.app'
 
-/** The Cron Triggers declared in wrangler.toml, UTC (Colombia is UTC-5: 12:07 UTC = 7:07 a.m.; 13:00 UTC = 8:00 a.m.). */
-const CRON_JOBS: Record<string, JobName> = { '*/10 * * * *': 'telegram', '7 12 * * *': 'debits', '0 13 * * *': 'daily' }
+/**
+ * The Cron Triggers declared in wrangler.toml, UTC (Colombia is UTC-5: 12:07 UTC = 7:07 a.m.; 13:00 UTC = 8:00 a.m.;
+ * Monday 00:00 UTC = Sunday 7 p.m.).
+ */
+const CRON_JOBS: Record<string, JobName> = { '*/10 * * * *': 'telegram', '7 12 * * *': 'debits', '0 13 * * *': 'daily', '0 0 * * 1': 'weekly' }
 
 /**
  * Runs one scheduled job and leaves its trace in `system/jobs` (when it ran, how long it took, what it did, or the error),
@@ -113,6 +116,7 @@ async function runJob(env: Env, name: JobName, apply: boolean) {
   try {
     const result = name === 'telegram' ? await sendTelegramAvisos({ db, tg, appUrl: APP_URL }, apply)
       : name === 'daily' ? await sendDailyPending({ db, tg, appUrl: APP_URL }, apply)
+      : name === 'weekly' ? await sendWeeklyClose({ db, tg, appUrl: APP_URL }, apply)
       : await saveAutoDebits({ db }, apply)
     if (apply) await db.patch('system/jobs', { [name]: { at: new Date(), ms: Date.now() - started, ok: true, ...result } })
     return { ok: true, job: name, apply, ...result }
@@ -317,7 +321,7 @@ export default {
     }
     // POST /run/telegram | /run/debits | /run/daily (same secret header): runs a job now. Add ?apply=1 to really send / store;
     // without it the job only reports what it would do.
-    const run = new URL(request.url).pathname.match(/^\/run\/(telegram|debits|daily)$/)
+    const run = new URL(request.url).pathname.match(/^\/run\/(telegram|debits|daily|weekly)$/)
     if (run) {
       if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('forbidden', { status: 403 })
       try {
@@ -340,6 +344,7 @@ export default {
           if (!uid) await deps.tg.answer(cb.id, 'Vincula tu cuenta primero')
           else if (String(cb.data ?? '').startsWith('n:')) await noticeCallback(env, uid, cb)
           else if (String(cb.data ?? '').startsWith('p:')) await onActionCallback(deps, uid, { id: cb.id, chatId, messageId: cb.message.message_id, data: String(cb.data ?? '') })
+          else if (String(cb.data ?? '').startsWith('x:')) await onPayFixedCallback(deps, uid, { id: cb.id, chatId, messageId: cb.message.message_id, data: String(cb.data ?? '') })
           else await onCallback(deps, uid, { id: cb.id, chatId, messageId: cb.message.message_id, data: String(cb.data ?? '') })
         } else {
           await handle(env, update.message)

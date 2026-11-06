@@ -10,12 +10,12 @@
  * expense and month that can only be created once, together with the balance change, in one all-or-nothing write.
  */
 import {
-  autoDebitFloor, buildCalendarPeriods, buildSalaryPeriods, debtLines, deriveAlerts, isScheduleUsable, latestPayDate,
-  periodAt, periodModeOf, planAutoPayments, salaryLedgers,
+  autoDebitFloor, buildCalendarPeriods, buildSalaryPeriods, debtLines, deriveAlerts, FIXED_EXPENSE_CATEGORIES, isScheduleUsable, latestPayDate,
+  nextPayDate, PERSONAL_CATEGORIES, periodAt, periodModeOf, planAutoPayments, salaryLedgers,
 } from '../../../apps/web/src/shared/index'
 import { bogotaToday, fixedFor, households } from './commands'
 import type { Db, Doc } from './db'
-import { Ctx, NOTHING_PENDING, buildNotice, pendingReminder, pendingSummary, type FormatDeps, type Msg } from './format'
+import { Ctx, NOTHING_PENDING, bar, buildNotice, cop, dayShort, esc, pendingReminder, pendingSummary, quote, rule, type FormatDeps, type Msg } from './format'
 import type { Telegram } from './telegram'
 
 export interface JobDeps {
@@ -49,6 +49,62 @@ function netOwed(debts: any[], crossings: any[], uid: string) {
 /** A calendar day in the Bogota frame: both sides must already be shifted/constructed that way (see `toFrame`). */
 const sameFrameDay = (a: Date, b: Date) => a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate()
 
+export interface SalaryContext {
+  period: { start: Date; end: Date } | null
+  pendingPay: ReturnType<typeof latestPayDate>
+  ledger: ReturnType<typeof salaryLedgers> extends Map<string, infer V> ? V | null : null
+  budgets: any[]
+  spends: any[]
+  /** Every expense the user has (not just the ones tracked against a budget): for reports that look at all of them. */
+  rawExpenses: any[]
+  periods: ReturnType<typeof buildCalendarPeriods>
+  currentPeriod: ReturnType<typeof periodAt>
+  schedule: any
+  usable: boolean
+}
+
+/**
+ * Salary period, pending pay day and its ledger — the same shared code the app runs when it is open, fed from what
+ * the Worker can read itself (incomes, expenses, variable budgets). A schedule that isn't set up, or anything that
+ * fails reading it, simply leaves the period/ledger fields null; the caller decides what that means for it.
+ */
+async function salaryContext(d: JobDeps, u: Doc, today: Date, fixed: Awaited<ReturnType<typeof fixedFor>>, householdLines: any[], householdNames: Record<string, string>): Promise<SalaryContext> {
+  const schedule = (u.paySchedule ?? null) as any
+  const usable = isScheduleUsable(schedule)
+  const budgets: any[] = Array.isArray(u.variableBudgets) ? u.variableBudgets : []
+  let period: SalaryContext['period'] = null
+  let pendingPay: SalaryContext['pendingPay'] = null
+  let ledger: SalaryContext['ledger'] = null
+  let spends: any[] = []
+  let rawExpenses: any[] = []
+  let periods: SalaryContext['periods'] = []
+  let currentPeriod: SalaryContext['currentPeriod']
+  try {
+    const [incomes, expenses] = await Promise.all([
+      d.db.query('incomes', [{ field: 'userId', op: 'EQUAL', value: u.id }]).catch(() => []),
+      d.db.query('expenses', [{ field: 'userId', op: 'EQUAL', value: u.id }]).catch(() => []),
+    ])
+    rawExpenses = expenses
+    const toBogota = (v: unknown) => (v instanceof Date ? new Date(v.getTime() - BOGOTA_MS) : new Date(v as any))
+    const salaries = incomes.filter((i) => i.kind === 'salary').map((i) => ({ id: i.id, date: toBogota(i.date), amount: i.amount }))
+    const extras = incomes.filter((i) => i.kind !== 'salary').map((i) => ({ id: i.id, date: toBogota(i.date), amount: i.amount, concept: i.concept ?? 'Ingreso' }))
+    spends = expenses.filter((e) => e.variableBudgetId || e.tracked)
+      .map((e) => ({ id: e.id, budgetId: e.variableBudgetId ?? '', date: toBogota(e.date), amount: e.amount, concept: e.description ?? '' }))
+
+    periods = !usable ? [] : periodModeOf(schedule) === 'calendar' ? buildCalendarPeriods(salaries, today) : buildSalaryPeriods(salaries, schedule)
+    currentPeriod = periodAt(periods, today)
+    if (currentPeriod) period = { start: currentPeriod.start, end: currentPeriod.end }
+
+    const latest = usable ? latestPayDate(schedule, today) : null
+    pendingPay = latest && !salaries.some((s) => sameFrameDay(s.date, latest.date)) ? latest : null
+
+    if (currentPeriod) {
+      ledger = salaryLedgers(periods, fixed.expenses, fixed.index, today, extras, { budgets, spends, householdLines, householdNames }).get(currentPeriod.id) ?? null
+    }
+  } catch (e: any) { console.error(`salary ${u.id.slice(0, 6)}…: ${e?.message}`) }
+  return { period, pendingPay, ledger, budgets, spends, rawExpenses, periods, currentPeriod, schedule, usable }
+}
+
 /**
  * The app works out its alerts (a payment about to be due, a salary day to confirm, a budget overrun, a household debt
  * with a date...) only while it is open, so nobody who does not open it would ever be told. The Worker works out every
@@ -75,41 +131,11 @@ export async function createServerNotices(d: JobDeps, users: Doc[], apply = true
         householdLines.push(...debtLines(debts as any[], u.id, h.id, netOwed(debts as any[], crossings as any[], u.id)))
       }
 
-      // Salary period, pending pay day and its ledger (same shared code the app runs when open). A schedule that
-      // isn't set up, or anything that fails reading it, simply leaves these null: `deriveAlerts` skips that zone.
-      let period: { start: Date; end: Date } | null = null
-      let pendingPay: ReturnType<typeof latestPayDate> = null
-      let ledger: ReturnType<typeof salaryLedgers> extends Map<string, infer V> ? V | null : null = null
-      const budgets: any[] = Array.isArray(u.variableBudgets) ? u.variableBudgets : []
-      let spends: any[] = []
-      try {
-        const schedule = (u.paySchedule ?? null) as any
-        const usable = isScheduleUsable(schedule)
-        const [incomes, rawExpenses] = await Promise.all([
-          d.db.query('incomes', [{ field: 'userId', op: 'EQUAL', value: u.id }]).catch(() => []),
-          d.db.query('expenses', [{ field: 'userId', op: 'EQUAL', value: u.id }]).catch(() => []),
-        ])
-        const toBogota = (v: unknown) => (v instanceof Date ? new Date(v.getTime() - BOGOTA_MS) : new Date(v as any))
-        const salaries = incomes.filter((i) => i.kind === 'salary').map((i) => ({ id: i.id, date: toBogota(i.date), amount: i.amount }))
-        const extras = incomes.filter((i) => i.kind !== 'salary').map((i) => ({ id: i.id, date: toBogota(i.date), amount: i.amount, concept: i.concept ?? 'Ingreso' }))
-        spends = rawExpenses.filter((e) => e.variableBudgetId || e.tracked)
-          .map((e) => ({ id: e.id, budgetId: e.variableBudgetId ?? '', date: toBogota(e.date), amount: e.amount, concept: e.description ?? '' }))
-
-        const periods = !usable ? [] : periodModeOf(schedule) === 'calendar' ? buildCalendarPeriods(salaries, today) : buildSalaryPeriods(salaries, schedule)
-        const currentPeriod = periodAt(periods, today)
-        if (currentPeriod) period = { start: currentPeriod.start, end: currentPeriod.end }
-
-        const latest = usable ? latestPayDate(schedule, today) : null
-        pendingPay = latest && !salaries.some((s) => sameFrameDay(s.date, latest.date)) ? latest : null
-
-        if (currentPeriod) {
-          ledger = salaryLedgers(periods, fixed.expenses, fixed.index, today, extras, { budgets, spends, householdLines, householdNames }).get(currentPeriod.id) ?? null
-        }
-      } catch (e: any) { console.error(`salary ${u.id.slice(0, 6)}…: ${e?.message}`) }
+      const sc = await salaryContext(d, u, today, fixed, householdLines, householdNames)
 
       const alerts = deriveAlerts({
-        today, period, entries: [...fixed.entries, ...fixed.next.filter((e) => e.arrears.length === 0)] as any, pending: pendingPay, ledger,
-        budgets, spends, householdLines, householdNames,
+        today, period: sc.period, entries: [...fixed.entries, ...fixed.next.filter((e) => e.arrears.length === 0)] as any, pending: sc.pendingPay, ledger: sc.ledger,
+        budgets: sc.budgets, spends: sc.spends, householdLines, householdNames,
       })
       for (const a of alerts) {
         created++
@@ -312,4 +338,85 @@ export async function sendDailyPending(d: JobDeps & { tg: Telegram; appUrl: stri
   return out
 }
 
-export type JobName = 'telegram' | 'debits' | 'daily'
+/**
+ * Weekly close (Sunday 7 p.m. Colombia): how much went out this week (fixed payments + expenses), the categories
+ * that took the most, how the occasional budgets are pacing this period, and how many days are left to the next
+ * pay day. Purely informative — nothing is registered, and a person with nothing to report gets no message.
+ */
+export async function sendWeeklyClose(d: JobDeps & { tg: Telegram; appUrl: string }, apply = true): Promise<TelegramResult> {
+  const users = await d.db.query('users', [{ field: 'telegramChatId', op: 'GREATER_THAN', value: '' }])
+  const out: TelegramResult = { users: users.length, sent: 0, skipped: 0 }
+  const now = clock(d)
+  const today = bogotaToday(now)
+  const start = new Date(today.getTime() - 6 * 24 * HOUR) // Monday of this week
+  const end = new Date(today.getTime() + 24 * HOUR) // exclusive: through Sunday (today)
+  const inWeek = (v: unknown) => {
+    const t = v instanceof Date ? v.getTime() : new Date(v as string).getTime()
+    return t >= start.getTime() && t < end.getTime()
+  }
+  const catLabel = (id: string) => PERSONAL_CATEGORIES.find((c) => c.id === id)?.label ?? FIXED_EXPENSE_CATEGORIES.find((c) => c.id === id)?.label ?? id
+
+  for (const u of users) {
+    try {
+      const zones: string[] | undefined = Array.isArray(u.telegramZones) ? u.telegramZones : undefined
+      if (zones && !zones.includes('gastos')) { out.skipped++; continue }
+
+      const fixed = await fixedFor(d.db, u.id, today)
+      const sc = await salaryContext(d, u, today, fixed, [], {})
+      const payments = await d.db.query('fixedExpensePayments', [{ field: 'userId', op: 'EQUAL', value: u.id }]).catch(() => [])
+      const feCategory = new Map(fixed.expenses.map((e: any) => [e.id, e.category as string]))
+
+      const byCat = new Map<string, number>()
+      let total = 0
+      for (const p of payments) {
+        if (!inWeek(p.paymentDate)) continue
+        total += p.paidAmount || 0
+        const cat = feCategory.get(p.fixedExpenseId) ?? 'otro'
+        byCat.set(cat, (byCat.get(cat) ?? 0) + (p.paidAmount || 0))
+      }
+      for (const e of sc.rawExpenses) {
+        if (!inWeek(e.date)) continue
+        total += e.amount || 0
+        const cat = (e.category as string) ?? 'otro'
+        byCat.set(cat, (byCat.get(cat) ?? 0) + (e.amount || 0))
+      }
+
+      const activeBudgets = sc.budgets.filter((b: any) => b.active && b.source !== 'household-debt' && b.amount > 0)
+      if (total === 0 && activeBudgets.length === 0) { out.skipped++; continue }
+
+      const lines = [`📊 <b>Cierre de la semana</b>`, `<i>${dayShort(start)} – ${dayShort(today)}</i>`, rule]
+      lines.push(`💸 Gastaste <b>${cop(total)}</b> esta semana`)
+      const topCats = [...byCat.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+      if (topCats.length) lines.push(quote(topCats.map(([id, amt]) => `• ${esc(catLabel(id))} — ${cop(amt)}`)))
+
+      if (activeBudgets.length && sc.period) {
+        const budgetLines = activeBudgets.map((b: any) => {
+          const spent = sc.spends.filter((s: any) => s.budgetId === b.id).reduce((s: number, x: any) => s + x.amount, 0)
+          const pct = b.amount > 0 ? Math.min(1, spent / b.amount) : 0
+          return `${esc(b.concept)}: ${bar(pct)} ${Math.round(pct * 100)}% · te quedan ${cop(Math.max(0, b.amount - spent))}`
+        })
+        lines.push(`\n<b>🎯 Presupuestos ocasionales</b>`, quote(budgetLines))
+      }
+
+      if (sc.usable) {
+        const next = nextPayDate(sc.schedule, today)
+        if (next) {
+          const days = Math.round((next.date.getTime() - today.getTime()) / (24 * HOUR))
+          lines.push(`\n📅 Faltan <b>${days}</b> día${days === 1 ? '' : 's'} para tu próximo pago (${dayShort(next.date)}).`)
+        }
+      }
+
+      if (!apply) { out.sent++; continue }
+      try {
+        await d.tg.send(Number(u.telegramChatId), lines.join('\n'), [[{ text: '📲 Abrir la app', url: d.appUrl }]], { silent: true })
+        out.sent++
+      } catch (e: any) {
+        console.error(`weekly ${u.id.slice(0, 6)}…: ${e?.message}`)
+        if (/forbidden|blocked|chat not found|deactivated/i.test(String(e?.message))) await d.db.patch(`users/${u.id}`, {}, ['telegramChatId', 'telegramLinkedAt'])
+      }
+    } catch (e: any) { console.error(`weekly ${u.id.slice(0, 6)}…: ${e?.message}`); out.skipped++ }
+  }
+  return out
+}
+
+export type JobName = 'telegram' | 'debits' | 'daily' | 'weekly'

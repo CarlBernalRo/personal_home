@@ -8,9 +8,9 @@
  */
 import { isScheduleUsable, latestPayDate } from '../../../apps/web/src/shared/index'
 import { parseAmount } from './flow'
-import { bogotaToday } from './commands'
+import { bogotaToday, fixedFor } from './commands'
 import type { Db } from './db'
-import type { Telegram } from './telegram'
+import type { Keyboard, Telegram } from './telegram'
 
 export interface ActionDeps { db: Db; tg: Telegram; now?: () => number }
 const clock = (d: ActionDeps) => (d.now ? d.now() : Date.now())
@@ -128,4 +128,61 @@ export async function onActionText(d: ActionDeps, userId: string, chatId: number
     [],
   ).catch(() => d.tg.send(chatId, '✅ Enviado a la app. Confírmalo ahí para que quede registrado.'))
   return true
+}
+
+// ── "Marcar como pagado" on a fixed-expense notice ──────────────────────────────────────────────────────────────
+
+async function liveFixedEntry(d: ActionDeps, uid: string, feId: string, month: string) {
+  const today = bogotaToday(clock(d))
+  const { entries, next } = await fixedFor(d.db, uid, today)
+  return [...entries, ...next].find((e) => (e.fe as any).id === feId && e.hostMonth === month) ?? null
+}
+
+/** A pressed button on a fixed-expense notice (`x:p|a:<feId>:<month>:<accountId>`). */
+export async function onPayFixedCallback(d: ActionDeps, userId: string, cb: { id: string; chatId: number; messageId: number; data: string }): Promise<void> {
+  const [, kind, feId, month, accIdRaw] = cb.data.split(':')
+  const entry = await liveFixedEntry(d, userId, feId, month)
+  if (!entry || entry.owed.length === 0) {
+    await d.tg.answer(cb.id, 'Ya no está pendiente')
+    await d.tg.edit(cb.chatId, cb.messageId, 'Ese pago ya no está pendiente.', [])
+    return
+  }
+  const fe = entry.fe as any
+
+  if (kind === 'p') {
+    const accounts = await accountsOf(d, userId)
+    const kb: Keyboard = [
+      ...accounts.map((a) => [{ text: a.name as string, data: `x:a:${feId}:${month}:${a.id}` }]),
+      [{ text: 'Sin cuenta', data: `x:a:${feId}:${month}:` }],
+    ]
+    await d.tg.answer(cb.id)
+    await d.tg.edit(cb.chatId, cb.messageId, `🏦 <b>${esc(fe.concept)}</b> · ${cop(entry.total)}\n¿De qué cuenta salió?`, kb)
+    return
+  }
+  if (kind === 'a') {
+    const accId = accIdRaw || null
+    const accounts = await accountsOf(d, userId)
+    const acc = accId ? accounts.find((x) => x.id === accId) ?? null : null
+    await d.tg.answer(cb.id)
+    await d.db.add('pendingMovements', {
+      userId,
+      kind: 'fixed',
+      amount: entry.total,
+      // paid today (Colombia midnight, like the app's own dates)
+      date: new Date(bogotaToday(clock(d)).getTime() + 5 * 3600_000),
+      concept: fe.concept,
+      fixedExpenseId: feId,
+      occMonth: month,
+      ...(acc ? { accountId: acc.id } : {}),
+      source: 'telegram',
+      status: 'pending',
+      createdAt: new Date(clock(d)),
+    })
+    await d.tg.edit(
+      cb.chatId, cb.messageId,
+      `✅ <b>Enviado a la app.</b>\n${esc(fe.concept)} · ${cop(entry.total)}${acc ? ` desde <b>${esc(acc.name)}</b>` : ''}.\nConfírmalo ahí para que quede registrado.`,
+      [],
+    )
+    return
+  }
 }
