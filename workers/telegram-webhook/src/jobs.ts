@@ -9,7 +9,10 @@
  * Both are safe to run any number of times: a notification carries a Telegram status, and every debit has a fixed id per
  * expense and month that can only be created once, together with the balance change, in one all-or-nothing write.
  */
-import { autoDebitFloor, debtLines, deriveAlerts, planAutoPayments } from '../../../apps/web/src/shared/index'
+import {
+  autoDebitFloor, buildCalendarPeriods, buildSalaryPeriods, debtLines, deriveAlerts, isScheduleUsable, latestPayDate,
+  periodAt, periodModeOf, planAutoPayments, salaryLedgers,
+} from '../../../apps/web/src/shared/index'
 import { bogotaToday, fixedFor, households } from './commands'
 import type { Db, Doc } from './db'
 import { Ctx, NOTHING_PENDING, buildNotice, pendingReminder, pendingSummary, type FormatDeps, type Msg } from './format'
@@ -43,11 +46,15 @@ function netOwed(debts: any[], crossings: any[], uid: string) {
   return Math.max(0, net)
 }
 
+/** A calendar day in the Bogota frame: both sides must already be shifted/constructed that way (see `toFrame`). */
+const sameFrameDay = (a: Date, b: Date) => a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate()
+
 /**
- * The app works out its alerts (a payment about to be due, an overdue one, a household debt with a date...) only while
- * it is open, so nobody who does not open it would ever be told. The Worker works out the ones that come from the
- * fixed payments and the household debts itself, with the same shared function, and stores them in the same place and
- * with the same id the app uses: the app finds them already there and never repeats them, and they go out with the rest.
+ * The app works out its alerts (a payment about to be due, a salary day to confirm, a budget overrun, a household debt
+ * with a date...) only while it is open, so nobody who does not open it would ever be told. The Worker works out every
+ * zone itself, with the same shared functions (periods, ledger, `deriveAlerts`) fed from what it can read on its own
+ * (pay schedule, incomes, fixed expenses, variable budgets and their spends, household debts), and stores them with the
+ * same id the app uses: the app finds them already there and never repeats them, and they go out with the rest.
  * Only between 8 a.m. and 9 p.m. in Colombia, so nothing wakes anyone up at night.
  */
 export async function createServerNotices(d: JobDeps, users: Doc[], apply = true): Promise<number> {
@@ -67,13 +74,44 @@ export async function createServerNotices(d: JobDeps, users: Doc[], apply = true
         householdNames[h.id] = h.name ?? 'Hogar'
         householdLines.push(...debtLines(debts as any[], u.id, h.id, netOwed(debts as any[], crossings as any[], u.id)))
       }
+
+      // Salary period, pending pay day and its ledger (same shared code the app runs when open). A schedule that
+      // isn't set up, or anything that fails reading it, simply leaves these null: `deriveAlerts` skips that zone.
+      let period: { start: Date; end: Date } | null = null
+      let pendingPay: ReturnType<typeof latestPayDate> = null
+      let ledger: ReturnType<typeof salaryLedgers> extends Map<string, infer V> ? V | null : null = null
+      const budgets: any[] = Array.isArray(u.variableBudgets) ? u.variableBudgets : []
+      let spends: any[] = []
+      try {
+        const schedule = (u.paySchedule ?? null) as any
+        const usable = isScheduleUsable(schedule)
+        const [incomes, rawExpenses] = await Promise.all([
+          d.db.query('incomes', [{ field: 'userId', op: 'EQUAL', value: u.id }]).catch(() => []),
+          d.db.query('expenses', [{ field: 'userId', op: 'EQUAL', value: u.id }]).catch(() => []),
+        ])
+        const toBogota = (v: unknown) => (v instanceof Date ? new Date(v.getTime() - BOGOTA_MS) : new Date(v as any))
+        const salaries = incomes.filter((i) => i.kind === 'salary').map((i) => ({ id: i.id, date: toBogota(i.date), amount: i.amount }))
+        const extras = incomes.filter((i) => i.kind !== 'salary').map((i) => ({ id: i.id, date: toBogota(i.date), amount: i.amount, concept: i.concept ?? 'Ingreso' }))
+        spends = rawExpenses.filter((e) => e.variableBudgetId || e.tracked)
+          .map((e) => ({ id: e.id, budgetId: e.variableBudgetId ?? '', date: toBogota(e.date), amount: e.amount, concept: e.description ?? '' }))
+
+        const periods = !usable ? [] : periodModeOf(schedule) === 'calendar' ? buildCalendarPeriods(salaries, today) : buildSalaryPeriods(salaries, schedule)
+        const currentPeriod = periodAt(periods, today)
+        if (currentPeriod) period = { start: currentPeriod.start, end: currentPeriod.end }
+
+        const latest = usable ? latestPayDate(schedule, today) : null
+        pendingPay = latest && !salaries.some((s) => sameFrameDay(s.date, latest.date)) ? latest : null
+
+        if (currentPeriod) {
+          ledger = salaryLedgers(periods, fixed.expenses, fixed.index, today, extras, { budgets, spends, householdLines, householdNames }).get(currentPeriod.id) ?? null
+        }
+      } catch (e: any) { console.error(`salary ${u.id.slice(0, 6)}…: ${e?.message}`) }
+
       const alerts = deriveAlerts({
-        today, period: null, entries: [...fixed.entries, ...fixed.next.filter((e) => e.arrears.length === 0)] as any, pending: null, ledger: null,
-        budgets: [], spends: [], householdLines, householdNames,
+        today, period, entries: [...fixed.entries, ...fixed.next.filter((e) => e.arrears.length === 0)] as any, pending: pendingPay, ledger,
+        budgets, spends, householdLines, householdNames,
       })
       for (const a of alerts) {
-        // fixed payments are told once a day (sendDailyFixed); sueldo / estimados need data the Worker does not read
-        if (a.zone !== 'hogar') continue
         created++
         if (!apply) continue
         try {
@@ -113,11 +151,13 @@ export async function sendTelegramAvisos(d: JobDeps & { tg: Telegram; appUrl: st
       .filter((n) => n.userId === u.id && !n.telegramStatus && n.telegramSent !== true)
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
 
-    // what really goes out: archived, switched-off zones and alerts that were solved while they waited are left out
+    // what really goes out: archived, switched-off zones and alerts that were solved while they waited are left out.
+    // Every zone (fixed payments included) goes out the first time it appears, same as the others: waiting for the
+    // once-a-day digest meant missing it entirely on a day the digest didn't reach the person. The digest still repeats
+    // it every day it stays unpaid (it reads the live data, not this notice), so nothing goes untold either way.
     const toSend: Doc[] = []
     for (const n of pending) {
       let why = n.archived ? 'descartado' : zones && !zones.includes(n.zone) ? 'zona apagada' : ''
-      if (!why && typeof n.derivedKey === 'string' && /^fx-(soon|today|overdue)\|/.test(n.derivedKey)) why = 'lo cubre el resumen diario de las 8 a.m.'
       if (!why && typeof n.derivedKey === 'string' && n.derivedKey.startsWith('pendmov|') && waiting === 0) why = 'ya no hay movimientos pendientes'
       if (why) { out.skipped++; await mark(n.id, 'skipped'); continue }
       toSend.push(n)

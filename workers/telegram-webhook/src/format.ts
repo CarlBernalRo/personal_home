@@ -34,6 +34,8 @@ export const bar = (ratio: number) => { const n = Math.max(0, Math.min(10, Math.
 /** A block of lines as a quote; long ones start collapsed so the message stays short. */
 const quote = (lines: string[]) => `<blockquote${lines.length > 4 ? ' expandable' : ''}>${lines.join('\n')}</blockquote>`
 const rule = '━━━━━━━━━━━━━━'
+/** Blurs a saldo on screen until the person taps it (Telegram's own "spoiler" entity). */
+const spoiler = (s: string) => `<tg-spoiler>${s}</tg-spoiler>`
 
 const ZONE = {
   sueldo: { icon: '💼', label: 'Sueldo' },
@@ -70,10 +72,20 @@ class Ctx {
 }
 
 const url = (d: FormatDeps, path?: string) => `${d.appUrl}${path ?? '/notificaciones'}`
-/** Open the exact screen; for a single notice also a button to mark it read from the chat. */
-function buttons(d: FormatDeps, path: string | undefined, label: string, noticeId?: string): Keyboard {
+/**
+ * Open the exact screen; for a single notice also a button to mark it read from the chat. Telegram caps
+ * `callback_data` at 64 bytes: the stored id is usually `${userId}_${key}`, and the chat already knows who is
+ * writing, so only the key travels. If even that does not fit (a long derived key, e.g. several overdue expenses
+ * at once), the button is dropped rather than sent broken — Telegram rejects the whole message otherwise.
+ */
+function buttons(d: FormatDeps, path: string | undefined, label: string, n?: Doc): Keyboard {
   const rows: Keyboard = [[{ text: `📲 ${label}`, url: url(d, path) }]]
-  if (noticeId) rows.push([{ text: '✓ Marcar como leída', data: `n:r:${noticeId}` }])
+  if (n) {
+    const prefix = `${n.userId}_`
+    const key = n.id.startsWith(prefix) ? n.id.slice(prefix.length) : n.id
+    const data = `n:r:${key}`
+    if (new TextEncoder().encode(data).length <= 64) rows.push([{ text: '✓ Marcar como leída', data }])
+  }
   return rows
 }
 const header = (n: Doc, title = n.title) => `${sevOf(n.severity)} <b>${esc(title)}</b>\n<i>${zoneOf(n.zone).icon} ${zoneOf(n.zone).label}</i>`
@@ -83,7 +95,7 @@ const header = (n: Doc, title = n.title) => `${sevOf(n.severity)} <b>${esc(title
 /** "Saldo 4.568.154 → quedarían 4.466.154 ✅" for an account that has to pay `amount`. */
 function balanceLine(acc: Doc, amount: number) {
   const after = (acc.balance ?? 0) - amount
-  return `🏦 <b>${esc(acc.name)}</b> · saldo ${cop(acc.balance ?? 0)} → quedarían ${cop(after)} ${after >= 0 ? '✅' : '⚠️'}`
+  return `🏦 <b>${esc(acc.name)}</b> · saldo ${spoiler(cop(acc.balance ?? 0))} → quedarían ${spoiler(cop(after))} ${after >= 0 ? '✅' : '⚠️'}`
 }
 
 async function fixedSoon(c: Ctx, n: Doc, feId: string, hostMonth: string): Promise<Msg> {
@@ -102,7 +114,7 @@ async function fixedSoon(c: Ctx, n: Doc, feId: string, hostMonth: string): Promi
   if (acc) lines.push(balanceLine(acc, e.total))
   lines.push(auto ? '\n🤖 <i>Se debita automáticamente ese día si la cuenta tiene el saldo.</i>' : '\n🕐 <i>No es automático: recuerda pagarlo.</i>')
   if (fe.notes) lines.push(`\n📝 <i>${esc(String(fe.notes).slice(0, 160))}</i>`)
-  return { text: lines.join('\n'), keyboard: buttons(c.d, '/fijos', 'Abrir Fijos', n.id), silent: false }
+  return { text: lines.join('\n'), keyboard: buttons(c.d, '/fijos', 'Abrir Fijos', n), silent: false }
 }
 
 /**
@@ -188,7 +200,7 @@ export async function pendingSummary(d: FormatDeps, user: Doc, ctx = new Ctx(d, 
       out.push(`\n💵 Gastos fijos por pagar: <b>${cop(fixedTotal)}</b>`)
       const accounts = await c.accounts()
       const have = accounts.reduce((sum, a) => sum + (a.balance ?? 0), 0)
-      if (accounts.length) out.push(`🏦 En tus cuentas: ${cop(have)} ${have >= fixedTotal ? '✅ alcanza para todo' : `⚠️ faltan ${cop(fixedTotal - have)}`}`)
+      if (accounts.length) out.push(`🏦 En tus cuentas: ${spoiler(cop(have))} ${have >= fixedTotal ? '✅ alcanza para todo' : `⚠️ faltan ${spoiler(cop(fixedTotal - have))}`}`)
     }
   }
   if (unread.length) {
@@ -235,8 +247,8 @@ async function fixedOverdue(c: Ctx, n: Doc, key: string): Promise<Msg> {
   const out = [`🔴 <b>${rows.length === 1 ? '1 pago vencido' : `${rows.length} pagos vencidos`}</b>\n<i>📅 Gastos fijos</i>`, rule, quote(lines), `\n💵 Por pagar: <b>${cop(total)}</b>`]
   const accounts = await c.accounts()
   const have = accounts.reduce((s, a) => s + (a.balance ?? 0), 0)
-  if (accounts.length) out.push(`🏦 En tus cuentas: ${cop(have)} ${have >= total ? '✅ alcanza para ponerte al día' : `⚠️ faltan ${cop(total - have)}`}`)
-  return { text: out.join('\n'), keyboard: buttons(c.d, '/fijos', 'Pagar en Fijos', n.id), silent: false }
+  if (accounts.length) out.push(`🏦 En tus cuentas: ${spoiler(cop(have))} ${have >= total ? '✅ alcanza para ponerte al día' : `⚠️ faltan ${spoiler(cop(total - have))}`}`)
+  return { text: out.join('\n'), keyboard: buttons(c.d, '/fijos', 'Pagar en Fijos', n), silent: false }
 }
 
 // ── salary, budgets, spending ────────────────────────────────────────────────────────────────────────────────────
@@ -251,9 +263,9 @@ async function payDay(c: Ctx, n: Doc, key: string): Promise<Msg> {
   const schedule = (c.user.paySchedule ?? {}) as any
   const acc = accounts.find((a) => a.id === schedule.accountId) ?? accounts.find((a) => a.isDefault) ?? null
   const lines = [header(n), rule, amount ? `💵 <b>${cop(amount)}</b>` : '', `📅 ${dayLong(date)}`]
-  if (acc) lines.push(`🏦 Se deposita en <b>${esc(acc.name)}</b> (saldo ${cop(acc.balance ?? 0)})`)
+  if (acc) lines.push(`🏦 Se deposita en <b>${esc(acc.name)}</b> (saldo ${spoiler(cop(acc.balance ?? 0))})`)
   lines.push('\n<i>Confírmalo en la app para que actualice lo que te queda del período.</i>')
-  return { text: lines.filter(Boolean).join('\n'), keyboard: buttons(c.d, '/', 'Confirmar sueldo', n.id), silent: true }
+  return { text: lines.filter(Boolean).join('\n'), keyboard: buttons(c.d, '/', 'Confirmar sueldo', n), silent: true }
 }
 
 async function overBudget(c: Ctx, n: Doc): Promise<Msg> {
@@ -266,8 +278,8 @@ async function overBudget(c: Ctx, n: Doc): Promise<Msg> {
     lines.push(`\n⏳ Todavía por pagar: <b>${cop(owed.reduce((s, e) => s + e.total, 0))}</b> en ${owed.length} gasto${owed.length === 1 ? '' : 's'}`)
     lines.push(quote(owed.slice(0, 5).map((e) => `• ${esc((e.fe as any).concept)} — ${cop(e.total)}${e.due ? ` (${dayShort(e.due)})` : ''}`).concat(owed.length > 5 ? [`… y ${owed.length - 5} más`] : [])))
   }
-  if (accounts.length) lines.push(`🏦 En tus cuentas: ${cop(accounts.reduce((s, a) => s + (a.balance ?? 0), 0))}`)
-  return { text: lines.join('\n'), keyboard: buttons(c.d, '/fijos', 'Revisar gastos', n.id), silent: false }
+  if (accounts.length) lines.push(`🏦 En tus cuentas: ${spoiler(cop(accounts.reduce((s, a) => s + (a.balance ?? 0), 0)))}`)
+  return { text: lines.join('\n'), keyboard: buttons(c.d, '/fijos', 'Revisar gastos', n), silent: false }
 }
 
 async function budgetOver(c: Ctx, n: Doc, key: string): Promise<Msg> {
@@ -286,7 +298,7 @@ async function budgetOver(c: Ctx, n: Doc, key: string): Promise<Msg> {
     `📈 Te pasaste por <b>${cop(spent - budget.amount)}</b>`,
   ]
   if (spends.length) lines.push(`\n🧾 Últimos gastos:`, quote(spends.slice(0, 4).map((s) => `• ${esc(s.description || budget.concept)} — ${cop(s.amount)} (${dayShort(new Date(s.date.getTime() - 5 * 3600_000))})`)))
-  return { text: lines.join('\n'), keyboard: buttons(c.d, '/fijos?tab=config', 'Ver gastos ocasionales', n.id), silent: false }
+  return { text: lines.join('\n'), keyboard: buttons(c.d, '/fijos?tab=config', 'Ver gastos ocasionales', n), silent: false }
 }
 
 const KIND_ICON: Record<string, string> = { income: '💰', fixed: '📌', occasional: '🛒', abono: '🏠' }
@@ -303,7 +315,7 @@ async function pendingMovements(c: Ctx, n: Doc): Promise<Msg> {
   const title = pending.length === 1 ? 'Tienes 1 movimiento por confirmar' : `Tienes ${pending.length} movimientos por confirmar`
   return {
     text: [header(n, title), rule, quote(lines), totals ? `\n💵 ${totals}` : '', '<i>Nada se registra hasta que lo confirmes en la app.</i>'].filter(Boolean).join('\n'),
-    keyboard: buttons(c.d, '/pendientes', 'Revisar y confirmar', n.id), silent: true,
+    keyboard: buttons(c.d, '/pendientes', 'Revisar y confirmar', n), silent: true,
   }
 }
 
@@ -350,7 +362,7 @@ async function householdDebt(c: Ctx, n: Doc, key: string): Promise<Msg> {
   ]
   if (creditor) lines.push(`🙋 Se le debe a <b>${esc(hh.name(creditor))}</b>`)
   if (due) lines.push(`📅 Vence ${dayShort(due)} · ${relativeDay(due, c.today)}`)
-  return { text: lines.join('\n'), keyboard: buttons(c.d, n.link, 'Abrir Hogar', n.id), silent: false }
+  return { text: lines.join('\n'), keyboard: buttons(c.d, n.link, 'Abrir Hogar', n), silent: false }
 }
 
 async function receipt(c: Ctx, n: Doc): Promise<Msg> {
@@ -361,7 +373,7 @@ async function receipt(c: Ctx, n: Doc): Promise<Msg> {
   if (accounts.length) lines.push(`\n🏦 Confirma en cuál cuenta lo recibiste: ${accounts.slice(0, 4).map((a) => esc(a.name)).join(' · ')}`)
   const standing = r.householdId ? await householdStanding(c, r.householdId).catch(() => null) : null
   if (standing) lines.push('', standing)
-  return { text: lines.join('\n'), keyboard: buttons(c.d, n.link ?? '/notificaciones', 'Confirmar recibido', n.id), silent: false }
+  return { text: lines.join('\n'), keyboard: buttons(c.d, n.link ?? '/notificaciones', 'Confirmar recibido', n), silent: false }
 }
 
 async function householdEvent(c: Ctx, n: Doc): Promise<Msg> {
@@ -369,11 +381,11 @@ async function householdEvent(c: Ctx, n: Doc): Promise<Msg> {
   const lines = [header(n), rule, esc(n.body)]
   const standing = householdId ? await householdStanding(c, householdId).catch(() => null) : null
   if (standing) lines.push('', standing)
-  return { text: lines.join('\n'), keyboard: buttons(c.d, n.link ?? '/hogar', 'Abrir Hogar', n.id), silent: n.severity !== 'warning' && n.severity !== 'critical' }
+  return { text: lines.join('\n'), keyboard: buttons(c.d, n.link ?? '/hogar', 'Abrir Hogar', n), silent: n.severity !== 'warning' && n.severity !== 'critical' }
 }
 
 function plainNotice(d: FormatDeps, n: Doc): Msg {
-  return { text: `${header(n)}\n${rule}\n${esc(n.body)}`, keyboard: buttons(d, n.link, 'Abrir en la app', n.id), silent: n.severity === 'info' || n.severity === 'success' }
+  return { text: `${header(n)}\n${rule}\n${esc(n.body)}`, keyboard: buttons(d, n.link, 'Abrir en la app', n), silent: n.severity === 'info' || n.severity === 'success' }
 }
 
 /**

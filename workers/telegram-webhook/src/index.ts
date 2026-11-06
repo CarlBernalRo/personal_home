@@ -124,11 +124,13 @@ async function runJob(env: Env, name: JobName, apply: boolean) {
 /** "✓ Marcar como leída" under a notice: marks it in the app and leaves only the button that opens it. */
 async function noticeCallback(env: Env, uid: string, cb: any) {
   const { db, tg } = flowDeps(env)
-  const [, action, id] = String(cb.data ?? '').split(':')
-  if (action !== 'r' || !id) { await tg.answer(cb.id); return }
-  const n = await db.get(`notifications/${id}`)
+  const [, action, key] = String(cb.data ?? '').split(':')
+  if (action !== 'r' || !key) { await tg.answer(cb.id); return }
+  // the button only carries the key, not the `${uid}_` prefix (Telegram's callback_data caps at 64 bytes): try the
+  // usual derived-notice id first, and the key as a whole id for the few notices that were never prefixed that way
+  const n = (await db.get(`notifications/${uid}_${key}`)) ?? (await db.get(`notifications/${key}`))
   if (!n || n.userId !== uid) { await tg.answer(cb.id, 'Ese aviso ya no existe'); return }
-  await db.patch(`notifications/${id}`, { read: true })
+  await db.patch(`notifications/${n.id}`, { read: true })
   await tg.answer(cb.id, '✓ Marcada como leída')
   const rows = ((cb.message?.reply_markup?.inline_keyboard ?? []) as any[][])
     .map((row) => row.filter((b) => !String(b.callback_data ?? '').startsWith('n:r:')).map((b) => ({ text: b.text, url: b.url })))

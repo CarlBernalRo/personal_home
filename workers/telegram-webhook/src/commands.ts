@@ -21,6 +21,8 @@ export const COMMANDS: { command: string; description: string }[] = [
 
 const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const cop = (n: number) => `$${Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`
+/** Blurs a saldo on screen until the person taps it (Telegram's own "spoiler" entity). */
+const spoiler = (s: string) => `<tg-spoiler>${s}</tg-spoiler>`
 
 /** Today in Colombia (UTC-5) as a local-midnight Date, whatever the clock of the machine running this. */
 export function bogotaToday(now = Date.now()): Date {
@@ -38,7 +40,7 @@ async function saldo(db: Db, uid: string) {
   const accounts = (await db.query('accounts', [{ field: 'userId', op: 'EQUAL', value: uid }])).sort((a, b) => b.balance - a.balance)
   if (accounts.length === 0) return 'Aún no tienes cuentas. Se crean en Finanzas, dentro de la app.'
   const total = accounts.reduce((s, a) => s + (a.balance || 0), 0)
-  return `<b>💰 Tus cuentas</b>\n${accounts.map((a) => `• ${esc(a.name)}: <b>${cop(a.balance || 0)}</b>`).join('\n')}\n\n<b>Total: ${cop(total)}</b>`
+  return `<b>💰 Tus cuentas</b>\n${accounts.map((a) => `• ${esc(a.name)}: <b>${spoiler(cop(a.balance || 0))}</b>`).join('\n')}\n\n<b>Total: ${spoiler(cop(total))}</b>`
 }
 
 // ── fixed expenses (shared by /proximos and /resumen) ───────────────────────────────────────────────────────────
@@ -50,7 +52,8 @@ export async function fixedFor(db: Db, uid: string, today: Date) {
   const expenses = all.filter((e) => e.active !== false) as any[]
   const index = indexPayments(withAutoPayments(expenses, payments as any[], today) as any[])
   const month = monthKey(today)
-  return { month, entries: monthEntries(expenses, month, index as any, today), next: monthEntries(expenses, shiftMonth(month, 1), index as any, today) }
+  // `expenses` and `index` are also exposed for the salary ledger (needs the raw list, not just this month's entries).
+  return { month, entries: monthEntries(expenses, month, index as any, today), next: monthEntries(expenses, shiftMonth(month, 1), index as any, today), expenses, index }
 }
 
 async function proximos(db: Db, uid: string, today: Date) {
@@ -129,11 +132,11 @@ async function resumen(db: Db, uid: string, today: Date) {
   const month = today.toLocaleDateString('es-CO', { month: 'long', year: 'numeric', timeZone: 'UTC' })
   return [
     `<b>📊 Resumen · ${esc(month)}</b>`,
-    `💰 En cuentas: <b>${cop(total)}</b>`,
+    `💰 En cuentas: <b>${spoiler(cop(total))}</b>`,
     `✅ Fijos pagados: ${paid.length} · ${cop(paid.reduce((s, e) => s + (e.payment?.paidAmount || 0), 0))}`,
     `⏳ Fijos por pagar: ${pending.length} · <b>${cop(pending.reduce((s, e) => s + e.total, 0))}</b>${overdue.length ? `\n🔴 Vencidos: ${overdue.length} · ${cop(overdue.reduce((s, e) => s + e.total, 0))}` : ''}`,
     hhs.length ? `💸 Debes: ${cop(owe)} · 🤝 Te deben: ${cop(owed)}` : '',
-    `\nTras pagar lo pendiente te quedarían <b>${cop(total - pending.reduce((s, e) => s + e.total, 0))}</b> en cuentas.`,
+    `\nTras pagar lo pendiente te quedarían <b>${spoiler(cop(total - pending.reduce((s, e) => s + e.total, 0)))}</b> en cuentas.`,
   ].filter(Boolean).join('\n')
 }
 
