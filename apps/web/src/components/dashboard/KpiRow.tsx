@@ -7,7 +7,7 @@ import { clsx } from 'clsx'
 import type { DashboardData } from '@/hooks/useDashboardData'
 import { IconTip } from '@/components/ui/IconTip'
 import { SegmentedBar } from '@/components/ui/SegmentedBar'
-import { formatCOP } from '@/shared'
+import { useMoneyMask } from '@/hooks/useMoneyMask'
 
 interface TileProps {
   label: string
@@ -54,6 +54,7 @@ const shortDate = (d: Date) => format(d, "d 'de' MMM", { locale: es })
 
 /** Headline numbers: money now, what the period leaves, where the account lands, what came in. `compact` is a 2x2 grid for a narrow column. */
 export function KpiRow({ outlook, ledger, income, salary, compact = false }: Pick<DashboardData, 'outlook' | 'ledger' | 'income' | 'salary'> & { compact?: boolean }) {
+  const formatCOP = useMoneyMask()
   const hasSalary = !!salary.currentPeriod
   // With accounts, "money in your accounts" is what they hold, and each one is listed under the total
   const accounts = salary.accounts as { id: string; name: string; balance: number; color?: string }[]

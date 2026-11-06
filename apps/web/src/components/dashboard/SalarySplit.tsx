@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Wallet, TriangleAlert } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { DashboardData } from '@/hooks/useDashboardData'
-import { formatCOP } from '@/shared'
+import { useMoneyMask } from '@/hooks/useMoneyMask'
 import { DashCard, EmptyNote, SERIES } from './shared'
 
 interface Part {
@@ -17,6 +17,7 @@ const MIN_PCT_FOR_LABEL = 9
 
 /** Where the period's money went: one tall segmented bar over income plus carry-over. */
 export function SalarySplit({ ledger, income }: Pick<DashboardData, 'ledger' | 'income'>) {
+  const formatCOP = useMoneyMask()
   const [active, setActive] = useState<string | null>(null)
 
   const model = useMemo(() => {

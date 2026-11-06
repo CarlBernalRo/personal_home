@@ -21,6 +21,7 @@ import { UserPhoto } from '@/components/ui/UserPhoto'
 import { TelegramForm } from '@/components/profile/TelegramForm'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { MobileCollapse } from '@/components/ui/MobileCollapse'
+import { useLayoutStore } from '@/store/layout'
 
 const schema = z.object({
   firstName: z.string().max(40).optional(),
@@ -39,6 +40,7 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 export default function ProfilePage() {
+  const leftCollapsed      = useLayoutStore((s) => s.leftCollapsed)
   const { user, profile }  = useAuth()
   const setProfile         = useAuthStore((s) => s.setProfile)
   const displayName        = useDisplayName()
@@ -103,7 +105,7 @@ export default function ProfilePage() {
     <div className="flex flex-col gap-5 fade-in text-[#f3f5f6] lg:flex-row lg:h-full lg:min-h-0">
       {/* Left pane: who you are, what you have set up and the session. Fixed on wide screens, stacked on phones. */}
       <CurvedScrollContainer
-        className="lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50"
+        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50', leftCollapsed && 'lg:hidden')}
         contentClassName="max-lg:!overflow-visible space-y-5 py-3 !pl-3 !pr-3 lg:py-4 lg:!pl-4 lg:!pr-6"
         corners="both"
         borderRadius={24}

@@ -22,6 +22,8 @@ import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/hooks/useAuth'
 import { usePeriodReveal } from '@/hooks/usePeriodReveal'
+import { useMoneyMask } from '@/hooks/useMoneyMask'
+import { useLayoutStore } from '@/store/layout'
 import {
   addAccount, getAccounts, updateAccount, deleteAccount,
   addSavingsGoal, getSavingsGoals, updateSavingsGoal, deleteSavingsGoal,
@@ -77,6 +79,8 @@ export default function FinancesPage() {
   const { user, profile } = useAuth()
   const { showToast }  = useToast()
   const ask = useConfirm()
+  const cop = useMoneyMask()
+  const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
   const [activeTab, setActiveTab] = useState<Tab>('movimientos')
   // Account picked on the left to narrow the movements (null = all), and a counter that makes the movements reload
   const [accountFilter, setAccountFilter] = useState<string | null>(null)
@@ -315,7 +319,7 @@ export default function FinancesPage() {
     <div className="flex flex-col gap-5 fade-in text-[#f3f5f6] lg:flex-row lg:h-full lg:min-h-0">
       {/* Left pane: the accounts and what each one holds. Picking one narrows the movements on the right. */}
       <CurvedScrollContainer
-        className="lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50"
+        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50', leftCollapsed && 'lg:hidden')}
         corners="both"
         {...paneProps}
       >
@@ -338,7 +342,7 @@ export default function FinancesPage() {
             </div>
           </div>
           <p className={clsx('text-xl sm:text-2xl font-bold font-mono tabular-nums flex-shrink-0', totalBalance < 0 ? 'text-red-400' : 'text-sky-200')}>
-            {formatCOP(totalBalance)}
+            {cop(totalBalance)}
           </p>
         </div>
 
@@ -388,7 +392,7 @@ export default function FinancesPage() {
                     <span className="min-w-0">
                       <span className="block font-bold text-sm text-[#f3f5f6] truncate">{acc.name as string}</span>
                       <span className="block text-[11px] text-[#8a929a]">{typeInfo?.label ?? acc.type}{acc.isDefault ? ' · por defecto' : ''}</span>
-                      <span className="block text-sm font-bold font-mono mt-0.5" style={{ color: acc.color }}>{formatCOP(acc.balance as number)}</span>
+                      <span className="block text-sm font-bold font-mono mt-0.5" style={{ color: acc.color }}>{cop(acc.balance as number)}</span>
                     </span>
                   </button>
                   <div className="flex gap-1 flex-shrink-0">
@@ -439,7 +443,7 @@ export default function FinancesPage() {
               <p className="text-xs text-[#9aa4ac]">
                 Ingresos este mes:{' '}
                 <span className="font-bold text-brand-400 font-mono text-sm ml-1">
-                  {formatCOP(totalMonthInc)}
+                  {cop(totalMonthInc)}
                 </span>
               </p>
             </div>
@@ -501,7 +505,7 @@ export default function FinancesPage() {
                   <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                     {inc.attachmentId && <AttachmentButton compact attachmentId={inc.attachmentId as string} />}
                     <span className="text-xs sm:text-sm font-bold text-emerald-300 font-mono whitespace-nowrap">
-                      +{formatCOP(inc.amount as number)}
+                      +{cop(inc.amount as number)}
                     </span>
                     <button
                       onClick={() => handleDeleteInc(inc.id as string)}
@@ -635,7 +639,7 @@ export default function FinancesPage() {
           <Select label="Tipo" options={ACCOUNT_TYPES.map((t) => ({ value: t.value, label: t.label }))} {...accForm.register('type')} />
           <div className="rounded-xl border border-white/10 bg-[#0d263a] p-3 space-y-1">
             <p className="text-xs font-semibold text-[#c7ccd1]">
-              Saldo{editAcc ? `: ${formatCOP(editAcc.balance as number)}` : ' inicial: $ 0'}
+              Saldo{editAcc ? `: ${cop(editAcc.balance as number)}` : ' inicial: $ 0'}
             </p>
             <p className="text-[11px] text-[#8a929a]">
               El saldo no se escribe: lo forman los ingresos que registres en esta cuenta, menos los pagos que salgan de ella, y lo que muevas entre cuentas.

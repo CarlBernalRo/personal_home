@@ -51,6 +51,7 @@ import { useSearchParams } from 'react-router-dom'
 import { usePeriodStore } from '@/store/period'
 import { clsx } from 'clsx'
 import { AppIcon, EmptyMark } from '@/components/ui/AppIcon'
+import { useLayoutStore } from '@/store/layout'
 
 type Tab = 'mes' | 'calendario' | 'config'
 
@@ -95,6 +96,8 @@ export default function FixedExpensesPage() {
   const [accountFilter, setAccountFilter] = useState<string | null>(null)
   // The dialog that schedules a one-off payment (editing = the scheduled one being changed)
   const [programming, setProgramming] = useState<{ editing: any | null } | null>(null)
+  // Collapses the left pane on wide screens (global switch, lives in the sidebar), so the calendar/timeline gets the full width
+  const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
   // Bank accounts the user can pay from, and the one picked for this payment ('' = none)
   const accounts = salary.accounts
   const [accountId, setAccountId] = useState('')
@@ -359,7 +362,7 @@ export default function FixedExpensesPage() {
           content below it scrolls. On small screens everything stacks and scrolls normally. */}
       <div className="contents">
         <CurvedScrollContainer
-          className="lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50"
+          className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50', leftCollapsed && 'lg:hidden')}
           contentClassName="max-lg:!overflow-visible space-y-5 py-3 !pl-3 !pr-3 lg:py-4 lg:!pl-4 lg:!pr-6"
           corners="both"
           borderRadius={24}

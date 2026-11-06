@@ -18,6 +18,7 @@ import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthStore } from '@/store/auth'
+import { useLayoutStore } from '@/store/layout'
 import { saveAttachment } from '@/lib/attachments'
 import { useDisplayName } from '@/hooks/useDisplayName'
 import {
@@ -65,6 +66,7 @@ export default function HouseholdPage() {
   const myDisplayName          = useDisplayName()
   const { showToast }          = useToast()
   const ask = useConfirm()
+  const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
 
   const [households, setHouseholds]   = useState<any[]>([])
   const [activeId, setActiveId]       = useState<string | null>(null)
@@ -608,7 +610,7 @@ export default function HouseholdPage() {
         <>
           {/* Left pane: who owes whom, the actions, and each person. On phones it gives way to the debt detail. */}
           <CurvedScrollContainer
-            className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, selectedDebt && 'max-lg:hidden')}
+            className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, selectedDebt && 'max-lg:hidden', leftCollapsed && 'lg:hidden')}
             {...scrollProps}
           >
             <div style={{ viewTransitionName: `vt-household-${activeId}` } as React.CSSProperties}>

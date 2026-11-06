@@ -16,6 +16,7 @@ import { PENDING_CHANGED, usePendingMovements } from '@/hooks/usePendingMovement
 import { confirmPendingMovement, discardPendingMovement } from '@/lib/firestore'
 import { PERSONAL_CATEGORIES, formatCOP } from '@/shared'
 import type { PendingMovement, PendingKind } from '@/shared'
+import { useLayoutStore } from '@/store/layout'
 
 type Filter = 'all' | PendingKind
 type Account = { id: string; name: string; balance: number }
@@ -128,6 +129,7 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
 
 /** The movements prepared in Telegram: each one is confirmed (it becomes a real record) or discarded here. */
 export default function PendingMovementsPage() {
+  const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
   const { items, counts, loading, refresh } = usePendingMovements()
   const { showToast } = useToast()
   const ask = useConfirm()
@@ -168,7 +170,7 @@ export default function PendingMovementsPage() {
   return (
     <div className="flex flex-col gap-5 fade-in text-[#f3f5f6] lg:flex-row lg:h-full lg:min-h-0">
       <CurvedScrollContainer
-        className="lg:w-[32%] lg:min-w-[300px] lg:max-w-[420px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50"
+        className={clsx('lg:w-[32%] lg:min-w-[300px] lg:max-w-[420px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50', leftCollapsed && 'lg:hidden')}
         contentClassName="max-lg:!overflow-visible space-y-5 py-3 !pl-3 !pr-3 lg:py-4 lg:!pl-4 lg:!pr-6"
         corners="both"
         borderRadius={24}

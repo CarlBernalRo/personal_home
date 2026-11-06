@@ -100,22 +100,43 @@ export function ProgramExpenseModal({ open, onClose, userId, editing, accounts, 
         <p className="text-xs text-[#9aa4ac]">
           Para un pago que harás una sola vez, como la universidad o una cuota anual. Aparece en tus gastos de ese período, cuenta en lo que te queda y te avisa cuando se acerque la fecha.
         </p>
+
+        {/* Qué es */}
         <Input label="¿Qué vas a pagar?" placeholder="ej. Matrícula universidad" value={form.concept} onChange={(e) => { setForm({ ...form, concept: e.target.value }); setError(null) }} />
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Input label="Fecha de pago" type="date" value={form.date} disabled={paid} onChange={(e) => { setForm({ ...form, date: e.target.value }); setError(null) }} />
-          <Input label="Monto (COP)" money placeholder="ej. 2.500.000" value={form.amount} onChange={(e) => { setForm({ ...form, amount: e.target.value }); setError(null) }} />
-        </div>
-        {paid && <p className="text-[11px] text-amber-200 -mt-2">Ya está pagado: la fecha no se puede cambiar.</p>}
         <Select label="Categoría" options={CATEGORY_OPTIONS} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
-        <AccountSelect label="Cuenta de la que se paga" accounts={accounts} value={form.accountId} onChange={(id) => setForm({ ...form, accountId: id })} noneLabel="Elegirla al pagar" outflow={Number(form.amount) || 0} />
-        <label className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
-          <input type="checkbox" className="cursor-pointer" checked={form.isVariable} onChange={(e) => setForm({ ...form, isVariable: e.target.checked })} />
-          <span>
-            El monto puede cambiar
-            <span className="block text-[10px] text-[#8a929a]">Al pagarlo escribes lo que realmente pagaste.</span>
-          </span>
-        </label>
-        <Input label="Notas" placeholder="Opcional" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+
+        {/* Cuánto */}
+        <div className="space-y-4 pt-1 border-t border-white/10">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[#6f7a83] -mb-1 pt-3">Cuánto</p>
+          <Input label="Monto (COP)" money placeholder="ej. 2.500.000" value={form.amount} onChange={(e) => { setForm({ ...form, amount: e.target.value }); setError(null) }} />
+          <label className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
+            <input type="checkbox" className="cursor-pointer" checked={form.isVariable} onChange={(e) => setForm({ ...form, isVariable: e.target.checked })} />
+            <span>
+              El monto puede cambiar
+              <span className="block text-[10px] text-[#8a929a]">Al pagarlo escribes lo que realmente pagaste.</span>
+            </span>
+          </label>
+        </div>
+
+        {/* Cuándo */}
+        <div className="space-y-1 pt-1 border-t border-white/10">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[#6f7a83] -mb-1 pt-3">Cuándo</p>
+          <Input label="Fecha de pago" type="date" value={form.date} disabled={paid} onChange={(e) => { setForm({ ...form, date: e.target.value }); setError(null) }} />
+          {paid && <p className="text-[11px] text-amber-200">Ya está pagado: la fecha no se puede cambiar.</p>}
+        </div>
+
+        {/* Cómo se paga */}
+        <div className="pt-1 border-t border-white/10">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[#6f7a83] -mb-1 pt-3 mb-3">Cómo se paga</p>
+          <AccountSelect label="Cuenta de la que se paga" accounts={accounts} value={form.accountId} onChange={(id) => setForm({ ...form, accountId: id })} noneLabel="Elegirla al pagar" outflow={Number(form.amount) || 0} />
+        </div>
+
+        {/* Notas */}
+        <div className="pt-1 border-t border-white/10">
+          <div className="pt-3">
+            <Input label="Notas" placeholder="Opcional" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          </div>
+        </div>
         {error && <p className="text-xs text-red-400">{error}</p>}
         <div className="flex gap-2 pt-2">
           <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>Cancelar</Button>

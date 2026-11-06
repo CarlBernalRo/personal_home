@@ -627,3 +627,20 @@ textarea:focus {
 @media (prefers-reduced-motion: reduce) {
   .bell-btn .bell-icon { animation: none !important; }
 }
+
+/* ── Panel collapse toggle: the icon spins smoothly as the panel opens/closes ── */
+.panel-toggle-icon { display: inline-flex; transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.panel-toggle-icon.is-collapsed { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) {
+  .panel-toggle-icon { transition: none !important; }
+}
+
+/* ── Balance visibility toggle: glows gently while the privacy mode is on, same language as the bell ── */
+@keyframes privacyGlow {
+  0%, 100% { filter: drop-shadow(0 0 1px #f59e0b); }
+  50%      { filter: drop-shadow(0 0 6px #f59e0b); }
+}
+.privacy-icon.is-active { animation: privacyGlow 2.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .privacy-icon { animation: none !important; }
+}

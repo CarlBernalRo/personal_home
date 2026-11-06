@@ -28,6 +28,7 @@ import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
 import { withAttachment } from '@/lib/attachments'
 import { useFixedData } from '@/hooks/useFixedData'
 import { usePayProjection } from '@/hooks/usePayProjection'
+import { useLayoutStore } from '@/store/layout'
 import { usePeriodStore } from '@/store/period'
 import { formatCOP, monthBounds, monthKey, shiftMonth, PERSONAL_CATEGORIES } from '@/shared'
 import { AppIcon, EmptyMark } from '@/components/ui/AppIcon'
@@ -49,6 +50,7 @@ const shortDate = (d: Date) => format(d, "d 'de' MMM", { locale: es })
 export default function ExpensesPage() {
   const { showToast } = useToast()
   const ask = useConfirm()
+  const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
   const salary        = useSalary()
   const fixed         = useFixedData()
   const outlook       = usePayProjection(salary, fixed.expenses, fixed.paymentIndex)
@@ -164,7 +166,7 @@ export default function ExpensesPage() {
     <div className="flex flex-col gap-5 fade-in text-[#f3f5f6] lg:flex-row lg:h-full lg:min-h-0">
       {/* Left pane: the same salary cards as Gastos Fijos, plus where the money went */}
       <CurvedScrollContainer
-        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed)}
+        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, leftCollapsed && 'lg:hidden')}
         {...scrollProps}
       >
         <div>

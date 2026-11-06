@@ -1,6 +1,8 @@
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { CalendarRange, Sparkles } from 'lucide-react'
+import { clsx } from 'clsx'
+import { useLayoutStore } from '@/store/layout'
 import { SkeletonCard } from '@/components/ui/Skeleton'
 import { MobileCollapse } from '@/components/ui/MobileCollapse'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
@@ -23,6 +25,7 @@ const DAY_MS = 86_400_000
 
 export default function DashboardPage() {
   const data = useDashboardData()
+  const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
   useDefaultAccount(data.salary, data.outlook ? data.outlook.cash : null)
 
   if (data.loading) {
@@ -63,7 +66,7 @@ export default function DashboardPage() {
     <div className="flex flex-col gap-5 fade-in text-[#f0fae8] min-w-0 lg:flex-row lg:h-full lg:min-h-0">
       {/* Left pane: who you are, the salary and the money now; the zones that need little room (Hogar, metas) */}
       <CurvedScrollContainer
-        className={`lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 ${framed}`}
+        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, leftCollapsed && 'lg:hidden')}
         {...scrollProps}
       >
         <div className="min-w-0">

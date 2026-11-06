@@ -1,5 +1,5 @@
 import { Landmark } from 'lucide-react'
-import { formatCOP } from '@/shared'
+import { useMoneyMask } from '@/hooks/useMoneyMask'
 import { shareLabel } from '@/components/ui/SegmentedBar'
 import { DashCard, EmptyNote } from './shared'
 
@@ -11,6 +11,7 @@ const TYPE_LABEL: Record<string, string> = { checking: 'Cuenta corriente', savin
 
 /** Where the money is: the total and how it is spread across the accounts (the movements live in Finanzas). */
 export function AccountsZone({ accounts }: Props) {
+  const formatCOP = useMoneyMask()
   const total = accounts.reduce((sum, a) => sum + a.balance, 0)
   const positive = accounts.reduce((sum, a) => sum + Math.max(a.balance, 0), 0)
   const sorted = [...accounts].sort((a, b) => b.balance - a.balance)

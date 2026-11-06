@@ -2,7 +2,8 @@ import { differenceInCalendarDays, format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { CalendarClock, TriangleAlert } from 'lucide-react'
 import { clsx } from 'clsx'
-import { formatCOP, type PayProjection } from '@/shared'
+import { type PayProjection } from '@/shared'
+import { useMoneyMask } from '@/hooks/useMoneyMask'
 
 interface Props {
   cash: number
@@ -16,6 +17,7 @@ export function FixedOutlook({ cash, projection }: Props) {
   const { nextPay, pendingTotal, reserved, endBalance, shortfallOn } = projection
   const days = differenceInCalendarDays(nextPay.date, new Date())
   const short = endBalance < 0
+  const cop = useMoneyMask()
 
   const rows: { label: string; value: number; tone?: string }[] = [
     { label: 'En tu cuenta ahora', value: cash, tone: 'text-sky-300' },
@@ -39,7 +41,7 @@ export function FixedOutlook({ cash, projection }: Props) {
       <div>
         <p className="text-[10px] uppercase tracking-wider text-[#8a929a]">Llegarías con</p>
         <p className={clsx('text-2xl font-bold font-mono tabular-nums', short ? 'text-red-400' : 'text-brand-300')}>
-          {formatCOP(endBalance)}
+          {cop(endBalance)}
         </p>
       </div>
 
@@ -47,7 +49,7 @@ export function FixedOutlook({ cash, projection }: Props) {
         {rows.map((r) => (
           <p key={r.label} className="flex justify-between gap-3 text-[#c7ccd1]">
             <span>{r.label}</span>
-            <span className={clsx('font-bold', r.tone ?? 'text-[#f0fae8]')}>{r.value < 0 ? '−' : ''}{formatCOP(Math.abs(r.value))}</span>
+            <span className={clsx('font-bold', r.tone ?? 'text-[#f0fae8]')}>{r.value < 0 ? '−' : ''}{cop(Math.abs(r.value))}</span>
           </p>
         ))}
       </div>
@@ -56,8 +58,8 @@ export function FixedOutlook({ cash, projection }: Props) {
         <p className="flex items-start gap-2 text-xs text-red-300">
           <TriangleAlert size={14} className="flex-shrink-0 mt-0.5" />
           {shortfallOn
-            ? `Te quedarías sin fondos el ${longDate(shortfallOn)}: faltan ${formatCOP(-endBalance)} para cubrir todo.`
-            : `Los pagos alcanzan, pero no con lo reservado para ocasionales: faltan ${formatCOP(-endBalance)}.`}
+            ? `Te quedarías sin fondos el ${longDate(shortfallOn)}: faltan ${cop(-endBalance)} para cubrir todo.`
+            : `Los pagos alcanzan, pero no con lo reservado para ocasionales: faltan ${cop(-endBalance)}.`}
         </p>
       )}
     </div>

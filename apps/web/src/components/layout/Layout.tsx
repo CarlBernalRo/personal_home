@@ -19,6 +19,8 @@ import { useAutoDebits } from '@/hooks/useAutoDebits'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 import { PendingMovementsPrompt } from '@/components/pending/PendingMovementsPrompt'
 import { PendingMovementsLink } from '@/components/pending/PendingMovementsLink'
+import { PanelCollapseToggle } from '@/components/ui/PanelCollapseToggle'
+import { BalanceVisibilityToggle } from '@/components/ui/BalanceVisibilityToggle'
 import { usePendingMovements } from '@/hooks/usePendingMovements'
 
 interface NavItemDef {
@@ -297,8 +299,14 @@ export default function Layout() {
             </div>
           </div>
 
+          {/* View controls: collapse the left pane / hide sensitive balances, wherever the screen has them */}
+          <div className="flex w-full flex-col items-center justify-center gap-1.5 py-2.5 border-b border-white/[0.08] flex-shrink-0">
+            <PanelCollapseToggle variant="sidebar" />
+            <BalanceVisibilityToggle variant="sidebar" />
+          </div>
+
           {/* Navigation Links */}
-          <nav className={clsx('flex-1 overflow-y-auto py-4 space-y-1.5', collapsed ? 'px-2' : 'px-3')}>
+          <nav className={clsx('flex-1 overflow-y-auto flex flex-col justify-center py-4 space-y-1.5', collapsed ? 'px-2' : 'px-3')}>
             {/* Pendientes por confirmar lives next to the bell in the footer (same level), not in this list */}
             {navItems.filter((i) => i.to !== '/pendientes').map(({ to, label, icon: Icon, end, accent, glow, gradient }) => (
               <SideTip key={to} label={label}>
@@ -376,6 +384,7 @@ export default function Layout() {
             </div>
             <div className="flex items-center gap-2">
               <SessionTimer />
+              <BalanceVisibilityToggle variant="mobile" />
               <PendingMovementsLink />
               <NotificationBell variant="mobile" />
               <ProfileMenu variant="mobile" />

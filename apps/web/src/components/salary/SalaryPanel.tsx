@@ -17,8 +17,9 @@ import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import type { SalaryState } from '@/hooks/useSalary'
 import { useAuth } from '@/hooks/useAuth'
+import { useMoneyMask } from '@/hooks/useMoneyMask'
 import { TransferModal } from '@/components/fixed/TransferModal'
-import { cashOnHand, formatCOP, nextPayDate, salaryLedgers } from '@/shared'
+import { cashOnHand, nextPayDate, salaryLedgers } from '@/shared'
 
 interface Props {
   salary: SalaryState
@@ -50,7 +51,8 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
   const [extraAccount, setExtraAccount] = useState('')
   const [salaryFile, setSalaryFile] = useState<File | null>(null)
   const [extraFile, setExtraFile] = useState<File | null>(null)
-  const accountOptions = salary.accounts.map((a: any) => ({ value: a.id as string, label: `${a.name} · ${formatCOP(a.balance as number)}` }))
+  const cop = useMoneyMask()
+  const accountOptions = salary.accounts.map((a: any) => ({ value: a.id as string, label: `${a.name} · ${cop(a.balance as number)}` }))
 
   // Chained over all periods, so the current one starts with what the previous one left over
   const ledger = useMemo(
@@ -179,7 +181,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
                 </div>
               </div>
               <p className={clsx('text-xl sm:text-2xl font-bold font-mono tabular-nums flex-shrink-0', total < 0 ? 'text-red-400' : 'text-sky-200')}>
-                {formatCOP(total)}
+                {cop(total)}
               </p>
             </div>
             <div className="space-y-1.5 border-t border-white/10 pt-3 text-xs font-mono">
@@ -189,7 +191,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: (a.color as string) ?? '#52b69a' }} aria-hidden="true" />
                     <span className="truncate">{a.name as string}</span>
                   </span>
-                  <span className={clsx('font-bold', (a.balance as number) < 0 ? 'text-red-300' : 'text-[#f0fae8]')}>{formatCOP(a.balance as number)}</span>
+                  <span className={clsx('font-bold', (a.balance as number) < 0 ? 'text-red-300' : 'text-[#f0fae8]')}>{cop(a.balance as number)}</span>
                 </p>
               ))}
             </div>
@@ -222,7 +224,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
             </div>
           </div>
           <p className={clsx('text-xl sm:text-2xl font-bold font-mono tabular-nums flex-shrink-0', cash < 0 ? 'text-red-400' : 'text-sky-200')}>
-            {formatCOP(cash)}
+            {cop(cash)}
           </p>
         </div>
       )}
@@ -246,34 +248,47 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
             </button>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-            <div>
+          <div className="space-y-2">
+            {/* Row 1: everything that adds to the period */}
+            <div className="flex items-start justify-between gap-3">
+              <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-emerald-500/15 border border-emerald-400/40 text-[11px] font-bold text-emerald-300" aria-hidden="true">+</span>
+              <div className="flex flex-1 flex-wrap items-center justify-end gap-x-3 gap-y-1 text-right text-xs font-mono">
+                <span className="text-[#c7ccd1]">Sueldo <span className="font-bold text-[#f0fae8]">{cop(currentPeriod.amount)}</span></span>
+                {ledger.carryIn > 0 && (
+                  <span className="text-sky-300">Sobrante anterior <span className="font-bold">+{cop(ledger.carryIn)}</span></span>
+                )}
+                {ledger.extraTotal > 0 && (
+                  <span className="text-violet-300">Ingresos adicionales <span className="font-bold">+{cop(ledger.extraTotal)}</span></span>
+                )}
+              </div>
+            </div>
+
+            {/* Row 2: everything that comes out of it */}
+            <div className="flex items-start justify-between gap-3">
+              <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-red-500/15 border border-red-400/40 text-[11px] font-bold text-red-300" aria-hidden="true">−</span>
+              <div className="flex flex-1 flex-wrap items-center justify-end gap-x-3 gap-y-1 text-right text-xs font-mono">
+                {ledger.carryIn < 0 && (
+                  <span className="text-red-300">Faltante anterior <span className="font-bold">−{cop(Math.abs(ledger.carryIn))}</span></span>
+                )}
+                <span className="inline-flex items-center text-[#c7ccd1]"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.fixed }} aria-hidden="true" />Gastos fijos <span className="font-bold text-[#f0fae8] ml-1">−{cop(ledger.committed)}</span></span>
+                {ledger.additionalSpent > 0 && (
+                  <span className="inline-flex items-center text-[#c7ccd1]"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.additional }} aria-hidden="true" />Gastos adicionales <span className="font-bold text-[#f0fae8] ml-1">−{cop(ledger.additionalSpent)}</span></span>
+                )}
+                {ledger.variableSpent > 0 && (
+                  <span className="inline-flex items-center text-[#c7ccd1]"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.occasional }} aria-hidden="true" />Gastos ocasionales <span className="font-bold text-[#f0fae8] ml-1">−{cop(ledger.variableSpent)}</span></span>
+                )}
+                {ledger.variableReserved > 0 && (
+                  <span className="inline-flex items-center text-amber-300"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.reserved }} aria-hidden="true" />Reservado para ocasionales <span className="font-bold ml-1">−{cop(ledger.variableReserved)}</span></span>
+                )}
+              </div>
+            </div>
+
+            {/* Total */}
+            <div className="border-t border-white/10 pt-2">
               <p className="text-[10px] uppercase tracking-wider text-[#8a929a]"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5 align-middle" style={{ backgroundColor: SERIES.left }} aria-hidden="true" />Te queda</p>
               <p className={clsx('text-2xl font-bold font-mono tabular-nums', ledger.remaining < 0 ? 'text-red-400' : 'text-brand-300')}>
-                {formatCOP(ledger.remaining)}
+                {cop(ledger.remaining)}
               </p>
-            </div>
-            <div className="text-xs font-mono space-y-1.5 max-sm:border-t max-sm:border-white/10 max-sm:pt-3 sm:space-y-0.5 sm:text-right">
-              <p className="flex justify-between gap-3 sm:block text-[#c7ccd1]">Sueldo <span className="font-bold text-[#f0fae8]">{formatCOP(currentPeriod.amount)}</span></p>
-              {ledger.carryIn !== 0 && (
-                <p className={clsx('flex justify-between gap-3 sm:block', ledger.carryIn > 0 ? 'text-sky-300' : 'text-red-300')}>
-                  {ledger.carryIn > 0 ? 'Sobrante anterior' : 'Faltante anterior'}{' '}
-                  <span className="font-bold">{ledger.carryIn > 0 ? '+' : '−'}{formatCOP(Math.abs(ledger.carryIn))}</span>
-                </p>
-              )}
-              {ledger.extraTotal > 0 && (
-                <p className="flex justify-between gap-3 sm:block text-violet-300">Ingresos adicionales <span className="font-bold">+{formatCOP(ledger.extraTotal)}</span></p>
-              )}
-              <p className="flex justify-between gap-3 sm:block text-[#c7ccd1]"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5 align-middle" style={{ backgroundColor: SERIES.fixed }} aria-hidden="true" />Gastos fijos <span className="font-bold text-[#f0fae8]">−{formatCOP(ledger.committed)}</span></p>
-              {ledger.additionalSpent > 0 && (
-                <p className="flex justify-between gap-3 sm:block text-[#c7ccd1]"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5 align-middle" style={{ backgroundColor: SERIES.additional }} aria-hidden="true" />Gastos adicionales <span className="font-bold text-[#f0fae8]">−{formatCOP(ledger.additionalSpent)}</span></p>
-              )}
-              {ledger.variableSpent > 0 && (
-                <p className="flex justify-between gap-3 sm:block text-[#c7ccd1]"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5 align-middle" style={{ backgroundColor: SERIES.occasional }} aria-hidden="true" />Gastos ocasionales <span className="font-bold text-[#f0fae8]">−{formatCOP(ledger.variableSpent)}</span></p>
-              )}
-              {ledger.variableReserved > 0 && (
-                <p className="flex justify-between gap-3 sm:block text-amber-300"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5 align-middle" style={{ backgroundColor: SERIES.reserved }} aria-hidden="true" />Reservado para ocasionales <span className="font-bold">−{formatCOP(ledger.variableReserved)}</span></p>
-              )}
             </div>
           </div>
 
@@ -296,14 +311,14 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
                 />
                 <p className="text-[11px] text-[#8a929a]">
                   {available > 0
-                    ? `Ya está comprometido el ${Math.round((used / available) * 100)}% de tus ${formatCOP(available)} del período.`
+                    ? `Ya está comprometido el ${Math.round((used / available) * 100)}% de tus ${cop(available)} del período.`
                     : 'Aún no hay ingresos en este período.'}
                 </p>
               </div>
             )
           })()}
           {ledger.remaining < 0 && (
-            <p className="text-xs text-red-300">Los gastos de este período superan tus ingresos en {formatCOP(-ledger.remaining)}.</p>
+            <p className="text-xs text-red-300">Los gastos de este período superan tus ingresos en {cop(-ledger.remaining)}.</p>
           )}
 
           {periodExtras.length > 0 && (
@@ -315,7 +330,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
                   </span>
                   <span className="flex items-center gap-2 flex-shrink-0">
                     {x.attachmentId && <AttachmentButton compact attachmentId={x.attachmentId} />}
-                    <span className="font-mono text-emerald-300 whitespace-nowrap">+{formatCOP(x.amount)}</span>
+                    <span className="font-mono text-emerald-300 whitespace-nowrap">+{cop(x.amount)}</span>
                     <button
                       type="button"
                       onClick={async () => {

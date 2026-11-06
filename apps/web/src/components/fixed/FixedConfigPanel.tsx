@@ -6,7 +6,7 @@ import { clsx } from 'clsx'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { scheduledDate } from './ProgramExpenseModal'
-import { Plus, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, ChevronDown, ArrowUpDown } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
@@ -54,6 +54,23 @@ const everyLabel = (n: number) => (n === 12 ? 'cada año' : `cada ${n} meses`)
 
 const hasOpenAutoDebit = (fe: { autoDebit?: AutoDebitRange[] }) => (fe.autoDebit ?? []).some((r) => !r.until)
 
+type SortKey = 'day' | 'amount' | 'name'
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: 'day', label: 'Día de pago' },
+  { value: 'amount', label: 'Monto' },
+  { value: 'name', label: 'Nombre' },
+]
+/** Active ones first, then paused; within each, by the chosen column. */
+function sortByStatus<T>(items: T[], key: SortKey, paused: (x: T) => boolean, day: (x: T) => number, amount: (x: T) => number, name: (x: T) => string): T[] {
+  return [...items].sort((a, b) => {
+    const pa = paused(a) ? 1 : 0, pb = paused(b) ? 1 : 0
+    if (pa !== pb) return pa - pb
+    if (key === 'amount') return amount(b) - amount(a)
+    if (key === 'name') return name(a).localeCompare(name(b))
+    return day(a) - day(b)
+  })
+}
+
 interface Props {
   userId: string
   expenses: any[]
@@ -74,6 +91,13 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
   const myHouseholds = useMyHouseholds()
   const [ocasional, setOcasional] = useState<{ editing: VariableBudget | null } | null>(null)
   const [toggle, setToggle] = useState<{ kind: 'fixed' | 'ocasional'; item: any; action: 'deactivate' | 'activate' } | null>(null)
+  // Each category is a disclosure: closed by default, so the config doesn't dump everything on screen at once
+  const [openFixed, setOpenFixed] = useState(false)
+  const [openProgramados, setOpenProgramados] = useState(false)
+  const [openOcasional, setOpenOcasional] = useState(false)
+  const [fixedSort, setFixedSort] = useState<SortKey>('day')
+  const [programadosSort, setProgramadosSort] = useState<SortKey>('day')
+  const [ocasionalSort, setOcasionalSort] = useState<SortKey>('day')
 
   const currentMonth = monthKey(new Date())
 
@@ -182,21 +206,17 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
   }
 
   // The account an expense is configured to be paid from (automatic debits take the money from it)
-  const accountCell = (item: { accountId?: string }) => {
+  const accountChip = (item: { accountId?: string }) => {
     const acc = item.accountId ? salary.accounts.find((a: any) => a.id === item.accountId) : null
-    return (
-      <td className="hidden sm:table-cell px-2 py-2 text-xs">
-        {acc ? (
-          <span className="inline-flex items-center gap-1.5 text-[#c7ccd1]">
-            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: (acc.color as string) ?? '#52b69a' }} aria-hidden="true" />
-            {acc.name as string}
-          </span>
-        ) : item.accountId ? (
-          <span className="text-red-300">Cuenta eliminada</span>
-        ) : (
-          <span className="text-[#5f6a72]">Se elige al pagar</span>
-        )}
-      </td>
+    return acc ? (
+      <span className="inline-flex items-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: (acc.color as string) ?? '#52b69a' }} aria-hidden="true" />
+        {acc.name as string}
+      </span>
+    ) : item.accountId ? (
+      <span className="text-red-300">Cuenta eliminada</span>
+    ) : (
+      <span className="text-[#5f6a72]">Se elige al pagar</span>
     )
   }
 
@@ -240,33 +260,35 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
     }
   }
 
-  /** Status switch cell; shows when a deactivation is (or will be) in effect. */
-  const activeCell = (kind: 'fixed' | 'ocasional', item: any) => {
+  /** Status switch; shows when a deactivation is (or will be) in effect. */
+  const statusSwitch = (kind: 'fixed' | 'ocasional', item: any) => {
     const open = openRange(item.pauses)
     const on = !open
     return (
-      <td className="px-2 py-2 text-center">
+      <div className="flex flex-col items-center gap-0.5">
         <button
           type="button"
           role="switch"
           aria-checked={on}
           aria-label={`${on ? 'Desactivar' : 'Activar'} ${item.concept}`}
           onClick={() => askToggle(kind, item)}
-          className={clsx('relative inline-flex h-5 w-9 items-center rounded-full border transition', on ? 'bg-brand-500/40 border-brand-400/60' : 'bg-white/5 border-white/20')}
+          className={clsx('relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full border transition', on ? 'bg-brand-500/40 border-brand-400/60' : 'bg-white/5 border-white/20')}
         >
           <span className={clsx('inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform', on ? 'translate-x-[18px]' : 'translate-x-[2px]')} />
         </button>
         {open && !item.oneTime && (
-          <p className="text-[9px] text-amber-300 mt-0.5 whitespace-nowrap">
+          <p className="text-[9px] text-amber-300 whitespace-nowrap">
             {open.from <= currentMonth ? `Inactivo desde ${open.from}` : `Se desactiva ${open.from}`}
           </p>
         )}
-      </td>
+      </div>
     )
   }
   // What the fixed expenses cost per month on average: one paid every N months counts as 1/N of its bill
   const fixedOnly = expenses.filter((e) => e.frequency !== 'ocasional' && !e.oneTime)
-  const scheduledCount = expenses.filter((e) => e.oneTime).length
+  // A scheduled one-off payment (Programar gasto) is neither fijo nor ocasional: it lives in the same
+  // collection (it reuses the due-date/payment engine) but gets its own category here.
+  const programados = expenses.filter((e) => e.oneTime)
   const total = fixedOnly.reduce((s, e) => s + e.estimatedAmount / (e.everyMonths ?? 1), 0)
   const hasSpread = fixedOnly.some((e) => (e.everyMonths ?? 1) > 1)
   const ocasionales = salary.budgets.filter((b) => b.active)
@@ -281,7 +303,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-xs text-[#9aa4ac]">
-          {fixedOnly.length} fijos{scheduledCount > 0 ? ` · ${scheduledCount} programado${scheduledCount === 1 ? '' : 's'}` : ''} · {hasSpread ? 'equivalente mensual' : 'estimado mensual'}{' '}
+          {fixedOnly.length} fijos{programados.length > 0 ? ` · ${programados.length} programado${programados.length === 1 ? '' : 's'}` : ''} · {hasSpread ? 'equivalente mensual' : 'estimado mensual'}{' '}
           <span className="font-mono font-bold text-[#f0fae8]">{formatCOP(Math.round(total))}</span>
           {hasSpread && <span className="text-[#8a929a]"> (los que se pagan cada varios meses se prorratean)</span>}
           {ocasionales.length > 0 && (
@@ -311,7 +333,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
           <p className="text-xs text-[#8a929a] mt-1">Crea un gasto fijo u ocasional para empezar.</p>
         </div>
       ) : (
-        <>
+        <div className="space-y-6">
         {selected.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-2 notch-sm border border-red-500/30 bg-red-500/10 px-4 py-2.5" role="region" aria-label="Acciones sobre la selección">
             <p className="text-xs font-semibold text-red-200">
@@ -325,117 +347,305 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
             </div>
           </div>
         )}
-        <div className="bg-[#0a1f2f] border border-white/10 notch-sm overflow-x-auto">
-          <table className="w-full text-xs sm:min-w-[900px]">
-            <thead>
-              <tr className="bg-[#0d263a] text-[10px] uppercase tracking-wider text-[#8a929a]">
-                <th className="w-10 pl-3 py-2">
-                  <input
-                    type="checkbox"
-                    aria-label="Seleccionar todos"
-                    checked={selected.length > 0 && selected.length === expenses.length + ocasionales.length}
-                    ref={(el) => { if (el) el.indeterminate = selected.length > 0 && selected.length < expenses.length + ocasionales.length }}
-                    onChange={(e) => setSelected(e.target.checked ? [...expenses.map((f) => `fixed|${f.id}`), ...ocasionales.map((b) => `oc|${b.id}`)] : [])}
-                    className="cursor-pointer"
-                  />
-                </th>
-                <th className="text-left px-3 py-2">Concepto</th>
-                <th className="hidden sm:table-cell text-left px-2 py-2">Categoría</th>
-                <th className="text-right px-2 py-2">Estimado</th>
-                <th className="text-center px-2 py-2">Día</th>
-                <th className="hidden sm:table-cell text-center px-2 py-2">Tipo</th>
-                <th className="hidden sm:table-cell text-left px-2 py-2">Cuenta</th>
-                <th className="text-center px-2 py-2">Activo</th>
-                <th className="hidden sm:table-cell text-center px-2 py-2">Desde</th>
-                <th className="w-20" />
-              </tr>
-            </thead>
-            <tbody>
-              {[...expenses]
-                .sort((a, b) => (a.paymentDay ?? 99) - (b.paymentDay ?? 99))
-                .map((fe) => {
-                  const cat = FIXED_EXPENSE_CATEGORIES.find((c) => c.id === fe.category)
-                  return (
-                    <tr key={fe.id} className={clsx('border-t border-white/[0.06] hover:bg-white/[0.03]', switchOff(fe) && !fe.oneTime && 'opacity-60')}>
-                      <td className="w-10 pl-3 py-2">
-                        <input type="checkbox" aria-label={`Seleccionar ${fe.concept}`} checked={selected.includes(`fixed|${fe.id}`)} onChange={() => toggleRow(`fixed|${fe.id}`)} className="cursor-pointer" />
-                      </td>
-                      <td className="px-3 py-2">
-                        <p className="font-semibold text-[#f0fae8]">{fe.concept}</p>
-                        {fe.notes && <p className="text-[10px] text-[#8a929a] truncate max-w-[220px]">{fe.notes}</p>}
-                      </td>
-                      <td className="hidden sm:table-cell px-2 py-2 text-[#c7ccd1]"><span className="inline-flex items-center gap-1.5"><AppIcon name={cat?.icon} size={13} className="text-brand-300" /> {cat?.label}</span></td>
-                      <td className="px-2 py-2 text-right font-mono tabular-nums">{formatCOP(fe.estimatedAmount)}</td>
-                      <td className="px-2 py-2 text-center font-mono">{fe.paymentDay ?? '—'}</td>
-                      <td className="hidden sm:table-cell px-2 py-2 text-center text-[10px] text-[#9aa4ac]">
-                        {fe.oneTime ? `Programado · ${format(scheduledDate(fe), "d 'de' MMM yyyy", { locale: es })}` : fe.frequency === 'ocasional' ? 'Ocasional' : fe.isVariable ? 'Fijo · monto variable' : 'Fijo'}{(fe.everyMonths ?? 1) > 1 ? ` · ${everyLabel(fe.everyMonths)}` : ''}{hasOpenAutoDebit(fe) ? ' · automático' : ''}
-                      </td>
-                      {accountCell(fe)}
-                      {activeCell('fixed', fe)}
-                      <td className="hidden sm:table-cell px-2 py-2 text-center font-mono text-[#9aa4ac]">{startMonthOf(fe, currentMonth)}</td>
-                      <td className="px-2 py-2">
-                        <div className="flex justify-end gap-1">
-                          <button onClick={() => openEdit(fe)} title="Editar" className="p-1.5 rounded-lg text-[#8a929a] hover:text-white hover:bg-white/10 transition">
-                            <Pencil size={14} />
-                          </button>
-                          <button onClick={() => handleDelete(fe)} title="Eliminar" aria-label={`Eliminar ${fe.concept}`} className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition">
-                            <Trash2 size={14} />
-                          </button>
+
+        {/* ── Fijos ──────────────────────────────────────────────────────── */}
+        <div className="space-y-2.5">
+          <div className="flex items-stretch rounded-xl border border-white/10 bg-[#0d263a] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setOpenFixed((v) => !v)}
+              aria-expanded={openFixed}
+              className="group flex min-w-0 flex-1 items-center gap-2.5 px-4 py-3 text-left transition hover:bg-white/5"
+            >
+              <span className="font-pixel text-[10px] uppercase tracking-widest text-brand-400">Gastos fijos</span>
+              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-[#c7ccd1]">{fixedOnly.length}</span>
+              <span className="ml-auto flex items-center gap-1.5 text-[10px] font-semibold text-[#6f7a83] group-hover:text-brand-300">
+                {openFixed ? 'Ocultar' : 'Ver configuración'}
+                <ChevronDown size={15} className={clsx('transition-transform', openFixed && 'rotate-180')} aria-hidden="true" />
+              </span>
+            </button>
+            {openFixed && fixedOnly.length > 1 && (
+              <label className="relative flex flex-shrink-0 items-center gap-1.5 border-l border-white/10 px-3 text-[10px] font-semibold text-[#9aa4ac] cursor-pointer transition hover:bg-white/5 hover:text-brand-300">
+                <ArrowUpDown size={12} aria-hidden="true" />
+                {SORT_OPTIONS.find((o) => o.value === fixedSort)?.label}
+                <select
+                  value={fixedSort}
+                  onChange={(e) => setFixedSort(e.target.value as SortKey)}
+                  aria-label="Ordenar gastos fijos"
+                  className="absolute inset-0 w-full cursor-pointer opacity-0"
+                >
+                  {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
+            )}
+          </div>
+
+          {openFixed && (fixedOnly.length === 0 ? (
+            <p className="text-xs text-[#8a929a] notch-sm bg-[#0a1f2f] border border-white/10 px-4 py-3">Sin gastos fijos configurados.</p>
+          ) : (
+            <>
+              <label className="flex items-center gap-2 px-1 text-[10px] font-semibold text-[#8a929a] cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  aria-label="Seleccionar todos los fijos"
+                  checked={selected.filter((k) => fixedOnly.some((f) => k === `fixed|${f.id}`)).length > 0 && selected.filter((k) => fixedOnly.some((f) => k === `fixed|${f.id}`)).length === fixedOnly.length}
+                  ref={(el) => { if (el) el.indeterminate = selected.some((k) => fixedOnly.some((f) => k === `fixed|${f.id}`)) && selected.filter((k) => fixedOnly.some((f) => k === `fixed|${f.id}`)).length < fixedOnly.length }}
+                  onChange={(e) => setSelected((prev) => {
+                    const rest = prev.filter((k) => !fixedOnly.some((f) => k === `fixed|${f.id}`))
+                    return e.target.checked ? [...rest, ...fixedOnly.map((f) => `fixed|${f.id}`)] : rest
+                  })}
+                  className="cursor-pointer"
+                />
+                Seleccionar todos
+              </label>
+              <div className="space-y-2">
+                {sortByStatus(fixedOnly, fixedSort, (fe) => switchOff(fe), (fe) => fe.paymentDay ?? 99, (fe) => fe.estimatedAmount, (fe) => fe.concept)
+                  .map((fe) => {
+                    const cat = FIXED_EXPENSE_CATEGORIES.find((c) => c.id === fe.category)
+                    return (
+                      <div key={fe.id} className={clsx('flex items-start gap-3 notch-sm border border-white/10 bg-[#0a1f2f] p-3 transition hover:border-white/20', switchOff(fe) && 'opacity-60')}>
+                        <input type="checkbox" aria-label={`Seleccionar ${fe.concept}`} checked={selected.includes(`fixed|${fe.id}`)} onChange={() => toggleRow(`fixed|${fe.id}`)} className="mt-1 flex-shrink-0 cursor-pointer" />
+                        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center notch-sm border border-brand-500/25 bg-brand-500/10 text-brand-300" aria-hidden="true">
+                          <AppIcon name={cat?.icon} size={16} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="font-semibold text-sm text-[#f0fae8] break-words">{fe.concept}</p>
+                            <p className="flex-shrink-0 font-mono text-sm font-bold tabular-nums text-[#f0fae8]">{formatCOP(fe.estimatedAmount)}</p>
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[#9aa4ac]">
+                            <span className="inline-flex items-center gap-1">{cat?.label}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>Día {fe.paymentDay ?? '—'}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>
+                              {fe.isVariable ? 'Fijo · monto variable' : 'Fijo'}
+                              {(fe.everyMonths ?? 1) > 1 ? ` · ${everyLabel(fe.everyMonths)}` : ''}{hasOpenAutoDebit(fe) ? ' · automático' : ''}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            {accountChip(fe)}
+                            <span aria-hidden="true">·</span>
+                            <span>Desde {startMonthOf(fe, currentMonth)}</span>
+                          </div>
+                          {fe.notes && <p className="mt-1 text-[10px] text-[#8a929a] break-words">{fe.notes}</p>}
                         </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              {/* Occasional expenses: regular, but with no exact day or amount */}
-              {[...ocasionales]
-                .sort((a, b) => (a.paymentDay ?? 99) - (b.paymentDay ?? 99))
-                .map((b) => {
-                  const cat = PERSONAL_CATEGORIES.find((c) => c.id === b.category)
-                  return (
-                    <tr key={b.id} className={clsx('border-t border-white/[0.06] hover:bg-white/[0.03]', switchOff(b) && 'opacity-60')}>
-                      <td className="w-10 pl-3 py-2">
-                        <input type="checkbox" aria-label={`Seleccionar ${b.concept}`} checked={selected.includes(`oc|${b.id}`)} onChange={() => toggleRow(`oc|${b.id}`)} className="cursor-pointer" />
-                      </td>
-                      <td className="px-3 py-2">
-                        <p className="font-semibold text-[#f0fae8]">{b.concept}</p>
-                        {b.notes && <p className="text-[10px] text-[#8a929a] truncate max-w-[220px]">{b.notes}</p>}
-                      </td>
-                      <td className="hidden sm:table-cell px-2 py-2 text-[#c7ccd1]"><span className="inline-flex items-center gap-1.5"><AppIcon name={cat?.icon} size={13} className="text-brand-300" /> {cat?.label}</span></td>
-                      <td className="px-2 py-2 text-right font-mono tabular-nums">
-                        {b.source === 'household-debt' ? formatCOP(owedNowOf(b)) : `~${formatCOP(b.amount)}`}
-                      </td>
-                      <td className="px-2 py-2 text-center font-mono">{b.paymentDay ?? '—'}</td>
-                      <td className="hidden sm:table-cell px-2 py-2 text-center text-[10px] text-amber-200">
-                        {b.source === 'household-debt' ? `Ocasional · deuda de ${scopeLabel(b)}` : 'Ocasional · aprox. por período'}
-                      </td>
-                      {accountCell(b)}
-                      {activeCell('ocasional', b)}
-                      <td className="hidden sm:table-cell px-2 py-2 text-center font-mono text-[#9aa4ac]">—</td>
-                      <td className="px-2 py-2">
-                        <div className="flex justify-end gap-1">
-                          <button onClick={() => setOcasional({ editing: b })} title="Editar" className="p-1.5 rounded-lg text-[#8a929a] hover:text-white hover:bg-white/10 transition">
-                            <Pencil size={14} />
-                          </button>
-                          <button
-                            onClick={async () => {
-                              if (await ask(`¿Eliminar "${b.concept}"? Los gastos ya registrados se conservan.`, { title: 'Eliminar gasto ocasional' })) {
-                                salary.removeBudget(b.id).catch(() => showToast('No se pudo eliminar', 'error'))
-                              }
-                            }}
-                            title="Eliminar"
-                            className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                        <div className="flex flex-shrink-0 flex-col items-end gap-1.5">
+                          {statusSwitch('fixed', fe)}
+                          <div className="flex gap-1">
+                            <button onClick={() => openEdit(fe)} title="Editar" className="p-1.5 rounded-lg text-[#8a929a] hover:text-white hover:bg-white/10 transition">
+                              <Pencil size={14} />
+                            </button>
+                            <button onClick={() => handleDelete(fe)} title="Eliminar" aria-label={`Eliminar ${fe.concept}`} className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-            </tbody>
-          </table>
+                      </div>
+                    )
+                  })}
+              </div>
+            </>
+          ))}
         </div>
-        </>
+
+        {/* ── Programados ────────────────────────────────────────────────── */}
+        <div className="space-y-2.5">
+          <div className="flex items-stretch rounded-xl border border-white/10 bg-[#0d263a] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setOpenProgramados((v) => !v)}
+              aria-expanded={openProgramados}
+              className="group flex min-w-0 flex-1 items-center gap-2.5 px-4 py-3 text-left transition hover:bg-white/5"
+            >
+              <span className="font-pixel text-[10px] uppercase tracking-widest text-brand-400">Gastos programados</span>
+              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-[#c7ccd1]">{programados.length}</span>
+              <span className="ml-auto flex items-center gap-1.5 text-[10px] font-semibold text-[#6f7a83] group-hover:text-brand-300">
+                {openProgramados ? 'Ocultar' : 'Ver configuración'}
+                <ChevronDown size={15} className={clsx('transition-transform', openProgramados && 'rotate-180')} aria-hidden="true" />
+              </span>
+            </button>
+            {openProgramados && programados.length > 1 && (
+              <label className="relative flex flex-shrink-0 items-center gap-1.5 border-l border-white/10 px-3 text-[10px] font-semibold text-[#9aa4ac] cursor-pointer transition hover:bg-white/5 hover:text-brand-300">
+                <ArrowUpDown size={12} aria-hidden="true" />
+                {SORT_OPTIONS.find((o) => o.value === programadosSort)?.label}
+                <select
+                  value={programadosSort}
+                  onChange={(e) => setProgramadosSort(e.target.value as SortKey)}
+                  aria-label="Ordenar gastos programados"
+                  className="absolute inset-0 w-full cursor-pointer opacity-0"
+                >
+                  {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
+            )}
+          </div>
+
+          {openProgramados && (programados.length === 0 ? (
+            <p className="text-xs text-[#8a929a] notch-sm bg-[#0a1f2f] border border-white/10 px-4 py-3">Sin gastos programados. Usa "Programar gasto" para un pago único, como una matrícula o una cuota anual.</p>
+          ) : (
+            <>
+              <label className="flex items-center gap-2 px-1 text-[10px] font-semibold text-[#8a929a] cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  aria-label="Seleccionar todos los programados"
+                  checked={selected.filter((k) => programados.some((f) => k === `fixed|${f.id}`)).length > 0 && selected.filter((k) => programados.some((f) => k === `fixed|${f.id}`)).length === programados.length}
+                  ref={(el) => { if (el) el.indeterminate = selected.some((k) => programados.some((f) => k === `fixed|${f.id}`)) && selected.filter((k) => programados.some((f) => k === `fixed|${f.id}`)).length < programados.length }}
+                  onChange={(e) => setSelected((prev) => {
+                    const rest = prev.filter((k) => !programados.some((f) => k === `fixed|${f.id}`))
+                    return e.target.checked ? [...rest, ...programados.map((f) => `fixed|${f.id}`)] : rest
+                  })}
+                  className="cursor-pointer"
+                />
+                Seleccionar todos
+              </label>
+              <div className="space-y-2">
+                {sortByStatus(programados, programadosSort, () => false, (fe) => scheduledDate(fe).getTime(), (fe) => fe.estimatedAmount, (fe) => fe.concept)
+                  .map((fe) => {
+                    const cat = FIXED_EXPENSE_CATEGORIES.find((c) => c.id === fe.category)
+                    return (
+                      <div key={fe.id} className="flex items-start gap-3 notch-sm border border-white/10 bg-[#0a1f2f] p-3 transition hover:border-white/20">
+                        <input type="checkbox" aria-label={`Seleccionar ${fe.concept}`} checked={selected.includes(`fixed|${fe.id}`)} onChange={() => toggleRow(`fixed|${fe.id}`)} className="mt-1 flex-shrink-0 cursor-pointer" />
+                        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center notch-sm border border-violet-400/25 bg-violet-400/10 text-violet-300" aria-hidden="true">
+                          <AppIcon name={cat?.icon} size={16} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="font-semibold text-sm text-[#f0fae8] break-words">{fe.concept}</p>
+                            <p className="flex-shrink-0 font-mono text-sm font-bold tabular-nums text-[#f0fae8]">{formatCOP(fe.estimatedAmount)}</p>
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[#9aa4ac]">
+                            <span>{cat?.label}</span>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-violet-200">Programado · {format(scheduledDate(fe), "d 'de' MMM yyyy", { locale: es })}</span>
+                            {fe.isVariable && (<><span aria-hidden="true">·</span><span>Monto variable</span></>)}
+                            <span aria-hidden="true">·</span>
+                            {accountChip(fe)}
+                          </div>
+                          {fe.notes && <p className="mt-1 text-[10px] text-[#8a929a] break-words">{fe.notes}</p>}
+                        </div>
+                        <div className="flex flex-shrink-0 flex-col items-end gap-1.5">
+                          <div className="flex gap-1">
+                            <button onClick={() => openEdit(fe)} title="Editar" className="p-1.5 rounded-lg text-[#8a929a] hover:text-white hover:bg-white/10 transition">
+                              <Pencil size={14} />
+                            </button>
+                            <button onClick={() => handleDelete(fe)} title="Eliminar" aria-label={`Eliminar ${fe.concept}`} className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+              </div>
+            </>
+          ))}
+        </div>
+
+        {/* ── Ocasionales ────────────────────────────────────────────────── */}
+        <div className="space-y-2.5">
+          <div className="flex items-stretch rounded-xl border border-white/10 bg-[#0d263a] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setOpenOcasional((v) => !v)}
+              aria-expanded={openOcasional}
+              className="group flex min-w-0 flex-1 items-center gap-2.5 px-4 py-3 text-left transition hover:bg-white/5"
+            >
+              <span className="font-pixel text-[10px] uppercase tracking-widest text-brand-400">Gastos ocasionales</span>
+              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-[#c7ccd1]">{ocasionales.length}</span>
+              <span className="ml-auto flex items-center gap-1.5 text-[10px] font-semibold text-[#6f7a83] group-hover:text-brand-300">
+                {openOcasional ? 'Ocultar' : 'Ver configuración'}
+                <ChevronDown size={15} className={clsx('transition-transform', openOcasional && 'rotate-180')} aria-hidden="true" />
+              </span>
+            </button>
+            {openOcasional && ocasionales.length > 1 && (
+              <label className="relative flex flex-shrink-0 items-center gap-1.5 border-l border-white/10 px-3 text-[10px] font-semibold text-[#9aa4ac] cursor-pointer transition hover:bg-white/5 hover:text-brand-300">
+                <ArrowUpDown size={12} aria-hidden="true" />
+                {SORT_OPTIONS.find((o) => o.value === ocasionalSort)?.label}
+                <select
+                  value={ocasionalSort}
+                  onChange={(e) => setOcasionalSort(e.target.value as SortKey)}
+                  aria-label="Ordenar gastos ocasionales"
+                  className="absolute inset-0 w-full cursor-pointer opacity-0"
+                >
+                  {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
+            )}
+          </div>
+
+          {openOcasional && (ocasionales.length === 0 ? (
+            <p className="text-xs text-[#8a929a] notch-sm bg-[#0a1f2f] border border-white/10 px-4 py-3">Sin gastos ocasionales configurados.</p>
+          ) : (
+            <>
+              <label className="flex items-center gap-2 px-1 text-[10px] font-semibold text-[#8a929a] cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  aria-label="Seleccionar todos los ocasionales"
+                  checked={selected.filter((k) => k.startsWith('oc|')).length > 0 && selected.filter((k) => k.startsWith('oc|')).length === ocasionales.length}
+                  ref={(el) => { if (el) el.indeterminate = selected.some((k) => k.startsWith('oc|')) && selected.filter((k) => k.startsWith('oc|')).length < ocasionales.length }}
+                  onChange={(e) => setSelected((prev) => {
+                    const rest = prev.filter((k) => !k.startsWith('oc|'))
+                    return e.target.checked ? [...rest, ...ocasionales.map((b) => `oc|${b.id}`)] : rest
+                  })}
+                  className="cursor-pointer"
+                />
+                Seleccionar todos
+              </label>
+              <div className="space-y-2">
+                {sortByStatus(ocasionales, ocasionalSort, (b) => switchOff(b), (b) => b.paymentDay ?? 99, (b) => (b.source === 'household-debt' ? owedNowOf(b) : b.amount), (b) => b.concept)
+                  .map((b) => {
+                    const cat = PERSONAL_CATEGORIES.find((c) => c.id === b.category)
+                    return (
+                      <div key={b.id} className={clsx('flex items-start gap-3 notch-sm border border-white/10 bg-[#0a1f2f] p-3 transition hover:border-white/20', switchOff(b) && 'opacity-60')}>
+                        <input type="checkbox" aria-label={`Seleccionar ${b.concept}`} checked={selected.includes(`oc|${b.id}`)} onChange={() => toggleRow(`oc|${b.id}`)} className="mt-1 flex-shrink-0 cursor-pointer" />
+                        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center notch-sm border border-amber-400/25 bg-amber-400/10 text-amber-300" aria-hidden="true">
+                          <AppIcon name={cat?.icon} size={16} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="font-semibold text-sm text-[#f0fae8] break-words">{b.concept}</p>
+                            <p className="flex-shrink-0 font-mono text-sm font-bold tabular-nums text-[#f0fae8]">
+                              {b.source === 'household-debt' ? formatCOP(owedNowOf(b)) : `~${formatCOP(b.amount)}`}
+                            </p>
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[#9aa4ac]">
+                            <span>{cat?.label}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>Día {b.paymentDay ?? '—'}</span>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-amber-200">{b.source === 'household-debt' ? `Ocasional · deuda de ${scopeLabel(b)}` : 'Ocasional · aprox. por período'}</span>
+                            <span aria-hidden="true">·</span>
+                            {accountChip(b)}
+                          </div>
+                          {b.notes && <p className="mt-1 text-[10px] text-[#8a929a] break-words">{b.notes}</p>}
+                        </div>
+                        <div className="flex flex-shrink-0 flex-col items-end gap-1.5">
+                          {statusSwitch('ocasional', b)}
+                          <div className="flex gap-1">
+                            <button onClick={() => setOcasional({ editing: b })} title="Editar" className="p-1.5 rounded-lg text-[#8a929a] hover:text-white hover:bg-white/10 transition">
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              onClick={async () => {
+                                if (await ask(`¿Eliminar "${b.concept}"? Los gastos ya registrados se conservan.`, { title: 'Eliminar gasto ocasional' })) {
+                                  salary.removeBudget(b.id).catch(() => showToast('No se pudo eliminar', 'error'))
+                                }
+                              }}
+                              title="Eliminar"
+                              className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+              </div>
+            </>
+          ))}
+        </div>
+        </div>
       )}
 
       <ActiveToggleModal
@@ -451,55 +661,81 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Editar gasto fijo' : 'Nuevo gasto fijo'}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          {/* Qué es */}
           <Input label="Concepto" placeholder="ej. Arriendo, Internet, Plan móvil…" {...form.register('concept')} error={errors.concept?.message} />
-          <Input label="Monto estimado (COP)" money placeholder="0" {...form.register('estimatedAmount')} error={errors.estimatedAmount?.message} />
-          <Input label="Día de pago del mes (1-31, opcional)" type="number" placeholder="ej. 5" {...form.register('paymentDay')} error={errors.paymentDay?.message as string | undefined} />
           <Select label="Categoría" options={CATEGORY_OPTIONS} {...form.register('category')} />
-          <Select
-            label="Frecuencia de pago"
-            options={FREQUENCY_OPTIONS}
-            {...form.register('everyMonths')}
-          />
-          <Input
-            label={everyMonths > 1 && !editing ? 'Mes de la primera factura' : 'Se debe pagar desde (mes)'}
-            type="month"
-            {...form.register('startMonth')}
-            error={errors.startMonth?.message}
-          />
-          <p className="text-[10px] text-[#8a929a] -mt-2">
-            {everyMonths > 1 && !editing
-              ? 'Pon el mes de la primera factura que todavía falta pagar. Si ya pagaste la de este mes, elige el mes de la siguiente.'
-              : 'Los meses desde este y hasta hoy que no estén pagados cuentan como pendientes: si ya pagaste, empieza en el mes que sigue.'}
-          </p>
-          {editing && everyMonths > 1 && (
-            <div className="space-y-1">
-              <Input label="Mes de una de sus facturas" type="month" {...form.register('cycleStart')} />
-              <p className="text-[10px] text-[#8a929a]">Las demás caen cada {everyMonths} meses a partir de ese mes. El cambio de frecuencia aplica desde el mes actual; los meses anteriores conservan la que tenían.</p>
-            </div>
-          )}
-          <label className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
-            <input type="checkbox" className="cursor-pointer" {...form.register('autoDebit')} />
-            <span>
-              Se debita automáticamente de mi cuenta
-              <span className="block text-[10px] text-[#8a929a]">Llegado el día de pago se marca como pagado solo.</span>
-            </span>
-          </label>
-          <label className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
-            <input type="checkbox" className="cursor-pointer" {...form.register('isVariable')} />
-            El monto cambia cada mes (ej. servicios públicos)
-          </label>
-          {salary.accounts.length > 0 && (
+
+          {/* Cuánto */}
+          <div className="space-y-4 pt-1 border-t border-white/10">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-[#6f7a83] -mb-1 pt-3">Cuánto</p>
+            <Input label="Monto estimado (COP)" money placeholder="0" {...form.register('estimatedAmount')} error={errors.estimatedAmount?.message} />
+            <label className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
+              <input type="checkbox" className="cursor-pointer" {...form.register('isVariable')} />
+              El monto cambia cada mes (ej. servicios públicos)
+            </label>
+          </div>
+
+          {/* Cuándo */}
+          <div className="space-y-4 pt-1 border-t border-white/10">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-[#6f7a83] -mb-1 pt-3">Cuándo</p>
+            <Input label="Día de pago del mes (1-31, opcional)" type="number" placeholder="ej. 5" {...form.register('paymentDay')} error={errors.paymentDay?.message as string | undefined} />
             <Select
-              label="Cuenta de la que se paga"
-              options={[
-                { value: '', label: 'Elegirla al pagar' },
-                ...salary.accounts.map((a: any) => ({ value: a.id as string, label: a.name as string })),
-              ]}
-              {...form.register('accountId')}
+              label="Frecuencia de pago"
+              options={FREQUENCY_OPTIONS}
+              {...form.register('everyMonths')}
             />
-          )}
-          <p className="text-[10px] text-[#8a929a] -mt-2">Se ofrece al registrar el pago, y de ahí sale el dinero cuando es un débito automático (si no eliges una, de la Cuenta default).</p>
-          <Input label="Notas" placeholder="Opcional (ej. número de cuenta)" {...form.register('notes')} />
+            <div className="space-y-1">
+              <Input
+                label={everyMonths > 1 && !editing ? 'Mes de la primera factura' : 'Se debe pagar desde (mes)'}
+                type="month"
+                {...form.register('startMonth')}
+                error={errors.startMonth?.message}
+              />
+              <p className="text-[10px] text-[#8a929a]">
+                {everyMonths > 1 && !editing
+                  ? 'Pon el mes de la primera factura que todavía falta pagar. Si ya pagaste la de este mes, elige el mes de la siguiente.'
+                  : 'Los meses desde este y hasta hoy que no estén pagados cuentan como pendientes: si ya pagaste, empieza en el mes que sigue.'}
+              </p>
+            </div>
+            {editing && everyMonths > 1 && (
+              <div className="space-y-1">
+                <Input label="Mes de una de sus facturas" type="month" {...form.register('cycleStart')} />
+                <p className="text-[10px] text-[#8a929a]">Las demás caen cada {everyMonths} meses a partir de ese mes. El cambio de frecuencia aplica desde el mes actual; los meses anteriores conservan la que tenían.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Cómo se paga */}
+          <div className="space-y-4 pt-1 border-t border-white/10">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-[#6f7a83] -mb-1 pt-3">Cómo se paga</p>
+            <label className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
+              <input type="checkbox" className="cursor-pointer" {...form.register('autoDebit')} />
+              <span>
+                Se debita automáticamente de mi cuenta
+                <span className="block text-[10px] text-[#8a929a]">Llegado el día de pago se marca como pagado solo.</span>
+              </span>
+            </label>
+            {salary.accounts.length > 0 && (
+              <div className="space-y-1">
+                <Select
+                  label="Cuenta de la que se paga"
+                  options={[
+                    { value: '', label: 'Elegirla al pagar' },
+                    ...salary.accounts.map((a: any) => ({ value: a.id as string, label: a.name as string })),
+                  ]}
+                  {...form.register('accountId')}
+                />
+                <p className="text-[10px] text-[#8a929a]">Se ofrece al registrar el pago, y de ahí sale el dinero cuando es un débito automático (si no eliges una, de la Cuenta default).</p>
+              </div>
+            )}
+          </div>
+
+          {/* Notas */}
+          <div className="pt-1 border-t border-white/10">
+            <div className="pt-3">
+              <Input label="Notas" placeholder="Opcional (ej. número de cuenta)" {...form.register('notes')} />
+            </div>
+          </div>
 
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setModalOpen(false)}>Cancelar</Button>

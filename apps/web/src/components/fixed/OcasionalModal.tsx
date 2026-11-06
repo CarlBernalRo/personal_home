@@ -83,55 +83,76 @@ export function OcasionalModal({ open, editing, onClose, salary }: Props) {
   return (
     <Modal open={open} onClose={onClose} title={editing ? 'Editar gasto ocasional' : 'Nuevo gasto ocasional'}>
       <form onSubmit={onSave} className="space-y-4">
+        {/* Qué es */}
         <Input label="Concepto" placeholder="ej. Gasolina" value={form.concept} onChange={(e) => { setForm({ ...form, concept: e.target.value }); setError(null) }} />
-        <label className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
-          <input type="checkbox" className="cursor-pointer" checked={form.linked} onChange={(e) => { setForm({ ...form, linked: e.target.checked }); setError(null) }} />
-          <span>
-            Es lo que debo en mis hogares
-            <span className="block text-[10px] text-[#8a929a]">El valor se calcula con lo que debes en los hogares que elijas, y tus abonos ahí cuentan como pagos. Las deudas con fecha acordada se pintan en esa fecha.</span>
-          </span>
-        </label>
-        {form.linked && (
-          <div className="rounded-xl border border-white/10 bg-[#0d263a] p-3 space-y-2">
-            <p className="text-xs font-semibold text-[#c7ccd1]">¿De qué hogares?</p>
-            {([['all', 'Todos los hogares asociados'], ['specific', 'Hogares específicos']] as const).map(([value, label]) => (
-              <label key={value} className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
-                {/* either/or: choosing one unticks the other, and the chosen one can't be unticked */}
-                <input type="checkbox" className="cursor-pointer" checked={form.scope === value} onChange={() => { setForm({ ...form, scope: value }); setError(null) }} />
-                {label}
-              </label>
-            ))}
-            {form.scope === 'specific' && (
-              <div className="pl-6 space-y-1.5">
-                {myHouseholds.length === 0 && <p className="text-[11px] text-[#8a929a]">No encontré hogares asociados a tu cuenta.</p>}
-                {myHouseholds.map((h) => (
-                  <label key={h.id} className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      className="cursor-pointer"
-                      checked={form.householdIds.includes(h.id)}
-                      onChange={() => {
-                        setError(null)
-                        setForm({ ...form, householdIds: form.householdIds.includes(h.id) ? form.householdIds.filter((x) => x !== h.id) : [...form.householdIds, h.id] })
-                      }}
-                    />
-                    {h.name}
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-        {!form.linked && (
-          <Input label="Valor aproximado por período de sueldo (COP)" money placeholder="0" value={form.amount} onChange={(e) => { setForm({ ...form, amount: e.target.value }); setError(null) }} />
-        )}
-        <Input label="Día de pago del mes (1-31, opcional)" type="number" placeholder="ej. 15" value={form.day} onChange={(e) => { setForm({ ...form, day: e.target.value }); setError(null) }} />
         <Select label="Categoría" options={CATEGORY_OPTIONS} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
-        <AccountSelect label="Cuenta de la que se paga" accounts={salary.accounts} value={form.accountId} onChange={(id) => setForm({ ...form, accountId: id })} noneLabel="Elegirla al registrar cada gasto" />
-        <Input label="Notas" placeholder="Opcional" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-        <p className="text-[11px] text-[#8a929a]">
-          El valor se renueva con cada sueldo confirmado y lo que no gastes queda reservado en "Te queda". Si tiene un día habitual de pago, se muestra como recordatorio en la línea de tiempo; el monto real lo registras tú cuando ocurre.
-        </p>
+
+        {/* Cuánto */}
+        <div className="space-y-4 pt-1 border-t border-white/10">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[#6f7a83] -mb-1 pt-3">Cuánto</p>
+          <label className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
+            <input type="checkbox" className="cursor-pointer" checked={form.linked} onChange={(e) => { setForm({ ...form, linked: e.target.checked }); setError(null) }} />
+            <span>
+              Es lo que debo en mis hogares
+              <span className="block text-[10px] text-[#8a929a]">El valor se calcula con lo que debes en los hogares que elijas, y tus abonos ahí cuentan como pagos. Las deudas con fecha acordada se pintan en esa fecha.</span>
+            </span>
+          </label>
+          {form.linked ? (
+            <div className="rounded-xl border border-white/10 bg-[#0d263a] p-3 space-y-2">
+              <p className="text-xs font-semibold text-[#c7ccd1]">¿De qué hogares?</p>
+              {([['all', 'Todos los hogares asociados'], ['specific', 'Hogares específicos']] as const).map(([value, label]) => (
+                <label key={value} className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
+                  {/* either/or: choosing one unticks the other, and the chosen one can't be unticked */}
+                  <input type="checkbox" className="cursor-pointer" checked={form.scope === value} onChange={() => { setForm({ ...form, scope: value }); setError(null) }} />
+                  {label}
+                </label>
+              ))}
+              {form.scope === 'specific' && (
+                <div className="pl-6 space-y-1.5">
+                  {myHouseholds.length === 0 && <p className="text-[11px] text-[#8a929a]">No encontré hogares asociados a tu cuenta.</p>}
+                  {myHouseholds.map((h) => (
+                    <label key={h.id} className="flex items-center gap-3 text-xs text-[#c7ccd1] cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        className="cursor-pointer"
+                        checked={form.householdIds.includes(h.id)}
+                        onChange={() => {
+                          setError(null)
+                          setForm({ ...form, householdIds: form.householdIds.includes(h.id) ? form.householdIds.filter((x) => x !== h.id) : [...form.householdIds, h.id] })
+                        }}
+                      />
+                      {h.name}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <Input label="Valor aproximado por período de sueldo (COP)" money placeholder="0" value={form.amount} onChange={(e) => { setForm({ ...form, amount: e.target.value }); setError(null) }} />
+          )}
+        </div>
+
+        {/* Cuándo */}
+        <div className="space-y-4 pt-1 border-t border-white/10">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[#6f7a83] -mb-1 pt-3">Cuándo</p>
+          <Input label="Día de pago del mes (1-31, opcional)" type="number" placeholder="ej. 15" value={form.day} onChange={(e) => { setForm({ ...form, day: e.target.value }); setError(null) }} />
+        </div>
+
+        {/* Cómo se paga */}
+        <div className="space-y-4 pt-1 border-t border-white/10">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[#6f7a83] -mb-1 pt-3">Cómo se paga</p>
+          <AccountSelect label="Cuenta de la que se paga" accounts={salary.accounts} value={form.accountId} onChange={(id) => setForm({ ...form, accountId: id })} noneLabel="Elegirla al registrar cada gasto" />
+        </div>
+
+        {/* Notas */}
+        <div className="space-y-2 pt-1 border-t border-white/10">
+          <div className="pt-3">
+            <Input label="Notas" placeholder="Opcional" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          </div>
+          <p className="text-[11px] text-[#8a929a]">
+            El valor se renueva con cada sueldo confirmado y lo que no gastes queda reservado en "Te queda". Si tiene un día habitual de pago, se muestra como recordatorio en la línea de tiempo; el monto real lo registras tú cuando ocurre.
+          </p>
+        </div>
         {error && <p className="text-xs text-red-400">{error}</p>}
         <div className="flex gap-2 pt-2">
           {editing && <Button type="button" variant="danger" notched onClick={onDelete}>Eliminar</Button>}

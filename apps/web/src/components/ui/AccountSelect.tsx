@@ -1,5 +1,5 @@
 import { Select } from './Select'
-import { formatCOP } from '@/shared'
+import { useMoneyMask } from '@/hooks/useMoneyMask'
 
 interface Props {
   label: string
@@ -14,6 +14,7 @@ interface Props {
 
 /** Picks which of the user's accounts a movement goes through; renders nothing when they have none. */
 export function AccountSelect({ label, accounts, value, onChange, noneLabel = 'Sin descontar de una cuenta', outflow = 0 }: Props) {
+  const cop = useMoneyMask()
   if (accounts.length === 0) return null
   const acc = accounts.find((a) => a.id === value)
   return (
@@ -23,14 +24,14 @@ export function AccountSelect({ label, accounts, value, onChange, noneLabel = 'S
         value={value}
         onChange={(e) => onChange(e.target.value)}
         options={[
-          ...accounts.map((a) => ({ value: a.id, label: `${a.name} · ${formatCOP(a.balance)}` })),
+          ...accounts.map((a) => ({ value: a.id, label: `${a.name} · ${cop(a.balance)}` })),
           { value: '', label: noneLabel },
         ]}
       />
       {acc && outflow > 0 && (
         acc.balance < outflow
-          ? <p className="text-[11px] text-red-300">Esta cuenta tiene {formatCOP(acc.balance)} y el pago es de {formatCOP(outflow)}: quedaría en negativo.</p>
-          : <p className="text-[11px] text-[#8a929a]">Le quedarán {formatCOP(acc.balance - outflow)}.</p>
+          ? <p className="text-[11px] text-red-300">Esta cuenta tiene {cop(acc.balance)} y el pago es de {cop(outflow)}: quedaría en negativo.</p>
+          : <p className="text-[11px] text-[#8a929a]">Le quedarán {cop(acc.balance - outflow)}.</p>
       )}
     </div>
   )
