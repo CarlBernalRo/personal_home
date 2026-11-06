@@ -1141,7 +1141,7 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
     if (pm.kind === 'income') {
       tx.set(doc(collection(db, 'incomes')), {
         userId: pm.userId, concept: pm.concept, amount: pm.amount, month: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
-        date: Timestamp.fromDate(date), kind: 'extra', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+        date: Timestamp.fromDate(date), kind: pm.isSalary ? 'salary' : 'extra', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
       })
       if (account) tx.update(doc(db, 'accounts', account), { balance: increment(pm.amount) })
     } else if (pm.kind === 'fixed') {

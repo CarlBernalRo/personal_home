@@ -17,6 +17,7 @@ import { createDb } from './db'
 import { pendingSummaryNow } from './format'
 import { COMMANDS, HELP, bogotaToday, runCommand } from './commands'
 import { clearFlow, onCallback, onText, startFromImage, type FlowDeps } from './flow'
+import { onActionCallback, onActionText } from './actions'
 import { saveAutoDebits, sendDailyPending, sendTelegramAvisos, type JobName } from './jobs'
 import { createTelegram } from './telegram'
 import { EMPTY_EXTRACTED, extractFromImage, type AiRunner } from './vision'
@@ -234,10 +235,13 @@ async function handle(env: Env, msg: any) {
     return
   }
 
-  // free text: it may be the answer to a question of the registration flow
+  // free text: it may be the answer to a pending action (ej. "monto diferente") or to the registration flow
   if (!text.startsWith('/')) {
     const uid = await ownerOf(env, chatId)
-    if (uid && (await onText(flowDeps(env), uid, chatId, text))) return
+    if (uid) {
+      if (await onActionText(flowDeps(env), uid, chatId, text)) return
+      if (await onText(flowDeps(env), uid, chatId, text)) return
+    }
   }
 
   const code = text.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9]{6,32})$/i)?.[1]?.toUpperCase()
@@ -335,6 +339,7 @@ export default {
           const deps = flowDeps(env)
           if (!uid) await deps.tg.answer(cb.id, 'Vincula tu cuenta primero')
           else if (String(cb.data ?? '').startsWith('n:')) await noticeCallback(env, uid, cb)
+          else if (String(cb.data ?? '').startsWith('p:')) await onActionCallback(deps, uid, { id: cb.id, chatId, messageId: cb.message.message_id, data: String(cb.data ?? '') })
           else await onCallback(deps, uid, { id: cb.id, chatId, messageId: cb.message.message_id, data: String(cb.data ?? '') })
         } else {
           await handle(env, update.message)

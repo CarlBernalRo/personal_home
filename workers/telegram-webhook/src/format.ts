@@ -260,12 +260,25 @@ async function payDay(c: Ctx, n: Doc, key: string): Promise<Msg> {
   // the key holds the pay date as an instant of the person's clock (Colombia): move it into the calendar frame
   const date = new Date(Number(key.split('|')[1]) - 5 * 3600_000)
   const accounts = await c.accounts()
-  const schedule = (c.user.paySchedule ?? {}) as any
-  const acc = accounts.find((a) => a.id === schedule.accountId) ?? accounts.find((a) => a.isDefault) ?? null
+  const schedule = (c.user.paySchedule ?? null) as any
+  const acc = accounts.find((a) => a.id === schedule?.accountId) ?? accounts.find((a) => a.isDefault) ?? accounts[0] ?? null
   const lines = [header(n), rule, amount ? `💵 <b>${cop(amount)}</b>` : '', `📅 ${dayLong(date)}`]
   if (acc) lines.push(`🏦 Se deposita en <b>${esc(acc.name)}</b> (saldo ${spoiler(cop(acc.balance ?? 0))})`)
-  lines.push('\n<i>Confírmalo en la app para que actualice lo que te queda del período.</i>')
-  return { text: lines.filter(Boolean).join('\n'), keyboard: buttons(c.d, '/', 'Confirmar sueldo', n), silent: true }
+
+  const kb: Keyboard = []
+  // Recomputed fresh, worker-side, instead of trusting the key: a stale button (schedule changed, already confirmed)
+  // then simply fails the live check when tapped, rather than silently registering the wrong day or amount.
+  const latest = isScheduleUsable(schedule) ? latestPayDate(schedule, c.today) : null
+  if (latest) {
+    const ts = latest.date.getTime()
+    lines.push('\n¿Ya te consignaron este sueldo?')
+    kb.push(acc ? [{ text: `✅ Sí, en ${esc(acc.name)}`, data: `p:y:${ts}:${acc.id}` }] : [{ text: '✅ Sí, ya me pagaron', data: `p:y:${ts}:` }])
+    kb.push([{ text: '✏️ Monto diferente', data: `p:e:${ts}:${acc?.id ?? ''}` }, { text: 'Aún no', data: `p:n:${ts}` }])
+  } else {
+    lines.push('\n<i>Confírmalo en la app para que actualice lo que te queda del período.</i>')
+  }
+  kb.push(...buttons(c.d, '/', 'Abrir en la app'))
+  return { text: lines.filter(Boolean).join('\n'), keyboard: kb, silent: true }
 }
 
 async function overBudget(c: Ctx, n: Doc): Promise<Msg> {

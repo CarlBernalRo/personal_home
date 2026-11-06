@@ -19,6 +19,9 @@ export interface PendingMovement {
   occMonth?: string;
   /** For an occasional expense that belongs to one of the person's budgets. */
   budgetId?: string;
+  /** An `income` that is the person's salary (confirmed from the payday button in Telegram): becomes `kind: 'salary'`
+   * in `incomes`, instead of `'extra'`, so it counts for the salary period and stops the "pending pay day" alert. */
+  isSalary?: boolean;
   /** For an abono to a household: which household, whom it pays and (optionally) the one debt it is meant for. */
   householdId?: string;
   creditorId?: string;
