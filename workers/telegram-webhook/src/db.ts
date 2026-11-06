@@ -75,6 +75,12 @@ export function createDb(projectId: string, getToken: () => Promise<string>): Db
     return data
   }
   const mask = (fields: string[]) => fields.map((f) => `updateMask.fieldPaths=${encodeURIComponent(f)}`).join('&')
+  // Our own derived-notice ids are themselves percent-encoded (`fx-soon%7Cabc%7C2026-11`, from the app's and the
+  // Worker's own encodeURIComponent(key)). Dropped straight into a URL path, that literal "%7C" is indistinguishable
+  // from an already-escaped "|": Firestore decodes it back to "|" and looks up a document that was never created,
+  // so the real one is never found (get) or a stray new one is written instead (set/patch) — never erroring, so the
+  // original stays "pending" forever and gets resent every run. Each segment is escaped again before it goes in the URL.
+  const encodePath = (path: string) => path.split('/').map(encodeURIComponent).join('/')
   return {
     async query(collection, filters = [], limit) {
       const f = (x: Filter) => ({ fieldFilter: { field: { fieldPath: x.field }, op: x.op, value: encodeFilter(x.value) } })
@@ -83,20 +89,20 @@ export function createDb(projectId: string, getToken: () => Promise<string>): Db
       return rows.filter((r) => r.document).map((r) => toDoc(r.document))
     },
     async get(path) {
-      try { return toDoc(await call(`${base}/${path}`, { method: 'GET' })) } catch (e: any) { if (e.status === 404) return null; throw e }
+      try { return toDoc(await call(`${base}/${encodePath(path)}`, { method: 'GET' })) } catch (e: any) { if (e.status === 404) return null; throw e }
     },
     async set(path, data) {
-      await call(`${base}/${path}`, { method: 'PATCH', body: JSON.stringify({ fields: encodeFields(data) }) })
+      await call(`${base}/${encodePath(path)}`, { method: 'PATCH', body: JSON.stringify({ fields: encodeFields(data) }) })
     },
     async patch(path, data, remove = []) {
       const keys = [...Object.keys(data).filter((k) => data[k] !== undefined), ...remove]
-      await call(`${base}/${path}?${mask(keys)}`, { method: 'PATCH', body: JSON.stringify({ fields: encodeFields(data) }) })
+      await call(`${base}/${encodePath(path)}?${mask(keys)}`, { method: 'PATCH', body: JSON.stringify({ fields: encodeFields(data) }) })
     },
     async add(collection, data) {
-      return toDoc(await call(`${base}/${collection}`, { method: 'POST', body: JSON.stringify({ fields: encodeFields(data) }) })).id
+      return toDoc(await call(`${base}/${encodePath(collection)}`, { method: 'POST', body: JSON.stringify({ fields: encodeFields(data) }) })).id
     },
     async remove(path) {
-      await call(`${base}/${path}`, { method: 'DELETE' })
+      await call(`${base}/${encodePath(path)}`, { method: 'DELETE' })
     },
     async batch(writes) {
       const body = writes.map((w) =>
