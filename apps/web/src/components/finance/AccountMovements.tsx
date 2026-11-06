@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { endOfDay, format, startOfDay, startOfMonth, subDays, subMonths, endOfMonth } from 'date-fns'
-import { CalendarRange, X } from 'lucide-react'
+import { CalendarRange, ChevronDown, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuth } from '@/hooks/useAuth'
 import { useHouseholdOwed } from '@/hooks/useHouseholdOwed'
 import { useMyHouseholds } from '@/hooks/useMyHouseholds'
+import { usePeriodReveal } from '@/hooks/usePeriodReveal'
 import { getAccountTransfers, getAllFixedExpensePayments, getExpenses, getIncomes } from '@/lib/firestore'
 import { formatCOP, PERSONAL_CATEGORIES } from '@/shared'
 import type { AccountLite } from '@/components/ui/AccountChip'
 import { AccountFilter } from '@/components/ui/AccountFilter'
+import { Button } from '@/components/ui/Button'
 import { SkeletonList } from '@/components/ui/Skeleton'
 import { MOVEMENT_ZONES, MovementTimeline, type Movement, type MovementZone } from './MovementTimeline'
 
@@ -52,7 +54,7 @@ interface Props {
  * household abonos, incomes and transfers. Filter by zone, by account and by date; the account totals show on the left.
  */
 export function AccountMovements({ accounts, accountFilter, onAccountFilter, refreshKey }: Props) {
-  const { user } = useAuth()
+  const { user, profile } = useAuth()
   const { abonos } = useHouseholdOwed(true)
   const households = useMyHouseholds(true)
   const [raw, setRaw] = useState<{ incomes: any[]; payments: any[]; expenses: any[]; transfers: any[] } | null>(null)
@@ -113,7 +115,17 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
     return out.sort((a, b) => b.date.getTime() - a.date.getTime())
   }, [raw, abonos, households])
 
-  const { start, end } = rangeOf(preset, from, to)
+  // "Todo" does not mean "all at once": by default it only goes back to the current salary period, growing one
+  // period at a time with the button at the end of the list, so the history never loads as one huge page.
+  const salariesForPeriods = useMemo(
+    () => (raw?.incomes ?? []).filter((i) => i.kind === 'salary').map((i) => ({ id: i.id as string, date: asDate(i.date), amount: i.amount as number })),
+    [raw],
+  )
+  const schedule = ((profile as any)?.paySchedule ?? null)
+  const { cutoff: periodCutoff, canLoadMore, loadMore } = usePeriodReveal(salariesForPeriods, schedule)
+
+  const { start: presetStart, end } = rangeOf(preset, from, to)
+  const start = preset === 'all' ? periodCutoff : presetStart
   const inDates = (m: Movement) => (!start || m.date.getTime() >= start.getTime()) && (!end || m.date.getTime() <= end.getTime())
   // what the date and account filters leave; the zone chips count within it
   const base = movements
@@ -165,6 +177,7 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
           </div>
         )}
         {preset !== 'all' && dateText && <p className="text-[11px] text-[#8a929a]">Mostrando del {dateText}</p>}
+        {preset === 'all' && periodCutoff && <p className="text-[11px] text-[#8a929a]">Mostrando desde el {format(periodCutoff, 'd MMM yyyy')}{canLoadMore ? ' (período actual)' : ''}</p>}
       </div>
 
       <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filtrar por zona">
@@ -210,6 +223,14 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
         </div>
       ) : (
         <MovementTimeline items={shown} accounts={accounts} />
+      )}
+
+      {preset === 'all' && canLoadMore && (
+        <div className="flex justify-center pt-1">
+          <Button type="button" variant="secondary" size="sm" notched onClick={loadMore}>
+            <ChevronDown size={14} /> Cargar período anterior
+          </Button>
+        </div>
       )}
     </div>
   )

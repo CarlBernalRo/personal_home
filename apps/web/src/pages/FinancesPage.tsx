@@ -6,7 +6,7 @@ import { TransferModal } from '@/components/fixed/TransferModal'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Edit2, Trash2, Wallet, DollarSign, PiggyBank, Sparkles, ArrowLeftRight } from 'lucide-react'
+import { Plus, Edit2, Trash2, Wallet, DollarSign, PiggyBank, Sparkles, ArrowLeftRight, ChevronDown } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
@@ -21,6 +21,7 @@ import { ProgressBar } from '@/components/ui/ProgressBar'
 import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/hooks/useAuth'
+import { usePeriodReveal } from '@/hooks/usePeriodReveal'
 import {
   addAccount, getAccounts, updateAccount, deleteAccount,
   addSavingsGoal, getSavingsGoals, updateSavingsGoal, deleteSavingsGoal,
@@ -73,7 +74,7 @@ type AddMoneyForm = z.infer<typeof addMoneySchema>
 type Tab = 'movimientos' | 'ingresos' | 'ahorros'
 
 export default function FinancesPage() {
-  const { user }       = useAuth()
+  const { user, profile } = useAuth()
   const { showToast }  = useToast()
   const ask = useConfirm()
   const [activeTab, setActiveTab] = useState<Tab>('movimientos')
@@ -291,6 +292,12 @@ export default function FinancesPage() {
   const totalSaved     = goals.reduce((s: number, g: any) => s + (g.currentAmount as number), 0)
   const totalTarget    = goals.reduce((s: number, g: any) => s + (g.targetAmount as number), 0)
 
+  // Ingresos: only the current salary period shows at first; "Cargar período anterior" reveals one more at a time.
+  const salariesForPeriods = incomes.filter((i: any) => i.kind === 'salary').map((i: any) => ({ id: i.id as string, date: (i.date instanceof Date ? i.date : new Date(i.date)) as Date, amount: i.amount as number }))
+  const schedule = ((profile as any)?.paySchedule ?? null)
+  const { cutoff: incomesCutoff, canLoadMore: canLoadMoreIncomes, loadMore: loadMoreIncomes } = usePeriodReveal(salariesForPeriods, schedule)
+  const visibleIncomes = incomesCutoff ? incomes.filter((i: any) => (i.date instanceof Date ? i.date : new Date(i.date)).getTime() >= incomesCutoff.getTime()) : incomes
+
   const TABS: { key: Tab; label: string; icon: string }[] = [
     { key: 'movimientos', label: 'Movimientos', icon: 'list' },
     { key: 'ingresos',    label: 'Ingresos',    icon: 'cash' },
@@ -441,17 +448,29 @@ export default function FinancesPage() {
             </Button>
           </div>
 
+          {incomesCutoff && (
+            <p className="text-[11px] text-[#8a929a]">
+              Mostrando desde el {format(incomesCutoff, 'd MMM yyyy', { locale: es })}{canLoadMoreIncomes ? ' (período actual)' : ''}
+            </p>
+          )}
+
           {loadingInc ? (
             <SkeletonList count={3} />
           ) : incomes.length === 0 ? (
             <div className="notch bg-[#0a1f2f] border border-white/10 text-center py-12 p-6">
               <EmptyMark name="cash" />
-              <p className="text-sm font-bold text-[#f0fae8]">Sin ingresos registrados este mes</p>
+              <p className="text-sm font-bold text-[#f0fae8]">Sin ingresos registrados</p>
               <p className="text-xs text-[#8a929a] mt-1">Registra tus entradas de dinero (salario, honorarios, etc.).</p>
+            </div>
+          ) : visibleIncomes.length === 0 ? (
+            <div className="notch bg-[#0a1f2f] border border-white/10 text-center py-12 p-6">
+              <EmptyMark name="cash" />
+              <p className="text-sm font-bold text-[#f0fae8]">Sin ingresos en este período</p>
+              <p className="text-xs text-[#8a929a] mt-1">Carga el período anterior para ver los ingresos de antes.</p>
             </div>
           ) : (
             <div className="space-y-2.5">
-              {incomes.map((inc: any) => (
+              {visibleIncomes.map((inc: any) => (
                 <div
                   key={inc.id as string}
                   className="notch-sm flex items-start sm:items-center justify-between gap-2 p-3.5 bg-[#0a1f2f] border border-white/[0.08] hover:border-brand-500/30 transition-all group"
@@ -494,6 +513,14 @@ export default function FinancesPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {canLoadMoreIncomes && (
+            <div className="flex justify-center pt-1">
+              <Button type="button" variant="secondary" size="sm" notched onClick={loadMoreIncomes}>
+                <ChevronDown size={14} /> Cargar período anterior
+              </Button>
             </div>
           )}
         </div>
