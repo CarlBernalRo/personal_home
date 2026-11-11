@@ -37,6 +37,10 @@ export interface LedgerRow {
   payTotal?: number
   /** myTotal - partnerTotal: positive means "me" owes more */
   diffAfter: number
+  /** this row stands for a shared expense, not one debt: `children` holds every debtor→creditor edge it generated */
+  isExpenseGroup?: boolean
+  /** on an expense group: who declared putting money in, and how much — independent of `children`, which is who ended up owing whom */
+  expensePayers?: { uid: string; amount: number; pending: boolean }[]
 }
 
 /**
@@ -137,7 +141,11 @@ const DUE_SOON_DAYS = 3
  * State of a row. A debt is red only when its date has passed with something still owed; within 3 days of it, amber;
  * otherwise (a later date, or no agreed date) it is just pending. Partly paid debts keep the state of what is left.
  */
-export function statusOf(row: Pick<LedgerRow, 'kind' | 'debt'>, today: Date = new Date()): StatusKey {
+export function statusOf(row: Pick<LedgerRow, 'kind' | 'debt' | 'isExpenseGroup' | 'children'>, today: Date = new Date()): StatusKey {
+  if (row.isExpenseGroup) {
+    const kids = row.children ?? []
+    return STATUS_SEVERITY.find((s) => kids.some((k) => statusOf(k, today) === s)) ?? 'pending'
+  }
   if (row.kind === 'cruce') return 'crossed'
   if (row.kind === 'abono') return 'abono'
   const d = row.debt
@@ -218,4 +226,41 @@ export function nestByDebt(rows: LedgerRow[]): LedgerRow[] {
     || rank[a.kind] - rank[b.kind]
     || ((a.debt?.installment as number) || 0) - ((b.debt?.installment as number) || 0)
     || at(a) - at(b))
+}
+
+/**
+ * A shared expense split among several people writes one debt per debtor who still owes someone —
+ * the timeline otherwise shows that same expense two, three, four times over. This collapses every
+ * debt row tied to the same expense into one row for the expense itself (its real total, from the
+ * expense record — not just what's left to settle peer-to-peer), with the individual debtor→creditor
+ * edges as its children: closed by default, each still its own clickable debt.
+ */
+export function groupByExpense(rows: LedgerRow[], expenses: Rec[]): LedgerRow[] {
+  const expenseById = new Map<string, Rec>()
+  for (const e of expenses) if (e.id) expenseById.set(e.id as string, e)
+  if (expenseById.size === 0) return rows
+
+  const edgesOf = new Map<string, LedgerRow[]>()
+  const out: LedgerRow[] = []
+  for (const r of rows) {
+    const expenseId = r.kind === 'deuda' && !r.isExpenseGroup ? (r.debt?.expenseId as string | undefined) : undefined
+    if (expenseId && expenseById.has(expenseId)) { edgesOf.set(expenseId, [...(edgesOf.get(expenseId) ?? []), r]); continue }
+    out.push(r)
+  }
+
+  for (const [expenseId, edges] of edgesOf) {
+    const exp = expenseById.get(expenseId)!
+    const last = edges[edges.length - 1]
+    const payers = ((exp.contributions as Rec[] | undefined) ?? [])
+      .filter((c) => c.status !== 'declined')
+      .map((c) => ({ uid: c.memberId as string, amount: c.amount as number, pending: c.status === 'pending' }))
+    out.push({
+      date: toDate(exp.date), debtor: exp.registeredBy as string, concept: exp.description as string,
+      delta: exp.amount as number, kind: 'deuda', isExpenseGroup: true, key: `exp-${expenseId}`,
+      children: edges, expensePayers: payers, isMe: last.isMe, myTotal: last.myTotal, partnerTotal: last.partnerTotal,
+      diffAfter: last.diffAfter, totals: last.totals, totalOwed: last.totalOwed,
+    })
+  }
+
+  return out.sort((a, b) => a.date.getTime() - b.date.getTime())
 }

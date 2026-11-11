@@ -118,15 +118,16 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                     const who = nameOf(r.debtor)
                     const kids = r.children ?? []
                     const isPayment = r.kind === 'abono'
+                    const isGroup = !!r.isExpenseGroup
                     const key = (r.debt?.id as string) ?? r.key ?? String(i)
-                    // a payment shows its distribution by default; a debt shows its payments when asked
+                    // a payment shows its distribution by default; a debt (or a grouped expense) shows it when asked
                     const unfolded = isPayment ? !open.has(key) : open.has(key)
                     const receiptState = isPayment ? (kids.every((k) => k.debt?.receiptStatus === 'confirmed') ? 'confirmed' : kids.some((k) => k.debt?.receiptStatus === 'pending') ? 'pending' : null) : null
                     const iReceive = receiptState === 'pending' && kids[0]?.debt?.creditor === myUid
                     const lastState = kids.length ? kids[kids.length - 1] : r
-                    // the screenshot of a payment is kept on its abono rows (all of them share it)
-                    const attachmentId = isPayment ? ((r.debt?.attachmentId as string | undefined) ?? (kids.find((k) => k.debt?.attachmentId)?.debt?.attachmentId as string | undefined)) : undefined
-                    const left = r.debt ? remainingOf(r.debt) : 0
+                    // the screenshot of a payment (or a shared expense's receipt) is kept on its rows, all sharing it
+                    const attachmentId = (isPayment || isGroup) ? ((r.debt?.attachmentId as string | undefined) ?? (kids.find((k) => k.debt?.attachmentId)?.debt?.attachmentId as string | undefined)) : undefined
+                    const left = isGroup ? kids.reduce((s, k) => s + (k.debt ? remainingOf(k.debt) : 0), 0) : (r.debt ? remainingOf(r.debt) : 0)
                     const content = (
                       <>
                         <span className="flex items-center gap-2.5 min-w-0">
@@ -135,15 +136,18 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                             <span className="block text-sm font-semibold text-[#f0fae8] break-words sm:truncate">
                               {r.concept}
                               {r.debt?.loanId && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-amber-300 border border-amber-400/40 rounded px-1 py-0.5">préstamo</span>}
-                              {r.debt?.expenseId && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">gasto compartido</span>}
+                              {(r.debt?.expenseId || isGroup) && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">gasto compartido</span>}
                             </span>
                             <span className="block text-[10px] font-mono text-[#8a929a]">
-                              {r.kind === 'deuda' && r.debt?.loanId && r.debt?.lender
-                                ? `${nameOf(r.debt.lender)} prestó`
-                                : `${who} ${isPayment ? 'pagó' : VERB[r.kind]}`}{r.kind === 'deuda' && r.debt ? (left > 0 ? ` · quedan ${formatCOP(left)}` : '') : ` · ${owesRow(lastState)}`}
+                              {isGroup
+                                ? `repartido entre ${kids.length} ${kids.length === 1 ? 'persona' : 'personas'}`
+                                : r.kind === 'deuda' && r.debt?.loanId && r.debt?.lender
+                                  ? `${nameOf(r.debt.lender)} prestó`
+                                  : `${who} ${isPayment ? 'pagó' : VERB[r.kind]}`}
+                              {isGroup ? (left > 0 ? ` · quedan ${formatCOP(left)}` : '') : r.kind === 'deuda' && r.debt ? (left > 0 ? ` · quedan ${formatCOP(left)}` : '') : ` · ${owesRow(lastState)}`}
                               {receiptState === 'confirmed' && ' · recibido ✓'}{receiptState === 'pending' && ` · por confirmar${iReceive ? '' : ` por ${nameOf(kids[0]?.debt?.creditor)}`}`}
                               {isPayment && (() => { const acc = kids[0]?.debt?.accountId as string | undefined; const n = acc ? accountName?.(acc) : null; return n ? ` · desde ${n}` : '' })()}
-                              {r.kind === 'deuda' && r.debt?.dueDate && ` · se paga el ${format(r.date, 'd MMM', { locale: es })}`}
+                              {!isGroup && r.kind === 'deuda' && r.debt?.dueDate && ` · se paga el ${format(r.date, 'd MMM', { locale: es })}`}
                             </span>
                           </span>
                         </span>
@@ -156,7 +160,7 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                             <button type="button" onClick={() => onConfirmReceipt(r)} className="whitespace-nowrap rounded-md border border-emerald-400/50 bg-emerald-500/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-300 hover:bg-emerald-500/25 transition">Confirmar recibido</button>
                           )}
                           <span className="flex items-center gap-2">
-                            {isPayment && attachmentId ? <AttachmentButton compact attachmentId={attachmentId} /> : <span className="hidden sm:block w-7 flex-shrink-0" aria-hidden="true" />}
+                            {attachmentId ? <AttachmentButton compact attachmentId={attachmentId} /> : <span className="hidden sm:block w-7 flex-shrink-0" aria-hidden="true" />}
                             <span className={clsx('sm:w-24 text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', STATUS_META[status].chip)}>
                               {STATUS_META[status].label}
                             </span>
@@ -186,7 +190,55 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                           )}
                         </div>
 
-                        {unfolded && kids.length > 0 && (
+                        {unfolded && kids.length > 0 && isGroup && (
+                          <div className="border-t border-white/10 px-3 py-2.5 space-y-3">
+                            {(r.expensePayers?.length ?? 0) > 0 && (
+                              <div className="space-y-1">
+                                <p className="text-[10px] uppercase tracking-wider text-[#8a929a]">Quiénes pagaron</p>
+                                <ul className="space-y-1">
+                                  {r.expensePayers!.map((p) => (
+                                    <li key={p.uid} className="flex items-center gap-2.5 text-[11px]">
+                                      <Avatar name={nameOf(p.uid)} photoURL={photoOf(p.uid)} size={22} color={colorOf(p.uid)} className="!ring-white/15 flex-shrink-0" />
+                                      <span className="min-w-0 flex-1 truncate text-[#dcf1eb]">{nameOf(p.uid)}</span>
+                                      {p.pending && <span className="flex-shrink-0 rounded-md border border-sky-400/40 bg-sky-500/10 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wider text-sky-300">por confirmar</span>}
+                                      <span className="flex-shrink-0 font-mono tabular-nums text-[#c7ccd1]">{formatCOP(p.amount)}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            <div className="space-y-1">
+                              <p className="text-[10px] uppercase tracking-wider text-[#8a929a]">Quiénes deben</p>
+                              <ul className="space-y-1">
+                                {kids.map((k) => {
+                                  const kStatus = statusOf(k)
+                                  const kLeft = k.debt ? remainingOf(k.debt) : 0
+                                  return (
+                                    <li key={(k.debt?.id as string) ?? k.key}>
+                                      <button onClick={() => onSelectDebt(k.debt)} className="w-full flex items-center gap-2 text-[11px] text-left hover:bg-white/[0.04] rounded-md px-1 -mx-1 py-0.5 transition-colors">
+                                        <Avatar name={nameOf(k.debtor)} photoURL={photoOf(k.debtor)} size={22} color={colorOf(k.debtor)} className="!ring-white/15 flex-shrink-0" />
+                                        <span className="truncate text-[#c7ccd1]">{nameOf(k.debtor)}</span>
+                                        <span className="flex-shrink-0 text-[#8a929a]">→</span>
+                                        <Avatar name={nameOf(k.debt?.creditor)} photoURL={photoOf(k.debt?.creditor)} size={22} color={colorOf(k.debt?.creditor)} className="!ring-white/15 flex-shrink-0" />
+                                        <span className="min-w-0 flex-1 truncate text-[#c7ccd1]">
+                                          {nameOf(k.debt?.creditor)}
+                                          {kLeft > 0 && kLeft < k.delta && <span className="text-[#8a929a] font-mono"> · quedan {formatCOP(kLeft)}</span>}
+                                        </span>
+                                        <span className="flex items-center gap-2 flex-shrink-0">
+                                          <span className="font-mono tabular-nums text-amber-300">{formatCOP(k.delta)}</span>
+                                          <span className={clsx('whitespace-nowrap rounded-md px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wider border', STATUS_META[kStatus].chip)}>{STATUS_META[kStatus].label}</span>
+                                        </span>
+                                      </button>
+                                    </li>
+                                  )
+                                })}
+                              </ul>
+                            </div>
+                          </div>
+                        )}
+
+                        {unfolded && kids.length > 0 && !isGroup && (
                           <ul className="border-t border-white/10 px-3 py-2 space-y-1.5">
                             {isPayment && <li className="text-[10px] uppercase tracking-wider text-[#8a929a]">Así se distribuyó el pago</li>}
                             {kids.map((k, j) => (

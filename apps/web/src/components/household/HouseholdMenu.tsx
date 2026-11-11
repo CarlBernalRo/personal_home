@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Copy, LogIn, PlusCircle, Settings, UserPlus } from 'lucide-react'
+import { ArrowLeft, Copy, LogIn, PlusCircle, Settings, UserPlus, UserPlus2 } from 'lucide-react'
 import { clsx } from 'clsx'
 
 interface Props {
@@ -7,6 +7,7 @@ interface Props {
   copied: boolean
   onSettings: () => void
   onInvite: () => void
+  onAddGuest: () => void
   onCopyCode: () => void
   onSwitch: () => void
   onCreate: () => void
@@ -27,7 +28,7 @@ function Item({ onClick, icon, children, disabled, className }: { onClick: () =>
 }
 
 /** Gear dropdown with the household-level actions (settings, invite code, switch / create / join). */
-export function HouseholdMenu({ inviteCode, copied, onSettings, onInvite, onCopyCode, onSwitch, onCreate, onJoin }: Props) {
+export function HouseholdMenu({ inviteCode, copied, onSettings, onInvite, onAddGuest, onCopyCode, onSwitch, onCreate, onJoin }: Props) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -56,6 +57,7 @@ export function HouseholdMenu({ inviteCode, copied, onSettings, onInvite, onCopy
         <div className="absolute right-0 mt-2 w-64 bg-[#0a1f2f] rounded-2xl shadow-2xl border border-brand-500/25 py-2 z-50 slide-up">
           <Item onClick={run(onSettings)} icon={<Settings size={14} />}>Configurar hogar</Item>
           <Item onClick={run(onInvite)} icon={<UserPlus size={14} />}>Invitar a una persona</Item>
+          <Item onClick={run(onAddGuest)} icon={<UserPlus2 size={14} />}>Agregar invitado</Item>
           <button
             onClick={onCopyCode}
             className="w-full flex items-center justify-between px-3 py-2 text-sm text-[#dcf1eb] hover:text-white hover:bg-white/5 transition"

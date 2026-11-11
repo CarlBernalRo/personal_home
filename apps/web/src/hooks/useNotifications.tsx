@@ -281,7 +281,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     setProfile({ ...profile, householdIds: ids } as any)
     // tell the people already in the household
     const hh = await getHousehold(id).catch(() => null)
-    const members = ((hh?.members as string[] | undefined) ?? [])
+    const guestIds = ((hh?.guestIds as string[] | undefined) ?? [])
+    const members = ((hh?.members as string[] | undefined) ?? []).filter((uid) => !guestIds.includes(uid))
     await notifyHouseholdMembers(members, {
       fromUid: user.uid, zone: 'hogar', severity: 'success',
       title: `${name} se unió a "${inv.householdName}"`, body: 'Ya puede ver y registrar cuentas en el hogar.', link: `/hogar?id=${id}`,

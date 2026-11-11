@@ -14,7 +14,8 @@ interface Props {
   nameOf: (uid?: string | null) => string
   /** Whom this debt is owed to (null when it can't be told). */
   creditorId: string | null
-  userUid?: string
+  /** The viewer can register an abono: it's their own debt, or the debtor is a guest (no account, so anyone registers it for them). */
+  canAbonar: boolean
   /** the other person has pending debts to cross against */
   canCross: boolean
   onBack: () => void
@@ -33,7 +34,7 @@ const STATUS_CHIP = {
 const sectionTitle = 'font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold'
 
 /** Detail of one debt: what is left, its abonos and its crossings. Lives in the right pane. */
-export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId, userUid, canCross, onBack, onCross, onAbonar, onDelete, onDeleteAbono }: Props) {
+export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId, canAbonar, canCross, onBack, onCross, onAbonar, onDelete, onDeleteAbono }: Props) {
   const abonos = debts.filter((a) => a.tipo === 'Abono' && a.saldaId === debt.id)
   const crosses = crossings.filter((c) => c.debt1Id === debt.id || c.debt2Id === debt.id)
   const dueDate = debt.dueDate ? toDate(debt.dueDate) : null
@@ -50,7 +51,7 @@ export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId
   ].sort((a, b) => a.date.getTime() - b.date.getTime())
   let running = debt.amount as number
   const steps = [
-    { id: 'registro', label: 'Deuda registrada', color: '#f59e0b', date: toDate(debt.date), by: byName(debt.registeredBy), note: '', attachmentId: undefined as string | undefined, delta: debt.amount as number, balance: running, onDelete: undefined as (() => void) | undefined },
+    { id: 'registro', label: 'Deuda registrada', color: '#f59e0b', date: toDate(debt.date), by: byName(debt.registeredBy), note: '', attachmentId: debt.attachmentId as string | undefined, delta: debt.amount as number, balance: running, onDelete: undefined as (() => void) | undefined },
     ...moves.map((m) => {
       running -= m.amount
       return { id: m.id, label: m.kind === 'abono' ? `Abono a ${creditorName}` : `Cruce con una deuda de ${creditorName}`, color: m.kind === 'abono' ? '#52b69a' : '#38bdf8', date: m.date, by: m.by, note: m.note, attachmentId: 'attachmentId' in m ? m.attachmentId : undefined, delta: -m.amount, balance: running, onDelete: m.onDelete }
@@ -120,7 +121,7 @@ export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId
                   title={canCross ? undefined : `${otherName} no tiene deudas pendientes con ${debtorName} para cruzar`}>
                   <GitMerge size={14} /> Cruzar deuda
                 </Button>
-                {debt.debtor === userUid ? (
+                {canAbonar ? (
                   <Button notched className="flex-1" onClick={onAbonar}>
                     <Coins size={14} /> Abonar
                   </Button>

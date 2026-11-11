@@ -21,6 +21,8 @@ interface Props {
   onClose: () => void
   householdId: string
   members: Member[]
+  /** Guests have no account and can't be notified — labeled here and skipped from the "a loan was registered" notice. */
+  guestIds: string[]
   currentUserUid: string
   onCreated: () => void
 }
@@ -45,7 +47,7 @@ const toDate = (s: string) => { const [y, m, d] = s.split('-').map(Number); retu
  * date, one payment, or equal installments). It becomes a debt of the borrower, one per installment, so abonos,
  * crossings, balances and due-date alerts all work on it like on any other debt.
  */
-export function HouseholdLoanModal({ open, onClose, householdId, members, currentUserUid, onCreated }: Props) {
+export function HouseholdLoanModal({ open, onClose, householdId, members, guestIds, currentUserUid, onCreated }: Props) {
   const { showToast } = useToast()
   const [lender, setLender] = useState('')
   const [borrower, setBorrower] = useState('')
@@ -71,7 +73,10 @@ export function HouseholdLoanModal({ open, onClose, householdId, members, curren
   }, [open])
 
   const nameOf = (uid: string) => members.find((m) => m.uid === uid)?.name ?? 'Integrante'
-  const memberOptions = members.map((m) => ({ value: m.uid, label: m.uid === currentUserUid ? `${m.name} (yo)` : m.name }))
+  const memberOptions = members.map((m) => ({
+    value: m.uid,
+    label: m.uid === currentUserUid ? `${m.name} (yo)` : guestIds.includes(m.uid) ? `${m.name} (invitado)` : m.name,
+  }))
 
   const value = Number(amount)
   const installments = useMemo(() => buildLoanPlan({
@@ -99,7 +104,7 @@ export function HouseholdLoanModal({ open, onClose, householdId, members, curren
       onClose()
       onCreated()
       showToast('Préstamo registrado', 'success')
-      notifyHouseholdMembers(members.map((m) => m.uid), {
+      notifyHouseholdMembers(members.filter((m) => !guestIds.includes(m.uid)).map((m) => m.uid), {
         fromUid: currentUserUid, zone: 'hogar', severity: 'info',
         title: `${nameOf(currentUserUid)} registró un préstamo`,
         body: `${nameOf(lender)} le prestó ${formatCOP(value)} a ${nameOf(borrower)}${installments.length > 1 ? ` en ${installments.length} cuotas` : ''}.`,

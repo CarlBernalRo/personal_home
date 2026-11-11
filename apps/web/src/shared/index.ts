@@ -26,3 +26,4 @@ export * from './utils/alerts';
 export * from './utils/loanPlan';
 export * from './types/pendingMovement';
 export * from './utils/householdAbono';
+export * from './utils/householdExpenseSettlement';

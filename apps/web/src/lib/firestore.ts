@@ -7,10 +7,10 @@ import { db, auth } from './firebase'
 import type {
   NewExpense, NewAccount, NewAccountTransfer, NewSavingsGoal,
   NewFixedExpense, NewFixedExpensePayment,
-  NewIncome, NewHouseholdDebt, NewHouseholdExpense,
+  NewIncome, NewHouseholdDebt, NewHouseholdExpense, ExpenseShareRecord, ExpenseContribution,
   CrossingAllocation, NewStoredNotification, NewHouseholdInvite, PendingMovement,
 } from '@/shared'
-import { resolveExpenseShares, sharesToDebtors, planAbono, isPendingDebt } from '@/shared'
+import { resolveExpenseShares, planAbono, isPendingDebt, settleExpenseContributions } from '@/shared'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -434,6 +434,30 @@ export async function joinHousehold(userId: string, inviteCode: string, displayN
   return { id: hDoc.id }
 }
 
+/**
+ * Adds a guest to the household — someone sharing an expense (e.g. a family trip) who has no account and never
+ * logs in. Only `members`/`memberNames`/`guestIds` change: there is no `users/{id}` to touch, no invite to send.
+ */
+export async function addGuestMember(householdId: string, name: string) {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('Escribe un nombre para el invitado')
+  const guestId = `guest_${crypto.randomUUID()}`
+  await updateDoc(doc(db, 'households', householdId), {
+    members:     arrayUnion(guestId),
+    guestIds:    arrayUnion(guestId),
+    [`memberNames.${guestId}`]: trimmed,
+  })
+  return { id: guestId }
+}
+
+/** Removes a guest from the household's active member list. Their past debts stay on record, untouched. */
+export async function removeGuestMember(householdId: string, guestId: string) {
+  await updateDoc(doc(db, 'households', householdId), {
+    members:  arrayRemove(guestId),
+    guestIds: arrayRemove(guestId),
+  })
+}
+
 export async function getHousehold(id: string) {
   const snap = await getDoc(doc(db, 'households', id))
   if (!snap.exists()) return null
@@ -776,12 +800,44 @@ export async function getDebtCrossings(debtId: string) {
 // ── Household Expenses (gasto compartido → genera deudas automáticamente) ────
 
 /**
- * Registers a shared expense and, in the same batch, creates one HouseholdDebt
- * per non-payer share — so "Carlos compró un mueble de 800000, 50/50" results in
- * a single 400000 debt for Alexandra, linked back to this expense via expenseId.
+ * Registers a shared expense with one or several payers (e.g. "Carlos compró un mueble de 800.000, 50/50" — one
+ * payer — or a trip where Carlos, Ale and a guest each put in a different amount) and settles who ends up owing
+ * whom with `settleExpenseContributions`. A payer who is a guest, or whoever is registering the expense, is taken
+ * at their word right away — their debts are created in the same batch. Any *other* real member's declared
+ * contribution starts `'pending'` on the expense itself: nobody owes them anything, and nothing of theirs is
+ * touched, until they confirm it with `confirmExpenseContribution` — exactly the "don't debit until they confirm"
+ * guarantee the rest of the app already gives Telegram-sourced movements.
  */
-export async function createHouseholdExpense(data: NewHouseholdExpense) {
-  const shares = resolveExpenseShares(data.amount, data.paidBy, data.splitMode, data.shareInputs)
+export async function createHouseholdExpense(data: NewHouseholdExpense, guestIds: string[] = []) {
+  if (data.payers.length === 0) throw new Error('Indica quién puso el dinero')
+  if (data.shareInputs.length === 0) throw new Error('Elige al menos a una persona con quien dividir el gasto')
+  const totalPaid = data.payers.reduce((s, p) => s + p.amount, 0)
+  if (totalPaid !== data.amount) {
+    throw new Error(`Lo que pusieron entre todos (${formatCOPRaw(totalPaid)}) no coincide con el total del gasto (${formatCOPRaw(data.amount)})`)
+  }
+
+  // resolveExpenseShares only needs *a* participant to anchor its rounding to — it has nothing to do with who paid
+  const rawShares = resolveExpenseShares(data.amount, data.shareInputs[0].memberId, data.splitMode, data.shareInputs)
+  const paidByMember = new Map(data.payers.map((p) => [p.memberId, p.amount]))
+  const shares: ExpenseShareRecord[] = rawShares.map((s) => ({ memberId: s.memberId, amount: s.amount, paid: paidByMember.get(s.memberId) ?? 0 }))
+
+  const edges = settleExpenseContributions(
+    rawShares.map((s) => ({ memberId: s.memberId, amount: s.amount })),
+    data.payers,
+  )
+
+  // a guest can't confirm anything, and whoever registers this is asserting it live — everyone else's claim needs their own OK
+  const needsConfirmation = (memberId: string) => memberId !== data.registeredBy && !guestIds.includes(memberId)
+
+  const edgesOf = new Map<string, { debtor: string; amount: number }[]>()
+  for (const e of edges) edgesOf.set(e.creditor, [...(edgesOf.get(e.creditor) ?? []), { debtor: e.debtor, amount: e.amount }])
+
+  const contributions: ExpenseContribution[] = data.payers.map((p) => ({
+    memberId: p.memberId,
+    amount:   p.amount,
+    status:   needsConfirmation(p.memberId) ? 'pending' : 'confirmed',
+    edges:    edgesOf.get(p.memberId) ?? [],
+  }))
 
   const batch = writeBatch(db)
   const expenseRef = doc(collection(db, 'householdExpenses'))
@@ -793,24 +849,26 @@ export async function createHouseholdExpense(data: NewHouseholdExpense) {
     amount:       data.amount,
     category:     data.category,
     date:         Timestamp.fromDate(data.date),
-    paidBy:       data.paidBy,
     splitMode:    data.splitMode,
     shares,
+    contributions,
     dueDate,
     notes:        data.notes ?? '',
     registeredBy: data.registeredBy,
     createdAt:    serverTimestamp(),
+    ...(data.attachmentId ? { attachmentId: data.attachmentId } : {}),
   })
 
-  for (const debtor of sharesToDebtors(shares)) {
-    const debtRef = doc(collection(db, 'householdDebts'))
-    batch.set(debtRef, {
+  // only the edges whose creditor is already confirmed become real debts right now
+  for (const e of edges) {
+    if (needsConfirmation(e.creditor)) continue
+    batch.set(doc(collection(db, 'householdDebts')), {
       householdId:  data.householdId,
       concept:      data.description,
       tipo:         'Deuda',
-      amount:       debtor.amount,
-      debtor:       debtor.memberId,
-      creditor:     data.paidBy,
+      amount:       e.amount,
+      debtor:       e.debtor,
+      creditor:     e.creditor,
       category:     data.category,
       date:         Timestamp.fromDate(data.date),
       registeredBy: data.registeredBy,
@@ -822,11 +880,104 @@ export async function createHouseholdExpense(data: NewHouseholdExpense) {
       expenseId:    expenseRef.id,
       dueDate,
       createdAt:    serverTimestamp(),
+      ...(data.attachmentId ? { attachmentId: data.attachmentId } : {}),
     })
   }
 
+  // the creator asserts their own contribution live, same as a guest's — but unlike a guest, it's their real
+  // money and their real account, so it belongs in their own expense history, exactly like a confirmed one
+  const ownContribution = data.payers.find((p) => p.memberId === data.registeredBy)
+  if (ownContribution) {
+    const accountId = data.registeredByAccountId || undefined
+    batch.set(doc(collection(db, 'expenses')), {
+      userId: data.registeredBy, description: `Aporte a "${data.description}" (hogar)`, amount: ownContribution.amount,
+      category: 'otro', date: Timestamp.fromDate(data.date), type: 'variable', isRecurring: false, tracked: true,
+      ...(accountId ? { accountId } : {}), createdAt: serverTimestamp(),
+    })
+    if (accountId) batch.update(doc(db, 'accounts', accountId), { balance: increment(-ownContribution.amount) })
+  }
+
   await batch.commit()
-  return { id: expenseRef.id, shares }
+  const pendingFor = contributions.filter((c) => c.status === 'pending').map((c) => c.memberId)
+  return { id: expenseRef.id, shares, pendingFor }
+}
+
+/**
+ * A registered member confirms they really did put `amount` into a shared expense someone else registered on
+ * their behalf. This is the only moment any of it becomes real: the debts the settlement worked out for them
+ * (`edges`) are created now, and — since that money left their own pocket — it's also logged as a personal
+ * expense of theirs (optionally debiting one of their accounts), the same way confirming any other pending
+ * movement does. Confirming twice, or confirming something already declined, is refused.
+ */
+export async function confirmExpenseContribution(expenseId: string, memberId: string, accountId?: string) {
+  const expenseRef = doc(db, 'householdExpenses', expenseId)
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(expenseRef)
+    if (!snap.exists()) throw new Error('Ese gasto ya no existe')
+    const exp = snap.data()
+    const contributions = (exp.contributions as ExpenseContribution[] | undefined) ?? []
+    const idx = contributions.findIndex((c) => c.memberId === memberId)
+    if (idx === -1) throw new Error('No te encuentro como aportante de ese gasto')
+    const c = contributions[idx]
+    if (c.status !== 'pending') throw new Error(c.status === 'confirmed' ? 'Ya confirmaste este aporte' : 'Ya rechazaste este aporte')
+
+    const householdId = exp.householdId as string
+    const description = exp.description as string
+    const date = toDate(exp.date)
+
+    for (const e of c.edges) {
+      tx.set(doc(collection(db, 'householdDebts')), {
+        householdId, concept: description, tipo: 'Deuda', amount: e.amount, debtor: e.debtor, creditor: memberId,
+        category: exp.category as string, date: Timestamp.fromDate(date), registeredBy: memberId, estado: '', saldaId: null,
+        notas: '', cruzado: false, crossedAmount: 0, expenseId, dueDate: exp.dueDate ?? null, createdAt: serverTimestamp(),
+        ...(exp.attachmentId ? { attachmentId: exp.attachmentId } : {}),
+      })
+    }
+
+    tx.set(doc(collection(db, 'expenses')), {
+      userId: memberId, description: `Aporte a "${description}" (hogar)`, amount: c.amount, category: 'otro', date: Timestamp.fromDate(date),
+      type: 'variable', isRecurring: false, tracked: true, ...(accountId ? { accountId } : {}), createdAt: serverTimestamp(),
+    })
+    if (accountId) tx.update(doc(db, 'accounts', accountId), { balance: increment(-c.amount) })
+
+    const updated = [...contributions]
+    updated[idx] = { ...c, status: 'confirmed' }
+    tx.update(expenseRef, { contributions: updated })
+  })
+}
+
+/** The declared contribution wasn't actually theirs (or the amount is wrong): tells whoever registered the expense so they can fix it. */
+export async function declineExpenseContribution(expenseId: string, memberId: string) {
+  const expenseRef = doc(db, 'householdExpenses', expenseId)
+  let registeredBy = ''
+  let description = ''
+  let amount = 0
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(expenseRef)
+    if (!snap.exists()) throw new Error('Ese gasto ya no existe')
+    const exp = snap.data()
+    const contributions = (exp.contributions as ExpenseContribution[] | undefined) ?? []
+    const idx = contributions.findIndex((c) => c.memberId === memberId)
+    if (idx === -1) throw new Error('No te encuentro como aportante de ese gasto')
+    if (contributions[idx].status !== 'pending') throw new Error('Ese aporte ya fue resuelto')
+
+    registeredBy = exp.registeredBy as string
+    description = exp.description as string
+    amount = contributions[idx].amount
+
+    const updated = [...contributions]
+    updated[idx] = { ...contributions[idx], status: 'declined' }
+    tx.update(expenseRef, { contributions: updated })
+  })
+
+  await notifyHouseholdMembers([registeredBy], {
+    fromUid: memberId, zone: 'hogar', severity: 'warning',
+    title: 'Un aporte fue rechazado',
+    body: `Rechazó haber puesto ${formatCOPRaw(amount)} en "${description}". Revisa y corrige el registro.`,
+    link: `/hogar`,
+  }).catch(() => {})
 }
 
 export async function getHouseholdExpenses(householdId: string) {
@@ -1179,7 +1330,8 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
     // the person who was paid is told, with the detail, so they can confirm it and say in which account they got it
     const link = `/hogar?id=${pm.householdId}`
     if (!plan.paidTo || plan.paidTo === pm.userId) {
-      await notifyHouseholdMembers(members, { fromUid: pm.userId, zone: 'hogar', severity: 'info', title: `${myName} registró un abono`, body: `${pm.amount.toLocaleString('es-CO')}.`, link }).catch(() => {})
+      const guestIds = (hh.guestIds as string[] | undefined) ?? []
+      await notifyHouseholdMembers(members.filter((m) => !guestIds.includes(m)), { fromUid: pm.userId, zone: 'hogar', severity: 'info', title: `${myName} registró un abono`, body: `${pm.amount.toLocaleString('es-CO')}.`, link }).catch(() => {})
     } else {
       await notifyHouseholdMembers([plan.paidTo], {
         fromUid: pm.userId, zone: 'hogar', severity: 'info', title: `${myName} te pagó $${pm.amount.toLocaleString('es-CO')}`,
