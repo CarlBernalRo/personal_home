@@ -31,7 +31,12 @@ export interface PendingMovement {
   comment?: string;
   /** Small copy of the screenshot (`attachments/{id}`); it moves to the real record when the movement is confirmed. */
   attachmentId?: string;
-  source: 'telegram';
+  /** Where it came from: a Telegram screenshot, or money a family member sent (registered once, on their side). */
+  source: 'telegram' | 'family';
+  /** For a transfer from a family member: who sent it, and their family. */
+  fromUid?: string;
+  fromName?: string;
+  familyId?: string;
   status: 'pending' | 'confirmed' | 'discarded';
   /** What the screenshot said, kept for reference (the person may have corrected it). */
   read?: { amount?: number | null; date?: string | null; concept?: string | null; counterparty?: string | null; reference?: string | null; app?: string | null };

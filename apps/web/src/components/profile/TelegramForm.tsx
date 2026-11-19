@@ -20,6 +20,8 @@ const ZONES: { id: string; label: string; hint: string }[] = [
   { id: 'fijos',  label: 'Fijos',  hint: 'Pagos por vencer o vencidos' },
   { id: 'gastos', label: 'Gastos', hint: 'Presupuestos variables' },
   { id: 'hogar',  label: 'Hogar',  hint: 'Deudas, abonos y pagos recibidos' },
+  { id: 'familia', label: 'Familia', hint: 'Solicitudes para entrar y transferencias de tus familiares' },
+  { id: 'recordatorios', label: 'Recordatorios', hint: 'El día de cada recordatorio tuyo o compartido contigo' },
 ]
 
 const CLEAR_CODE = { telegramLinkCode: deleteField(), telegramLinkCodeAt: deleteField() }

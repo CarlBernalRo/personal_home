@@ -34,6 +34,8 @@ export interface VariableSpend {
   notes?: string;
   /** Screenshot of the spend (`attachments/{id}`), when it was registered from Telegram. */
   attachmentId?: string;
+  /** Account the money came out of (none: paid in cash). */
+  accountId?: string;
 }
 
 /** What the user still owes on one household debt (after crossings and abonos). */

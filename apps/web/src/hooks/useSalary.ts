@@ -23,6 +23,8 @@ const NO_BUDGETS: VariableBudget[] = []
 const sameDay = (a: Date, b: Date) =>
   a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 
+const startOfDayMs = (t: number) => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() }
+
 /** The user's pay schedule (profile), their confirmed salaries (incomes) and what is derived from them. */
 export function useSalary() {
   const { user, profile } = useAuth()
@@ -72,6 +74,7 @@ export function useSalary() {
             concept: e.description ?? '',
             notes: (e.notes as string | undefined) || undefined,
             attachmentId: e.attachmentId as string | undefined,
+            accountId: (e.accountId as string | undefined) || undefined,
           })),
       )
       setSalaries(
@@ -175,15 +178,29 @@ export function useSalary() {
   const household = useHouseholdOwed(linked.length > 0)
   const householdList = useMyHouseholds(linked.length > 0)
   const householdNames = useMemo(() => Object.fromEntries(householdList.map((h) => [h.id, h.name])), [householdList])
+  // Once the user has accounts, a movement registered without one (paid or received in cash, which the app does not
+  // track) moves no money here: it doesn't lower the accounts, the period's balance or the projection. Records from
+  // before the first account existed keep counting as they always did, so past periods don't change.
+  const accountsSince = useMemo(() => {
+    const times = accounts.map((a) => (a.createdAt ? new Date(a.createdAt instanceof Date ? a.createdAt : (a.createdAt as any).toDate?.() ?? a.createdAt).getTime() : NaN)).filter((t) => !isNaN(t))
+    return accounts.length === 0 ? null : times.length ? startOfDayMs(Math.min(...times)) : 0
+  }, [accounts])
+  const movesMoney = useCallback(
+    (date: Date, accountId?: string | null) => accountsSince === null || !!accountId || date.getTime() < accountsSince,
+    [accountsSince],
+  )
   const allSpends = useMemo(() => {
-    if (linked.length === 0) return spends
+    const own = spends.filter((x) => movesMoney(x.date, x.accountId))
+    if (linked.length === 0) return own
     // an abono belongs to the budget that follows its household (a specific one wins over "all")
-    const abonoSpends = household.abonos.flatMap((a): VariableSpend[] => {
+    const abonoSpends = household.abonos.filter((a) => movesMoney(a.date, a.accountId)).flatMap((a): VariableSpend[] => {
       const owner = linked.find((b) => b.householdIds?.includes(a.householdId)) ?? linked.find((b) => !b.householdIds?.length)
-      return owner ? [{ id: `abono|${a.id}`, budgetId: owner.id, date: a.date, amount: a.amount, concept: 'Abono en el hogar' }] : []
+      return owner ? [{ id: `abono|${a.id}`, budgetId: owner.id, date: a.date, amount: a.amount, concept: 'Abono en el hogar', accountId: a.accountId }] : []
     })
-    return [...spends, ...abonoSpends]
-  }, [spends, household.abonos, linked])
+    return [...own, ...abonoSpends]
+  }, [spends, household.abonos, linked, movesMoney])
+  // incomes received in cash stay out of the money too
+  const countedExtras = useMemo(() => extras.filter((x) => movesMoney(x.date, x.accountId)), [extras, movesMoney])
   const variable = useMemo(
     () => ({
       budgets,
@@ -267,7 +284,7 @@ export function useSalary() {
     await load()
   }
 
-  return { periodMode, boundsSchedule, accounts, accountsLoaded, reloadAccounts, depositAccountId, pickAccount, rememberAccount, schedule: usable ? schedule : null, salaries, extras, budgets, spends: allSpends, variable, addBudget, updateBudget, removeBudget, removeBudgets, registerSpend, removeSpend, personal, addPersonalExpense, editPersonalExpense, addExtra, removeExtra, periods, currentPeriod, pending, confirm, loading, reload: load }
+  return { periodMode, boundsSchedule, accounts, accountsLoaded, reloadAccounts, depositAccountId, pickAccount, rememberAccount, schedule: usable ? schedule : null, salaries, extras: countedExtras, allExtras: extras, movesMoney, budgets, spends: allSpends, variable, addBudget, updateBudget, removeBudget, removeBudgets, registerSpend, removeSpend, personal, addPersonalExpense, editPersonalExpense, addExtra, removeExtra, periods, currentPeriod, pending, confirm, loading, reload: load }
 }
 
 export type SalaryState = ReturnType<typeof useSalary>

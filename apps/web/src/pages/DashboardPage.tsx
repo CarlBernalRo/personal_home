@@ -26,7 +26,7 @@ const DAY_MS = 86_400_000
 export default function DashboardPage() {
   const data = useDashboardData()
   const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
-  useDefaultAccount(data.salary, data.outlook ? data.outlook.cash : null)
+  useDefaultAccount(data.salary, data.outlook ? data.outlook.computedCash : null)
 
   if (data.loading) {
     return (

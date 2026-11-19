@@ -24,7 +24,7 @@ import { formatCOP, topAccounts } from '@/shared'
 import type { AccountType } from '@/shared'
 import { AppIcon, EmptyMark, GOAL_ICON_KEYS } from '@/components/ui/AppIcon'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
-import { AccountMovements } from '@/components/finance/AccountMovements'
+import { useNavigate } from 'react-router-dom'
 
 // ── Account types ────────────────────────────────────────────────────────────
 const ACCOUNT_TYPES: { value: AccountType; label: string; icon: string }[] = [
@@ -57,7 +57,8 @@ type AccountForm  = z.infer<typeof accountSchema>
 type GoalForm     = z.infer<typeof goalSchema>
 type AddMoneyForm = z.infer<typeof addMoneySchema>
 
-type Tab = 'movimientos' | 'ahorros'
+// the movements moved to Mi dinero: what is left here is the accounts and the savings
+type Tab = 'ahorros'
 
 export default function FinancesPage() {
   const { user, profile } = useAuth()
@@ -65,11 +66,8 @@ export default function FinancesPage() {
   const ask = useConfirm()
   const cop = useMoneyMask()
   const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
-  const [activeTab, setActiveTab] = useState<Tab>('movimientos')
-  // Account picked on the left to narrow the movements (null = all), and a counter that makes the movements reload
-  // several accounts can be picked at once; empty = all
-  const [accountFilter, setAccountFilter] = useState<string[]>([])
-  const [refreshKey, setRefreshKey] = useState(0)
+  const [activeTab, setActiveTab] = useState<Tab>('ahorros')
+  const navigate = useNavigate()
 
   const [accounts, setAccounts]   = useState<any[]>([])
   const [moving, setMoving]       = useState(false)
@@ -116,7 +114,6 @@ export default function FinancesPage() {
     const data = await getAccounts(user.uid)
     setAccounts(data as any[])
     setLoadingAcc(false)
-    setRefreshKey((k) => k + 1)
   }
   async function loadGoals() {
     if (!user) return
@@ -231,7 +228,6 @@ export default function FinancesPage() {
   const totalTarget    = goals.reduce((s: number, g: any) => s + (g.targetAmount as number), 0)
 
   const TABS: { key: Tab; label: string; icon: string }[] = [
-    { key: 'movimientos', label: 'Movimientos', icon: 'list' },
     { key: 'ahorros',     label: 'Ahorros',     icon: 'savings' },
   ]
   const paneProps = {
@@ -296,7 +292,7 @@ export default function FinancesPage() {
           <div className="space-y-2.5">
             {ordered.map((acc: any) => {
               const typeInfo = ACCOUNT_TYPES.find((t) => t.value === acc.type)
-              const selected = accountFilter.includes(acc.id as string)
+              const selected = false
               const pocket = !!acc.parentId
               const parentName = pocket ? (accounts.find((a: any) => a.id === acc.parentId)?.name as string | undefined) : undefined
               const kids = accounts.filter((k: any) => k.parentId === acc.id)
@@ -308,9 +304,8 @@ export default function FinancesPage() {
                 >
                   <button
                     type="button"
-                    onClick={() => setAccountFilter((prev) => (selected ? prev.filter((x) => x !== acc.id) : [...prev, acc.id as string]))}
-                    aria-pressed={selected}
-                    title={selected ? `Quitar ${acc.name} del filtro` : `Sumar ${acc.name} al filtro de movimientos`}
+                    onClick={() => navigate(`/dinero?cuenta=${acc.id}`)}
+                    title={`Ver los movimientos de ${acc.name} en Mi dinero`}
                     className="flex items-center gap-3 min-w-0 flex-1 text-left"
                   >
                     <span
@@ -373,9 +368,6 @@ export default function FinancesPage() {
 
         <CurvedScrollContainer className="lg:flex-1 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50" corners="bottom-right" {...paneProps}>
       {/* ── MOVIMIENTOS tab ────────────────────────────────────────────────── */}
-      {activeTab === 'movimientos' && (
-        <AccountMovements accounts={accounts} accountFilter={accountFilter} onAccountFilter={setAccountFilter} refreshKey={refreshKey} />
-      )}
 
       {/* ── AHORROS tab ────────────────────────────────────────────────────── */}
       {activeTab === 'ahorros' && (

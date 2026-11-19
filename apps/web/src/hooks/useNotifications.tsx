@@ -49,7 +49,7 @@ interface NotificationsValue {
 }
 
 const EMPTY: NotificationsValue = {
-  notifications: [], history: [], unread: 0, unreadByZone: { sueldo: 0, fijos: 0, gastos: 0, hogar: 0 }, loading: false,
+  notifications: [], history: [], unread: 0, unreadByZone: { sueldo: 0, fijos: 0, gastos: 0, hogar: 0, familia: 0, recordatorios: 0 }, loading: false,
   refresh: async () => {}, markRead: async () => {}, markUnread: async () => {}, markAllRead: async () => {}, remove: async () => {}, clearAll: async () => {}, hiddenCount: 0, restoreHidden: () => {},
   acceptInvite: async () => {}, declineInvite: async () => {},
 }
@@ -202,7 +202,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const restoreHidden = useCallback(() => saveLocal({ read: local.read, hidden: [] }), [local, saveLocal])
 
   const unreadByZone = useMemo(() => {
-    const out: Record<NotificationZone, number> = { sueldo: 0, fijos: 0, gastos: 0, hogar: 0 }
+    const out: Record<NotificationZone, number> = { sueldo: 0, fijos: 0, gastos: 0, hogar: 0, familia: 0, recordatorios: 0 }
     for (const n of notifications) if (!n.read) out[n.zone] += 1
     return out
   }, [notifications])

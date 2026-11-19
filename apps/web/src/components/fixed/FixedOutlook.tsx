@@ -20,9 +20,9 @@ export function FixedOutlook({ cash, projection }: Props) {
   const cop = useMoneyMask()
 
   const rows: { label: string; value: number; tone?: string }[] = [
-    { label: 'En tu cuenta ahora', value: cash, tone: 'text-sky-300' },
-    { label: 'Pagos fijos pendientes', value: -pendingTotal },
-    ...(reserved > 0 ? [{ label: 'Reservado para ocasionales', value: -reserved, tone: 'text-amber-300' }] : []),
+    { label: 'En tus cuentas hoy', value: cash, tone: 'text-sky-300' },
+    { label: 'Fijos que faltan por pagar', value: -pendingTotal },
+    ...(reserved > 0 ? [{ label: 'Apartado para ocasionales', value: -reserved, tone: 'text-amber-300' }] : []),
   ]
 
   return (

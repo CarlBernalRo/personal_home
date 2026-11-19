@@ -11,7 +11,7 @@
  */
 import {
   autoDebitFloor, buildCalendarPeriods, buildSalaryPeriods, debtLines, deriveAlerts, FIXED_EXPENSE_CATEGORIES, isScheduleUsable, latestPayDate,
-  nextPayDate, PERSONAL_CATEGORIES, periodAt, periodModeOf, planAutoPayments, salaryLedgers,
+  nextPayDate, PERSONAL_CATEGORIES, periodAt, periodModeOf, planAutoPayments, salaryLedgers, reminderDates, dayKey,
 } from '../../../apps/web/src/shared/index'
 import { bogotaToday, fixedFor, households } from './commands'
 import type { Db, Doc } from './db'
@@ -155,12 +155,55 @@ export async function createServerNotices(d: JobDeps, users: Doc[], apply = true
   return created
 }
 
+/**
+ * Reminders due today: one notification for their owner and for each family member they are shared with (whether or
+ * not they use Telegram, so the app's bell shows it too). The id carries the date, so each day is told only once.
+ * Only between 8 a.m. and 9 p.m. in Colombia.
+ */
+export async function createReminderNotices(d: JobDeps, apply = true): Promise<number> {
+  const now = clock(d)
+  const hour = new Date(now - BOGOTA_HOURS * HOUR).getUTCHours()
+  if (hour < 8 || hour >= 21) return 0
+  const today = bogotaToday(now)
+  const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1)
+  const key = dayKey(today)
+  let created = 0
+  for (const r of await d.db.query('reminders').catch(() => [])) {
+    if (!r.date || !reminderDates({ date: r.date as string, every: Number(r.every) || 0 }, today, tomorrow).includes(key)) continue
+    if ((r.done as Record<string, unknown> | undefined)?.[key]) continue
+    const people = [r.userId as string, ...((r.sharedWith as string[] | undefined) ?? [])].filter(Boolean)
+    for (const uid of people) {
+      created++
+      if (!apply) continue
+      const owner = uid === r.userId ? '' : ` · de ${r.ownerName || 'tu familia'}`
+      try {
+        await d.db.batch([{
+          create: `notifications/${uid}_${encodeURIComponent(`rem|${r.id}|${key}`)}`,
+          data: {
+            userId: uid, fromUid: r.userId, zone: 'recordatorios', severity: 'warning',
+            title: `Hoy: ${r.title}`, body: `${r.notes ? `${r.notes}
+` : ''}Recordatorio${owner}. Márcalo como hecho en la app.`,
+            // a plain notice (no `derivedKey`: the app does not work these out, so it must not treat it as a solved alert);
+            // the document id alone keeps each day from being told twice
+            link: '/dinero', read: false, createdAt: new Date(now),
+          },
+        }])
+      } catch (e: any) {
+        if (e?.status === 409) { created--; continue }
+        console.error(`reminder ${r.id}:`, e?.message)
+      }
+    }
+  }
+  return created
+}
+
 export async function sendTelegramAvisos(d: JobDeps & { tg: Telegram; appUrl: string }, apply = true): Promise<TelegramResult> {
   const users = await d.db.query('users', [{ field: 'telegramChatId', op: 'GREATER_THAN', value: '' }])
   const out: TelegramResult = { users: users.length, sent: 0, skipped: 0 }
   if (users.length === 0) return out
   // first the notices the app would only make if it were open, so they go out in this same run
   out.created = await createServerNotices(d, users, apply)
+  out.created += await createReminderNotices(d, apply)
 
   const since = new Date(clock(d) - NOTICE_WINDOW_MS)
   const recent = await d.db.query('notifications', [{ field: 'createdAt', op: 'GREATER_THAN_OR_EQUAL', value: since }])
@@ -256,7 +299,7 @@ const BOGOTA_MS = 5 * HOUR
 const toFrame = (v: unknown) => (v instanceof Date ? new Date(v.getTime() - BOGOTA_MS) : v)
 const fromFrame = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 5, 0, 0))
 
-export interface PlannedDebit { docId: string; userId: string; concept: string; month: string; paidAmount: number; accountId: string; paymentDate: Date; fixedExpenseId: string }
+export interface PlannedDebit { docId: string; userId: string; concept: string; month: string; paidAmount: number; accountId: string; paymentDate: Date; fixedExpenseId: string; sharedWith?: string[] }
 export interface DebitsResult { planned: number; stored: number; skipped: number; items: string[] }
 
 /** What would be stored right now, without writing anything (shared by the run and by the tests). */
@@ -276,7 +319,9 @@ export async function planAutoDebits(db: Db, nowMs: number): Promise<PlannedDebi
       .map((a) => ({ ...a, createdAt: toFrame(a.createdAt), balanceSetAt: toFrame(a.balanceSetAt) }))
     const mine = everyExpense.filter((e) => e.userId === userId).map((e) => ({ ...e, createdAt: toFrame(e.createdAt) }))
     for (const p of planAutoPayments(mine as any, payments as any, accounts as any, today, userId)) {
-      out.push({ ...p, paymentDate: fromFrame(p.paymentDate) })
+      // a payment of an expense shared with the family is visible to the same people as its expense
+      const shared = (mine.find((e) => e.id === p.fixedExpenseId) as any)?.sharedWith as string[] | undefined
+      out.push({ ...p, paymentDate: fromFrame(p.paymentDate), ...(shared?.length ? { sharedWith: shared } : {}) })
     }
   }
   return out
@@ -294,7 +339,7 @@ export async function saveAutoDebits(d: JobDeps, apply = true): Promise<DebitsRe
           create: `fixedExpensePayments/${p.docId}`,
           data: {
             fixedExpenseId: p.fixedExpenseId, userId: p.userId, concept: p.concept, paidAmount: p.paidAmount, accountId: p.accountId,
-            month: p.month, paymentDate: p.paymentDate, notes: '', auto: true, createdAt: new Date(clock(d)),
+            month: p.month, paymentDate: p.paymentDate, notes: '', auto: true, createdAt: new Date(clock(d)), ...(p.sharedWith ? { sharedWith: p.sharedWith } : {}),
           },
         },
         { increment: `accounts/${p.accountId}`, field: 'balance', by: -p.paidAmount },

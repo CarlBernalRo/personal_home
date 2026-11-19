@@ -93,6 +93,8 @@ export interface FixedExpensePayment {
   notes: string;
   /** Screenshot of the payment sent from Telegram (`attachments/{id}`). */
   attachmentId?: string;
+  /** Family members who may see it (copied from its expense; the security rules check it). */
+  sharedWith?: string[];
   createdAt: Date;
 }
 

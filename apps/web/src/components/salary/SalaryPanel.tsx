@@ -5,7 +5,7 @@ import { withAttachment } from '@/lib/attachments'
 import { Link } from 'react-router-dom'
 import { format, isToday } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { PartyPopper, Wallet, Settings, Plus, Trash2, Landmark, ArrowLeftRight } from 'lucide-react'
+import { PartyPopper, Wallet, Settings, Plus, Trash2, Landmark } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -18,7 +18,6 @@ import { useConfirm } from '@/components/ui/ConfirmDialog'
 import type { SalaryState } from '@/hooks/useSalary'
 import { useAuth } from '@/hooks/useAuth'
 import { useMoneyMask } from '@/hooks/useMoneyMask'
-import { TransferModal } from '@/components/fixed/TransferModal'
 import { cashOnHand, nextPayDate, salaryLedgers, topAccounts } from '@/shared'
 
 interface Props {
@@ -34,23 +33,17 @@ const shortDate = (d: Date) => format(d, "d 'de' MMM", { locale: es })
 
 export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }: Props) {
   const full = variant === 'full'
-  const { schedule, periods, extras, addExtra, removeExtra, currentPeriod, pending, confirm, loading } = salary
+  const { schedule, periods, extras, removeExtra, currentPeriod, pending, confirm, loading } = salary
   const { showToast } = useToast()
   const ask = useConfirm()
   const { user } = useAuth()
-  const [moving, setMoving] = useState(false)
   const [open, setOpen] = useState(false)
   const [amount, setAmount] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [extraOpen, setExtraOpen] = useState(false)
-  const [extra, setExtra] = useState({ concept: '', amount: '', date: format(new Date(), 'yyyy-MM-dd') })
-  const [extraError, setExtraError] = useState<string | null>(null)
-  // Account the salary / extra income is deposited into
+  // Account the salary is deposited into (one-off incomes are registered from Mi dinero → Registrar)
   const [salaryAccount, setSalaryAccount] = useState('')
-  const [extraAccount, setExtraAccount] = useState('')
   const [salaryFile, setSalaryFile] = useState<File | null>(null)
-  const [extraFile, setExtraFile] = useState<File | null>(null)
   const cop = useMoneyMask()
   const accountOptions = salary.accounts.map((a: any) => ({ value: a.id as string, label: `${a.name} · ${cop(a.balance as number)}` }))
 
@@ -107,32 +100,6 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
       showToast('Sueldo confirmado', 'success')
     } catch {
       showToast('No se pudo confirmar el sueldo', 'error')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  function openExtra() {
-    setExtra({ concept: '', amount: '', date: format(new Date(), 'yyyy-MM-dd') })
-    setExtraAccount(salary.depositAccountId)
-    setExtraFile(null)
-    setExtraError(null)
-    setExtraOpen(true)
-  }
-
-  async function onAddExtra(e: React.FormEvent) {
-    e.preventDefault()
-    const value = Number(extra.amount)
-    if (!extra.concept.trim()) return setExtraError('Escribe de qué es el ingreso')
-    if (!(value > 0)) return setExtraError('Ingresa un monto mayor a 0')
-    const [y, m, d] = extra.date.split('-').map(Number)
-    setSaving(true)
-    try {
-      await withAttachment(user!.uid, extraFile, (attachmentId) => addExtra(extra.concept.trim(), value, new Date(y, m - 1, d), extraAccount, attachmentId))
-      setExtraOpen(false)
-      showToast('Ingreso agregado', 'success')
-    } catch {
-      showToast('No se pudo guardar el ingreso', 'error')
     } finally {
       setSaving(false)
     }
@@ -197,17 +164,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
             </div>
             <div className="flex items-center justify-between gap-2">
               <Link to="/finanzas" className="text-[11px] font-semibold text-brand-300 hover:text-brand-200 transition">Administrar cuentas</Link>
-              {salary.accounts.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => setMoving(true)}
-                  className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#0d263a] px-3 py-1.5 text-[11px] font-semibold text-[#c7ccd1] hover:border-brand-400/50 hover:text-white transition"
-                >
-                  <ArrowLeftRight size={12} aria-hidden="true" /> Mover saldo
-                </button>
-              )}
             </div>
-            <TransferModal open={moving} onClose={() => setMoving(false)} userId={user?.uid ?? ''} accounts={salary.accounts} onDone={() => salary.reloadAccounts()} />
           </div>
         )
       })()}
@@ -239,13 +196,6 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
                 <span className="max-sm:block max-sm:text-[11px] max-sm:font-normal max-sm:text-[#8a929a]">{shortDate(currentPeriod.start)} al {shortDate(new Date(currentPeriod.end.getTime() - 86_400_000))}</span>
               </span>
             </div>
-            <button
-              type="button"
-              onClick={openExtra}
-              className="flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-violet-500/15 border border-violet-400/40 text-violet-200 hover:bg-violet-500/25 transition flex-shrink-0"
-            >
-              <Plus size={12} /> <span className="max-sm:hidden">Ingreso adicional</span><span className="sm:hidden">Ingreso</span>
-            </button>
           </div>
 
           <div className="space-y-2">
@@ -350,26 +300,6 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
           )}
         </div>
       )}
-
-      <Modal open={extraOpen} onClose={() => setExtraOpen(false)} title="Ingreso adicional">
-        <form onSubmit={onAddExtra} className="space-y-4">
-          <p className="text-xs text-[#9aa4ac]">
-            Dinero extra que recibiste además de tu sueldo (por ejemplo, alguien te pagó una deuda). Se suma a lo que te queda del período en que cae su fecha.
-          </p>
-          <Input label="Concepto" placeholder="ej. Me pagaron una deuda" value={extra.concept} onChange={(e) => { setExtra({ ...extra, concept: e.target.value }); setExtraError(null) }} />
-          <Input label="Monto (COP)" money placeholder="0" value={extra.amount} onChange={(e) => { setExtra({ ...extra, amount: e.target.value }); setExtraError(null) }} />
-          <Input label="Fecha en que lo recibiste" type="date" value={extra.date} onChange={(e) => setExtra({ ...extra, date: e.target.value })} />
-          {accountOptions.length > 0 && (
-            <Select label="¿A qué cuenta llegó?" value={extraAccount} onChange={(e) => setExtraAccount(e.target.value)} options={[...accountOptions, { value: '', label: 'Sin sumar a una cuenta' }]} />
-          )}
-          <AttachmentPicker file={extraFile} onChange={setExtraFile} />
-          {extraError && <p className="text-xs text-red-400">{extraError}</p>}
-          <div className="flex gap-2 pt-2">
-            <Button type="button" variant="secondary" className="flex-1" onClick={() => setExtraOpen(false)}>Cancelar</Button>
-            <Button type="submit" className="flex-1" disabled={saving} notched>{saving ? 'Guardando…' : 'Agregar ingreso'}</Button>
-          </div>
-        </form>
-      </Modal>
 
       <Modal open={open} onClose={() => setOpen(false)} title="¡Felicidades, ya te pagaron!">
         <form onSubmit={onConfirm} className="space-y-4">

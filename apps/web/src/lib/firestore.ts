@@ -1540,6 +1540,8 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
   let hh: Record<string, unknown> | null = null
   let members: string[] = []
   let paymentId = ''
+  // a payment of an expense shared with the family is visible to the same people as its expense
+  let fixedShared: string[] = []
 
   if (pm.kind === 'fixed') {
     if (!pm.fixedExpenseId || !pm.occMonth) throw new Error('Falta saber a qué gasto fijo corresponde')
@@ -1548,6 +1550,8 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
       where('userId', '==', pm.userId), where('fixedExpenseId', '==', pm.fixedExpenseId), where('month', '==', pm.occMonth),
     ))
     if (!already.empty) throw new Error('Ese gasto fijo ya está pagado en la app. Descarta este movimiento.')
+    const fe = await getDoc(doc(db, 'fixedExpenses', pm.fixedExpenseId)).catch(() => null)
+    fixedShared = ((fe?.exists() ? fe.data().sharedWith : null) as string[] | null) ?? []
   } else if (pm.kind === 'abono') {
     if (!pm.householdId) throw new Error('Falta saber a qué hogar corresponde')
     hh = await getHousehold(pm.householdId)
@@ -1580,7 +1584,8 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
     } else if (pm.kind === 'fixed') {
       tx.set(doc(collection(db, 'fixedExpensePayments')), {
         fixedExpenseId: pm.fixedExpenseId, userId: pm.userId, concept: pm.concept, paidAmount: pm.amount, month: pm.occMonth,
-        paymentDate: Timestamp.fromDate(date), notes: pm.comment ?? '', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+        paymentDate: Timestamp.fromDate(date), notes: pm.comment ?? '', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}),
+        ...(fixedShared.length ? { sharedWith: fixedShared } : {}), createdAt: serverTimestamp(),
       })
       if (account) tx.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
     } else if (pm.kind === 'abono') {

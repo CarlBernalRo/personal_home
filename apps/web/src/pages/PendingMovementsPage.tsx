@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { CalendarClock, CheckCheck, CheckCircle2, Home, Inbox, Layers, Loader2, Send, ShoppingBag, Trash2, Wallet } from 'lucide-react'
+import { CalendarClock, CheckCheck, CheckCircle2, Heart, Home, Inbox, Layers, Loader2, Send, ShoppingBag, Trash2, Wallet } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/Button'
 import { AccountSelect } from '@/components/ui/AccountSelect'
@@ -20,6 +20,10 @@ import { PendingContributionsCard } from '@/components/household/PendingContribu
 import { PERSONAL_CATEGORIES, formatCOP } from '@/shared'
 import type { PendingMovement, PendingKind } from '@/shared'
 import { useLayoutStore } from '@/store/layout'
+import { useFamily } from '@/hooks/useFamily'
+import { useDisplayName } from '@/hooks/useDisplayName'
+import { forwardToFamily } from '@/lib/family'
+import { Avatar } from '@/components/ui/Avatar'
 
 type Filter = 'all' | PendingKind | 'receipt' | 'contribution'
 type Account = { id: string; name: string; balance: number }
@@ -63,6 +67,13 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
   // the account chosen in Telegram, unless it no longer exists
   const [accountId, setAccountId] = useState(pm.accountId && accounts.some((a) => a.id === pm.accountId) ? pm.accountId : '')
   const [busy, setBusy] = useState<'confirm' | 'discard' | null>(null)
+  // a spend sent from Telegram can be a transfer to a family member: they get it as a pending income
+  const { family } = useFamily()
+  const { user } = useAuth()
+  const myName = useDisplayName() || 'Un familiar'
+  const relatives = family ? family.members.filter((u) => u !== user?.uid) : []
+  const canForward = pm.kind === 'occasional' && pm.source !== 'family' && relatives.length > 0
+  const [forwardTo, setForwardTo] = useState<string | null>(null)
   const k = KIND[pm.kind]
   const Icon = k.icon
   const category = pm.category ? PERSONAL_CATEGORIES.find((c) => c.id === pm.category)?.label : null
@@ -70,8 +81,14 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
   async function confirm() {
     setBusy('confirm')
     try {
-      await confirmPendingMovement(pm, accountId)
-      showToast(`${k.label} registrado`, 'success')
+      if (forwardTo && family && user) {
+        await confirmPendingMovement({ ...pm, category: 'transferencias', concept: pm.concept || `Transferencia a ${family.memberNames[forwardTo] ?? ''}` }, accountId)
+        await forwardToFamily({ family, from: user.uid, fromName: myName, to: forwardTo, amount: pm.amount, date: dateOf(pm.date), notes: pm.comment, attachmentId: pm.attachmentId })
+        showToast(`Transferencia registrada: a ${family.memberNames[forwardTo] ?? 'tu familiar'} le llegó para confirmarla`, 'success')
+      } else {
+        await confirmPendingMovement(pm, accountId)
+        showToast(`${k.label} registrado`, 'success')
+      }
       window.dispatchEvent(new Event(PENDING_CHANGED))
       onDone()
     } catch (e: any) {
@@ -107,12 +124,33 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
             {pm.kind === 'fixed' && pm.occMonth && (<><span aria-hidden="true">·</span><span>pago de {format(new Date(`${pm.occMonth}-01T12:00:00`), 'MMMM yyyy', { locale: es })}</span></>)}
             {category && (<><span aria-hidden="true">·</span><span>{category}</span></>)}
             {pm.kind === 'abono' && (<><span aria-hidden="true">·</span><span>{pm.targetDebtId ? 'a una deuda elegida' : 'se reparte entre sus deudas, la más antigua primero'}</span></>)}
+            {pm.source === 'family' && (<><span aria-hidden="true">·</span><span className="inline-flex items-center gap-1 text-rose-300"><Heart size={10} aria-hidden="true" /> De {pm.fromName ?? 'tu familia'} · familia</span></>)}
           </p>
+          {pm.source === 'family' && <p className="mt-1.5 text-[11px] text-[#9aa4ac]">{pm.fromName ?? 'Un familiar'} registró que te transfirió este dinero. Elige en qué cuenta te llegó y confírmalo: no tienes que registrarlo tú.</p>}
           {pm.comment && <p className="mt-2 rounded-lg border border-white/10 bg-[#0a1f2f] px-2.5 py-1.5 text-xs text-[#c7ccd1]">💬 {pm.comment}</p>}
         </div>
       </div>
 
       <div className="space-y-3 px-3 pb-3 sm:pl-[3.75rem]">
+        {canForward && (
+          <div className="space-y-2 rounded-xl border border-white/10 bg-[#0a1f2f] p-2.5">
+            <label className="flex items-center gap-2 text-xs text-[#c7ccd1] cursor-pointer">
+              <input type="checkbox" checked={forwardTo !== null} onChange={(e) => setForwardTo(e.target.checked ? (relatives.length === 1 ? relatives[0] : '') : null)} />
+              <Heart size={12} className="text-rose-300" aria-hidden="true" /> Es una transferencia a un familiar
+            </label>
+            {forwardTo !== null && (
+              <div className="flex flex-wrap gap-1.5">
+                {relatives.map((u) => (
+                  <button key={u} type="button" onClick={() => setForwardTo(u)} aria-pressed={forwardTo === u}
+                    className={clsx('inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-semibold transition', forwardTo === u ? 'border-brand-400 bg-brand-500/15 text-white' : 'border-white/10 text-[#9aa4ac] hover:text-white')}>
+                    <Avatar name={family!.memberNames[u] ?? '?'} photoURL={family!.memberPhotos[u]} size={16} /> {family!.memberNames[u] ?? 'Integrante'}
+                  </button>
+                ))}
+                <p className="basis-full text-[10px] text-[#8a929a]">Le llega como ingreso por confirmar, con esta misma captura.</p>
+              </div>
+            )}
+          </div>
+        )}
         <AccountSelect
           label={pm.kind === 'income' ? 'Cuenta donde entra el dinero' : 'Cuenta de la que sale el dinero'}
           accounts={accounts}
@@ -127,7 +165,7 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
               {busy === 'discard' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />} Descartar
             </Button>
           </div>
-          <Button type="button" size="sm" notched disabled={!!busy} onClick={confirm}>
+          <Button type="button" size="sm" notched disabled={!!busy || forwardTo === ''} onClick={confirm}>
             {busy === 'confirm' ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Confirmar y registrar
           </Button>
         </div>
@@ -169,6 +207,7 @@ function ReceiptCard({ r, accounts, onDone }: { r: PendingReceipt; accounts: (Ac
             <p className="break-words sm:truncate text-sm font-bold leading-snug text-[#f3f5f6]">{r.fromName} te pagó</p>
             <p className="flex-shrink-0 font-mono text-sm font-bold tabular-nums text-emerald-300">+{formatCOP(r.amount)}</p>
           </div>
+          {r.registeredBy && <p className="mt-0.5 text-[11px] text-[#9aa4ac]">Lo registró {r.registeredBy} a nombre de {r.fromName}.</p>}
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[#8a929a]">
             {r.attachmentId && <AttachmentButton compact attachmentId={r.attachmentId} />}
             <span className={clsx('font-semibold uppercase tracking-wider', k.chip)}>{k.label}</span>

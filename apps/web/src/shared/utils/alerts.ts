@@ -64,7 +64,7 @@ export function deriveAlerts(i: AlertInput): AppNotification[] {
       key: `over|${periodKey}`, zone: 'sueldo', severity: 'critical',
       title: 'Tus gastos superan tus ingresos',
       body: `Te pasas por ${cop(-i.ledger.remaining)} en este período de sueldo.`,
-      link: '/fijos',
+      link: '/dinero',
     });
   }
 
@@ -89,7 +89,7 @@ export function deriveAlerts(i: AlertInput): AppNotification[] {
       key: `fx-overdue|${overdue.map((e) => `${e.fe.id}:${e.hostMonth}`).sort().join(',')}`, zone: 'fijos', severity: 'critical',
       title: overdue.length === 1 ? '1 pago vencido' : `${overdue.length} pagos vencidos`,
       body: `${names}${overdue.length > 3 ? '…' : ''} · ${cop(total)} por pagar.`,
-      link: '/fijos',
+      link: '/dinero',
     });
   }
   for (const e of owed.filter((x) => x.status === 'due-soon' && x.arrears.length === 0 && x.due)) {
@@ -97,7 +97,7 @@ export function deriveAlerts(i: AlertInput): AppNotification[] {
       key: `fx-soon|${e.fe.id}|${e.hostMonth}`, zone: 'fijos', severity: 'warning',
       title: `${e.fe.concept} vence ${relativeDay(e.due!, today)}`,
       body: `${cop(e.total)} · ${(e.fe.autoDebit ?? []).length > 0 ? 'se debita automáticamente si tienes el saldo' : 'recuerda pagarlo'}.`,
-      link: '/fijos',
+      link: '/dinero',
     });
   }
 
@@ -112,7 +112,7 @@ export function deriveAlerts(i: AlertInput): AppNotification[] {
           key: `vb|${b.id}|${periodKey}`, zone: 'gastos', severity: 'warning',
           title: `${b.concept} superó su estimado`,
           body: `Llevas ${cop(spent)} de ${cop(b.amount)} estimados este período.`,
-          link: '/fijos?tab=config',
+          link: '/dinero?vista=config',
         });
       }
     }

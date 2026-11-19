@@ -644,3 +644,30 @@ textarea:focus {
 @media (prefers-reduced-motion: reduce) {
   .privacy-icon { animation: none !important; }
 }
+
+/* ── A family member's expense in the timeline: a border in the app's palette (lime → green → teal → blue) ── */
+.family-row {
+  --family-gradient: linear-gradient(110deg, #d9ed92, #76c893, #34a0a4, #168aad, #76c893, #d9ed92);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(#0d263a, #0d263a) padding-box,
+    var(--family-gradient) border-box;
+  background-size: 100% 100%, 250% 100%;
+  background-position: 0 0, 0% 50%;
+  transition: background-position 0.6s ease, box-shadow 0.25s ease;
+}
+@media (hover: hover) {
+  .family-row:hover {
+    background-position: 0 0, 100% 50%;
+    box-shadow: 0 0 0 1px rgba(118, 200, 147, 0.15), 0 0 18px -6px rgba(52, 160, 164, 0.55);
+  }
+}
+.family-tag {
+  background: linear-gradient(110deg, #d9ed92, #76c893, #34a0a4, #168aad);
+  color: #062a2a;
+}
+.family-ring {
+  padding: 2px;
+  border-radius: 9999px;
+  background: linear-gradient(140deg, #d9ed92, #52b69a, #168aad);
+}

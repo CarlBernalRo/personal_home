@@ -1,11 +1,12 @@
 import { Modal } from '@/components/ui/Modal'
+import { Avatar } from '@/components/ui/Avatar'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useRef, useState } from 'react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
 import {
-  AlertTriangle, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, CircleDashed, Clock, CornerUpRight,
+  AlertTriangle, Bell, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, CircleDashed, Clock, CornerUpRight,
   GripVertical, Home, Layers, Paperclip, Receipt, Zap, type LucideIcon,
 } from 'lucide-react'
 import {
@@ -23,6 +24,21 @@ interface Props {
   onMove: (expense: any, occMonth: string, target: DueOverride | null) => Promise<void>
   /** Occasional expenses: their usual pay day as a reminder, and the real spends on their date. */
   variable?: VariableData
+  /** Fixed expenses family members share with the user: drawn read only, with their face. */
+  shared?: { owner: { uid: string; name: string; photo: string | null }; expenses: any[]; paymentIndex: Map<string, any> }[]
+  onSelectShared?: (entry: MonthEntry<any> & { owner: { uid: string; name: string; photo: string | null } }) => void
+  /** Reminders of the month (mine and shared ones): no money, a chip on their day. */
+  reminders?: CalendarReminder[]
+}
+
+export interface CalendarReminder {
+  key: string
+  /** Day of the month shown. */
+  day: number
+  title: string
+  done: boolean
+  owner?: { name: string; photo: string | null }
+  onOpen: () => void
 }
 
 interface MenuState {
@@ -48,6 +64,8 @@ type DayItem =
   | { kind: 'debt'; key: string; b: VariableBudget; row: HouseholdDebtRow }
   | { kind: 'reminder'; key: string; b: VariableData['budgets'][number] }
   | { kind: 'spend'; key: string; x: VariableData['spends'][number] }
+  | { kind: 'shared'; key: string; entry: MonthEntry<any>; owner: { uid: string; name: string; photo: string | null } }
+  | { kind: 'note'; key: string; r: CalendarReminder }
 
 type IconType = LucideIcon
 
@@ -91,11 +109,11 @@ const entryAmount = (entry: MonthEntry<any>): number =>
 
 const AMBER_DOT = '#f59e0b'
 
-const itemDot = (item: DayItem) => (item.kind === 'fixed' ? STATUS_META[entryKey(item.entry)].dot : AMBER_DOT)
+const itemDot = (item: DayItem) => (item.kind === 'fixed' || item.kind === 'shared' ? STATUS_META[entryKey(item.entry)].dot : AMBER_DOT)
 
 const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400'
 
-export function FixedCalendar({ month, expenses, paymentIndex, onSelect, onMove, variable }: Props) {
+export function FixedCalendar({ month, expenses, paymentIndex, onSelect, onMove, variable, shared = [], onSelectShared, reminders = [] }: Props) {
   const today = new Date()
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -107,28 +125,41 @@ export function FixedCalendar({ month, expenses, paymentIndex, onSelect, onMove,
   const daysInMonth = new Date(y, m, 0).getDate()
   const leading = (new Date(y, m - 1, 1).getDay() + 6) % 7 // Monday-first
 
-  // One entry per expense on its date; unpaid earlier months are folded into the amount
-  const entries = monthEntries(expenses, month, paymentIndex, today)
+  // One entry per expense on its date; unpaid earlier months are folded into the amount.
   // What is drawn: unpaid ones on their due date; paid ones on the day they were paid, which can be in a
   // neighbouring month's bill (a payment made on the 28th for the 1st), so those are looked up there too
-  const drawn = new Map<string, MonthEntry<any>>()
-  for (const e of entries) if (e.owed.length > 0 || !e.due) drawn.set(`${e.fe.id}|${e.hostMonth}`, e)
-  for (const m2 of [shiftMonth(month, -1), month, shiftMonth(month, 1)]) {
-    for (const e of m2 === month ? entries : monthEntries(expenses, m2, paymentIndex, today)) {
-      if (e.owed.length > 0) continue
-      const shownOn = entryDisplayDate(e)
-      if (shownOn && monthKey(shownOn) === month) drawn.set(`${e.fe.id}|${e.hostMonth}`, e)
+  function layoutOf(exps: any[], idx: Map<string, any>) {
+    const entries = monthEntries(exps, month, idx, today)
+    const drawn = new Map<string, MonthEntry<any>>()
+    for (const e of entries) if (e.owed.length > 0 || !e.due) drawn.set(`${e.fe.id}|${e.hostMonth}`, e)
+    for (const m2 of [shiftMonth(month, -1), month, shiftMonth(month, 1)]) {
+      for (const e of m2 === month ? entries : monthEntries(exps, m2, idx, today)) {
+        if (e.owed.length > 0) continue
+        const shownOn = entryDisplayDate(e)
+        if (shownOn && monthKey(shownOn) === month) drawn.set(`${e.fe.id}|${e.hostMonth}`, e)
+      }
     }
+    const byDay = new Map<number, MonthEntry<any>[]>()
+    const noDay: MonthEntry<any>[] = []
+    for (const e of drawn.values()) {
+      const shownOn = entryDisplayDate(e)
+      if (!shownOn) { noDay.push(e); continue }
+      // an unpaid bill that is due in this month stays here; a paid one only if it was paid in this month
+      if (monthKey(shownOn) !== month) continue
+      const d = shownOn.getDate()
+      byDay.set(d, [...(byDay.get(d) ?? []), e])
+    }
+    return { byDay, noDay }
   }
-  const byDay = new Map<number, MonthEntry<any>[]>()
-  const noDay: MonthEntry<any>[] = []
-  for (const e of drawn.values()) {
-    const shownOn = entryDisplayDate(e)
-    if (!shownOn) { noDay.push(e); continue }
-    // an unpaid bill that is due in this month stays here; a paid one only if it was paid in this month
-    if (monthKey(shownOn) !== month) continue
-    const d = shownOn.getDate()
-    byDay.set(d, [...(byDay.get(d) ?? []), e])
+  const { byDay, noDay } = layoutOf(expenses, paymentIndex)
+  // the month's own entries (the summary only counts the user's)
+  const entries = monthEntries(expenses, month, paymentIndex, today)
+  // what family members share, laid out the same way
+  const sharedByDay = new Map<number, { entry: MonthEntry<any>; owner: { uid: string; name: string; photo: string | null } }[]>()
+  for (const g of shared) {
+    for (const [d, list] of layoutOf(g.expenses, g.paymentIndex).byDay) {
+      sharedByDay.set(d, [...(sharedByDay.get(d) ?? []), ...list.map((entry) => ({ entry, owner: g.owner }))])
+    }
   }
 
   // Occasional expenses: a reminder on the usual day (when it has one) and what was actually spent
@@ -160,6 +191,8 @@ export function FixedCalendar({ month, expenses, paymentIndex, onSelect, onMove,
       ...(linkedByDay.get(day) ?? []).map(({ b, row }, i): DayItem => ({ kind: 'debt', key: `${b.id}|${row.householdId}|${row.debt}|${i}`, b, row })),
       ...(reminderByDay.get(day) ?? []).map((b): DayItem => ({ kind: 'reminder', key: b.id, b })),
       ...(spendByDay.get(day) ?? []).map((x): DayItem => ({ kind: 'spend', key: x.id, x })),
+      ...reminders.filter((r) => r.day === day).map((r): DayItem => ({ kind: 'note', key: r.key, r })),
+      ...(sharedByDay.get(day) ?? []).map(({ entry, owner }): DayItem => ({ kind: 'shared', key: `sh|${entry.fe.id}|${entry.hostMonth}`, entry, owner })),
     ]
   }
 
@@ -289,6 +322,25 @@ export function FixedCalendar({ month, expenses, paymentIndex, onSelect, onMove,
             tone="dashed"
           />
         )
+      case 'note': {
+        const { r } = item
+        return (
+          <button
+            key={item.key}
+            type="button"
+            onClick={r.onOpen}
+            title={`${r.title} · recordatorio${r.owner ? ` de ${r.owner.name}` : ''} · ${r.done ? 'hecho' : 'pendiente'}`}
+            className={clsx('interactive-icon flex items-center gap-1 min-w-0 w-full rounded-md px-1.5 py-1 text-left', r.owner ? 'family-row' : 'border border-dashed border-slate-300/40 hover:border-slate-200/80', r.done && 'opacity-60', FOCUS)}
+          >
+            {r.owner
+              ? <span className="family-ring shrink-0 !p-[1.5px]"><Avatar name={r.owner.name} photoURL={r.owner.photo} size={12} className="!ring-0" /></span>
+              : (r.done ? <Check size={11} className="shrink-0 text-brand-300" /> : <Bell size={11} className="shrink-0 text-slate-300" />)}
+            <span className={clsx('truncate text-[11px] font-semibold text-slate-200', r.done && 'line-through')}>{r.title}</span>
+          </button>
+        )
+      }
+      case 'shared':
+        return <SharedChip key={item.key} entry={item.entry} owner={item.owner} onOpen={() => onSelectShared?.({ ...item.entry, owner: item.owner })} />
       case 'spend':
         return (
           <NoteChip
@@ -592,6 +644,32 @@ function FixedChip({ entry, viewMonth, isDragging, canDrag, onOpen, onPointerDow
   )
 }
 
+/** A family member's shared fixed expense: the family gradient, their face and the state; read only (no drag, no move). */
+function SharedChip({ entry, owner, onOpen }: { entry: MonthEntry<any>; owner: { name: string; photo: string | null }; onOpen: () => void }) {
+  const key = entryKey(entry)
+  const meta = STATUS_META[key]
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title={`${entry.fe.concept} · de ${owner.name} · ${formatCOP(entryAmount(entry))} · ${meta.label}`}
+      className={clsx('family-row interactive-icon flex items-stretch min-w-0 w-full rounded-md overflow-hidden text-left', FOCUS)}
+    >
+      <span className="w-[3px] shrink-0" style={{ backgroundColor: meta.dot }} aria-hidden />
+      <span className="min-w-0 flex-1 pl-1.5 pr-1 py-1 leading-tight">
+        <span className="flex items-center gap-1 min-w-0">
+          <span className="family-ring shrink-0 !p-[1.5px]"><Avatar name={owner.name} photoURL={owner.photo} size={12} className="!ring-0" /></span>
+          <span className="truncate text-[11px] font-semibold text-[#f0fae8]">{entry.fe.concept}</span>
+        </span>
+        <span className="flex items-center gap-1 min-w-0 mt-0.5">
+          <span className="font-mono text-[11px] font-semibold tabular-nums truncate text-[#dcf1eb]">{formatCOP(entryAmount(entry))}</span>
+          <span className="truncate text-[10px]" style={{ color: meta.dot }}>{meta.label}</span>
+        </span>
+      </span>
+    </button>
+  )
+}
+
 /** Reminders, household debts and registered spends: informative, amber, not draggable. */
 function NoteChip({ icon: Icon, title, label, sub, tone, accent = 'amber' }: {
   icon: IconType
@@ -645,6 +723,8 @@ function Legend() {
         <span className={clsx(pill, 'border-dashed border-amber-400/40 text-amber-200')}><CalendarClock size={10} /> Ocasional (recordatorio)</span>
         <span className={clsx(pill, 'border-amber-400/40 bg-amber-500/10 text-amber-200')}><Receipt size={10} /> Gasto ocasional registrado</span>
         <span className={clsx(pill, 'border-dashed border-amber-400/40 text-amber-200')}><Home size={10} /> Deuda de hogar</span>
+        <span className={clsx(pill, 'border-dashed border-slate-300/40 text-slate-200')}><Bell size={10} /> Recordatorio</span>
+        <span className={clsx(pill, 'family-row text-[#dcf1eb]')}>Compartido por tu familia</span>
       </div>
       <p className="flex items-center gap-1.5 text-[#8a929a]">
         <GripVertical size={12} className="hidden sm:block" />

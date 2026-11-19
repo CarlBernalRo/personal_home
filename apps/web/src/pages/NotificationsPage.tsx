@@ -20,6 +20,8 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'fijos', label: ZONE_LABEL.fijos },
   { id: 'gastos', label: ZONE_LABEL.gastos },
   { id: 'hogar', label: ZONE_LABEL.hogar },
+  { id: 'familia', label: ZONE_LABEL.familia },
+  { id: 'recordatorios', label: ZONE_LABEL.recordatorios },
 ]
 
 const GROUPS: DateGroup[] = ['Hoy', 'Esta semana', 'Antes']
@@ -30,6 +32,8 @@ const EMPTY_TEXT: Record<Filter, string> = {
   fijos: 'No tienes pagos fijos vencidos ni por vencer.',
   gastos: 'Tus gastos adicionales están dentro de lo esperado.',
   hogar: 'No hay movimientos ni invitaciones del hogar.',
+  familia: 'No hay solicitudes ni movimientos de tu familia.',
+  recordatorios: 'No tienes recordatorios para hoy.',
 }
 
 export default function NotificationsPage() {

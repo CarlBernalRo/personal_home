@@ -45,6 +45,53 @@ service cloud.firestore {
       allow read, write: if isOwner(userId);
     }
 
+    // Families — people who let each other see part of their expenses. Read is open to any authenticated user (a code
+    // has to be looked up before joining), but the code only lets someone ask: an administrator lets them in.
+    match /families/{familyId} {
+      function famChanged() { return request.resource.data.diff(resource.data).affectedKeys(); }
+      // a map field where only the caller's own entry changed (or the field didn't change at all)
+      function onlyMine(field) {
+        return !(field in famChanged()) ||
+          request.resource.data.get(field, {}).diff(resource.data.get(field, {})).affectedKeys().hasOnly([request.auth.uid]);
+      }
+      // a list field that is either unchanged or just lost the caller
+      function droppedMe(field) {
+        return !(field in famChanged()) ||
+          request.resource.data.get(field, []).toSet() == resource.data.get(field, []).toSet().difference([request.auth.uid].toSet());
+      }
+      allow read:   if isAuth();
+      allow create: if isAuth() && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.members == [request.auth.uid]
+        && request.resource.data.admins == [request.auth.uid];
+      // any administrator may delete it (each member's shared records close on their next sync)
+      allow delete: if isAuth() && request.auth.uid in resource.data.admins;
+      allow update: if isAuth() && (
+        // administrators manage the family: requests, members, roles, code
+        request.auth.uid in resource.data.admins
+        // a member changes only what is theirs (what they share, their name and photo) or leaves
+        || (request.auth.uid in resource.data.members
+            && famChanged().hasOnly(['shares', 'memberNames', 'memberPhotos', 'members', 'admins', 'relations'])
+            && onlyMine('shares') && onlyMine('memberNames') && onlyMine('memberPhotos') && onlyMine('relations')
+            && droppedMe('members') && droppedMe('admins'))
+        // anybody else may only send, withdraw or clear their own request
+        || (!(request.auth.uid in resource.data.members)
+            && famChanged().hasOnly(['requests', 'rejected'])
+            && onlyMine('requests') && onlyMine('rejected')
+            && (resource.data.get('open', true) == true || !(request.auth.uid in request.resource.data.get('requests', {}))))
+      );
+    }
+
+    // Reminders (something to do on a date, without money): the owner manages them; the family members they are shared
+    // with see them and may only mark them done
+    match /reminders/{id} {
+      allow read:   if isAuth() && (isOwner(resource.data.userId) || request.auth.uid in resource.data.get('sharedWith', []));
+      allow create: if isAuth() && isOwner(request.resource.data.userId);
+      allow delete: if isAuth() && isOwner(resource.data.userId);
+      allow update: if isAuth() && (isOwner(resource.data.userId)
+        || (request.auth.uid in resource.data.get('sharedWith', [])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['done'])));
+    }
+
     // Households — read is open to any authenticated (whitelisted) user because
     // joining by invite code requires reading the doc *before* you're a member;
     // the code itself is the access control for discovery. Only members can
@@ -66,21 +113,36 @@ service cloud.firestore {
 
     // Fixed expenses
     match /fixedExpenses/{id} {
-      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+      // a family member can read the ones the owner shared with them (the owner keeps `sharedWith` up to date)
+      allow read:         if isAuth() && (isOwner(resource.data.userId) || request.auth.uid in resource.data.get('sharedWith', []));
+      allow delete:       if isAuth() && isOwner(resource.data.userId);
       allow create:       if isAuth() && isOwner(request.resource.data.userId);
       allow update:       if isAuth() && isOwner(resource.data.userId);
     }
 
     // Fixed expense payment records
     match /fixedExpensePayments/{id} {
-      allow read, delete: if isAuth() && isOwner(resource.data.userId);
+      allow read:         if isAuth() && (isOwner(resource.data.userId) || request.auth.uid in resource.data.get('sharedWith', []));
+      allow delete:       if isAuth() && isOwner(resource.data.userId);
       allow create:       if isAuth() && isOwner(request.resource.data.userId);
       allow update:       if isAuth() && isOwner(resource.data.userId);
     }
 
     // Movements read from a Telegram screenshot: created by the bot (server side), confirmed or discarded by their owner in the app
     match /pendingMovements/{id} {
-      allow read, update, delete: if isAuth() && isOwner(resource.data.userId);
+      allow read, update: if isAuth() && isOwner(resource.data.userId);
+      // the owner, or the family member who sent a transfer that is still waiting (they deleted it on their side)
+      allow delete: if isAuth() && (isOwner(resource.data.userId)
+        || (resource.data.get('fromUid', '') == request.auth.uid && resource.data.status == 'pending'));
+      // money sent to a family member: the sender creates the recipient's pending income (both must be in that family)
+      allow create: if isAuth()
+        && request.resource.data.source == 'family'
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.kind == 'income'
+        && request.resource.data.status == 'pending'
+        && request.resource.data.userId != request.auth.uid
+        && request.auth.uid in get(/databases/$(database)/documents/families/$(request.resource.data.familyId)).data.members
+        && request.resource.data.userId in get(/databases/$(database)/documents/families/$(request.resource.data.familyId)).data.members;
     }
 
     // Small copies of receipts: the ones from Telegram are created by the bot, the ones attached by hand by their owner
@@ -88,6 +150,9 @@ service cloud.firestore {
     match /attachments/{id} {
       allow read:         if isAuth() && (isOwner(resource.data.userId) || request.auth.uid in resource.data.get('sharedWith', []));
       allow delete:       if isAuth() && isOwner(resource.data.userId);
+      // its owner may only change who else can see it (a receipt forwarded to a family member)
+      allow update:       if isAuth() && isOwner(resource.data.userId)
+                          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sharedWith']);
       allow create:       if isAuth() && isOwner(request.resource.data.userId)
                           && request.resource.data.source == 'app'
                           && request.resource.data.mime is string

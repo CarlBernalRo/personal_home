@@ -40,7 +40,7 @@ export function FixedZone({ fixedStats: s, entries }: Pick<DashboardData, 'fixed
   ]
 
   return (
-    <DashCard title="Gastos fijos" eyebrow="Zona 1" info="Estado de tus gastos fijos del mes: cuántos van pagados, cuáles están vencidos y en qué categorías se va el dinero." icon={CalendarCheck} tone="#3987e5" to="/fijos" linkLabel="Ver fijos">
+    <DashCard title="Gastos fijos" eyebrow="Zona 1" info="Estado de tus gastos fijos del mes: cuántos van pagados, cuáles están vencidos y en qué categorías se va el dinero." icon={CalendarCheck} tone="#3987e5" to="/dinero" linkLabel="Ver en Mi dinero">
       {s.count === 0 ? (
         <EmptyNote icon={CalendarCheck}>No tienes gastos fijos este período.</EmptyNote>
       ) : (

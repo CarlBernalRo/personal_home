@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { UserPhoto } from '@/components/ui/UserPhoto'
-import { LayoutDashboard, Receipt, CalendarCheck, UsersRound, Wallet, User, LogOut, ShieldCheck, Inbox, Banknote } from 'lucide-react'
+import { LayoutDashboard, CircleDollarSign, UsersRound, Wallet, User, LogOut, ShieldCheck, Inbox, Bell } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useRef, useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
@@ -19,10 +19,10 @@ import { useAutoDebits } from '@/hooks/useAutoDebits'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 import { PendingMovementsPrompt } from '@/components/pending/PendingMovementsPrompt'
 import { PendingMovementsLink } from '@/components/pending/PendingMovementsLink'
-import { TrayMenu } from '@/components/layout/TrayMenu'
+import { SidebarDragGhost, SidebarMainNav, SidebarTray } from '@/components/layout/SidebarNav'
 import { PanelCollapseToggle } from '@/components/ui/PanelCollapseToggle'
 import { BalanceVisibilityToggle } from '@/components/ui/BalanceVisibilityToggle'
-import { usePendingMovements } from '@/hooks/usePendingMovements'
+import { useFamilySync } from '@/hooks/useFamily'
 
 interface NavItemDef {
   to: string
@@ -51,29 +51,12 @@ const BASE_NAV: NavItemDef[] = [
     gradient: 'linear-gradient(145deg, rgba(82, 182, 154, 0.16), rgba(16, 37, 31, 0.08))',
   },
   {
-    to: '/fijos',
-    label: 'Fijos',
-    icon: CalendarCheck,
+    to: '/dinero',
+    label: 'Mi dinero',
+    icon: CircleDollarSign,
     accent: '#d9ed92',
     glow: 'rgba(217, 237, 146, 0.5)',
     gradient: 'linear-gradient(145deg, rgba(217, 237, 146, 0.16), rgba(54, 66, 11, 0.08))',
-  },
-  {
-    to: '/gastos',
-    label: 'Mis gastos adicionales',
-    shortLabel: 'Adicionales',
-    icon: Receipt,
-    accent: '#34a0a4',
-    glow: 'rgba(52, 160, 164, 0.5)',
-    gradient: 'linear-gradient(145deg, rgba(52, 160, 164, 0.16), rgba(10, 32, 33, 0.08))',
-  },
-  {
-    to: '/ingresos',
-    label: 'Ingresos',
-    icon: Banknote,
-    accent: '#a78bfa',
-    glow: 'rgba(167, 139, 250, 0.5)',
-    gradient: 'linear-gradient(145deg, rgba(167, 139, 250, 0.16), rgba(35, 24, 70, 0.08))',
   },
   {
     to: '/hogar',
@@ -91,6 +74,15 @@ const BASE_NAV: NavItemDef[] = [
     accent: '#76c893',
     glow: 'rgba(118, 200, 147, 0.5)',
     gradient: 'linear-gradient(145deg, rgba(118, 200, 147, 0.16), rgba(18, 45, 28, 0.08))',
+  },
+  {
+    to: '/notificaciones',
+    label: 'Notificaciones',
+    icon: Bell,
+    desktopOnly: true,
+    accent: '#f87171',
+    glow: 'rgba(248, 113, 113, 0.45)',
+    gradient: 'linear-gradient(145deg, rgba(248, 113, 113, 0.14), rgba(40, 10, 10, 0.06))',
   },
   {
     to: '/pendientes',
@@ -264,10 +256,11 @@ function ProfileMenu({ variant, collapsed = false }: { variant: 'sidebar' | 'mob
 
 export default function Layout() {
   const { isAdmin } = useAuth()
-  const pendingCount = usePendingMovements().counts.total
   // due automatic debits are saved as soon as the person is in the app, whichever screen they land on
   useAutoDebits()
-  const wideScreen = ['/', '/fijos', '/gastos', '/hogar', '/notificaciones', '/pendientes', '/perfil', '/finanzas', '/ingresos'].includes(useLocation().pathname)
+  // what the person shares with their family stays readable by exactly the right people
+  useFamilySync()
+  const wideScreen = ['/', '/dinero', '/hogar', '/notificaciones', '/pendientes', '/perfil', '/finanzas'].includes(useLocation().pathname)
   // The sidebar is icons only: sections are named by their tooltips, and it never expands
   const collapsed = true
 
@@ -318,59 +311,15 @@ export default function Layout() {
           </div>
 
           {/* Navigation Links */}
-          <nav className={clsx('flex-1 overflow-y-auto flex flex-col justify-center py-4 space-y-1.5', collapsed ? 'px-2' : 'px-3')}>
-            {/* Pendientes and Finanzas live in the tray menu (the arrow in the footer), not in this list */}
-            {navItems.filter((i) => i.to !== '/pendientes' && !i.inTray).map(({ to, label, icon: Icon, end, accent, glow, gradient }) => (
-              <SideTip key={to} label={label}>
-              <NavLink
-                to={to}
-                end={end}
-                aria-label={label}
-                style={{
-                  '--nav-accent': accent,
-                  '--nav-glow': glow,
-                  '--nav-grad': gradient,
-                } as React.CSSProperties}
-                className={({ isActive }) =>
-                  clsx(
-                    'sidebar-nav-item flex items-center gap-3 text-sm font-medium border relative',
-                    collapsed ? 'is-collapsed justify-center px-0 py-2.5 rounded-xl' : 'px-3.5 py-2.5 notch-sm',
-                    isActive
-                      ? 'is-active bg-brand-500/15 text-brand-400 font-bold border-l-2 !border-brand-500 glow-brand-sm'
-                      : 'text-[#9aa4ac] border-transparent hover:text-[#f3f5f6]',
-                  )
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    <div className={clsx(
-                      'icon-box flex items-center justify-center transition-all',
-                      collapsed && 'w-8 h-8 rounded-lg'
-                    )}>
-                      <Icon
-                        size={18}
-                        className={clsx(
-                          'sidebar-icon flex-shrink-0 transition-all duration-300',
-                          isActive ? 'text-brand-400' : 'text-[#8a929a]'
-                        )}
-                      />
-                      {to === '/pendientes' && pendingCount > 0 && (
-                        <span className="absolute right-0.5 top-0.5 h-4 min-w-[16px] rounded-full bg-sky-500 px-1 text-center font-mono text-[9px] font-bold leading-4 text-[#04141f] ring-2 ring-[#0a1f2f]" aria-hidden="true">
-                          {pendingCount > 99 ? '99+' : pendingCount}
-                        </span>
-                      )}
-                    </div>
-                    {!collapsed && <span className="tracking-tight">{label}</span>}
-                  </>
-                )}
-              </NavLink>
-              </SideTip>
-            ))}
+          <nav data-drop="main" className={clsx('flex-1 overflow-y-auto flex flex-col justify-center py-4 space-y-1.5', collapsed ? 'px-2' : 'px-3')}>
+            {/* each person chooses what stays here and what goes to "Más accesos" (the arrow in the footer) */}
+            <SidebarMainNav items={navItems} />
           </nav>
 
           {/* Footer with Session & Profile */}
           <div className={clsx('pb-4 pt-3 border-t border-white/[0.08] space-y-2.5 flex-shrink-0', collapsed ? 'px-2' : 'px-3.5')}>
-            <TrayMenu />
+            <SidebarTray items={navItems} />
+            <SidebarDragGhost />
             <SessionTimer collapsed={collapsed} />
             <ProfileMenu variant="sidebar" collapsed={collapsed} />
           </div>

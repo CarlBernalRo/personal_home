@@ -1,14 +1,12 @@
 import { lazy, Suspense } from 'react'
-import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { createBrowserRouter, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import Layout from '@/components/layout/Layout'
 import LoginPage from '@/pages/LoginPage'
 import DashboardPage from '@/pages/DashboardPage'
-import ExpensesPage from '@/pages/ExpensesPage'
-import FixedExpensesPage from '@/pages/FixedExpensesPage'
+import MoneyPage from '@/pages/MoneyPage'
 import HouseholdPage from '@/pages/HouseholdPage'
 import FinancesPage from '@/pages/FinancesPage'
-import IncomesPage from '@/pages/IncomesPage'
 import ProfilePage from '@/pages/ProfilePage'
 import AdminUsersPage from '@/pages/AdminUsersPage'
 import NotificationsPage from '@/pages/NotificationsPage'
@@ -50,6 +48,20 @@ function RedirectIfAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+/**
+ * Fijos, Gastos adicionales and Ingresos became one screen (Mi dinero). Their old addresses still work, from
+ * bookmarks, notifications and the Telegram bot: each opens Mi dinero on what it used to show.
+ */
+function ToMoney({ kind }: { kind?: 'additional' | 'income' }) {
+  const { search } = useLocation()
+  const old = new URLSearchParams(search)
+  const next = new URLSearchParams()
+  if (old.get('tab') === 'config') next.set('vista', 'config')
+  if (kind) next.set('tipo', kind)
+  const q = next.toString()
+  return <Navigate to={`/dinero${q ? `?${q}` : ''}`} replace />
+}
+
 export const router = createBrowserRouter([
   {
     path: '/login',
@@ -60,11 +72,12 @@ export const router = createBrowserRouter([
     element: <RequireAuth><Layout /></RequireAuth>,
     children: [
       { index: true,          element: <DashboardPage /> },
-      { path: 'gastos',       element: <ExpensesPage /> },
-      { path: 'fijos',        element: <FixedExpensesPage /> },
+      { path: 'dinero',       element: <MoneyPage /> },
+      { path: 'gastos',       element: <ToMoney kind="additional" /> },
+      { path: 'fijos',        element: <ToMoney /> },
       { path: 'hogar',        element: <HouseholdPage /> },
       { path: 'finanzas',     element: <FinancesPage /> },
-      { path: 'ingresos',     element: <IncomesPage /> },
+      { path: 'ingresos',     element: <ToMoney kind="income" /> },
       ...(SeedPage ? [{ path: 'seed', element: <Suspense fallback={null}><SeedPage /></Suspense> }] : []),
       { path: 'notificaciones', element: <NotificationsPage /> },
       { path: 'pendientes',     element: <PendingMovementsPage /> },

@@ -53,7 +53,7 @@ export function ExpensesZone({ additional, categories, spendCurve, bounds }: Pic
   const biggest = additional.reduce<(typeof additional)[number] | null>((m, e) => (!m || e.amount > m.amount ? e : m), null)
 
   return (
-    <DashCard title="Mis gastos adicionales" eyebrow="Zona 2" info="Resumen de lo que has gastado en este período fuera de tus gastos fijos: total, categorías, acumulado diario y últimos movimientos." icon={ShoppingBag} tone={SERIES.additional} to="/gastos" linkLabel="Ver gastos">
+    <DashCard title="Mis gastos adicionales" eyebrow="Zona 2" info="Resumen de lo que has gastado en este período fuera de tus gastos fijos: total, categorías, acumulado diario y últimos movimientos." icon={ShoppingBag} tone={SERIES.additional} to="/dinero?tipo=additional" linkLabel="Ver en Mi dinero">
       {additional.length === 0 ? (
         <EmptyNote icon={ShoppingBag}>Aún no registras gastos adicionales en este período.</EmptyNote>
       ) : (

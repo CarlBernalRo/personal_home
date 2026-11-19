@@ -1,4 +1,23 @@
-import type { ExpenseRow } from './ExpenseTimeline'
+/** One personal spend of a period, as Mi dinero lists it. */
+export interface ExpenseRow {
+  id: string
+  description: string
+  amount: number
+  category: string
+  date: Date
+  /** Lowers the money on hand and the period's leftover. Older records are history only. */
+  counted: boolean
+  /** Paid from a household (an abono): shown for completeness, managed in Hogar. */
+  household: boolean
+  /** Registered against an occasional expense (gasoline, card…). */
+  budget: boolean
+  /** Account the money came out of. */
+  accountId?: string
+  /** Screenshot of the spend, when it came from Telegram. */
+  attachmentId?: string
+  /** Observation left on the spend. */
+  notes?: string
+}
 
 const toDate = (d: unknown) => (d instanceof Date ? d : new Date(d as string))
 

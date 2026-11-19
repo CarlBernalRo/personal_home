@@ -157,15 +157,25 @@ export default function HouseholdPage() {
    * A payment is announced to the person who receives it, with the detail of what it went to, so they can confirm it and
    * say in which account they got it. When nobody can be told apart, the rest of the household just hears about it.
    */
-  function tellPayment(to: string | null, amount: number, lines: { concept: string; amount: number }[], paymentId: string, date: Date) {
+  function tellPayment(to: string | null, amount: number, lines: { concept: string; amount: number }[], paymentId: string, date: Date, payer: string) {
     if (!user || !activeId) return
-    if (!to || to === user.uid) { tellHousehold(`${myName} registró un abono`, `${formatCOP(amount)}.`); return }
+    // who paid is who handed the money (a guest, say), not whoever typed it in: the notice names them, and says who registered it
+    const payerName = payer === user.uid ? myName : nameOf(payer)
+    const byOther = payer !== user.uid ? ` Lo registró ${myName}.` : ''
+    const detail = lines.map((l) => `${l.concept} (${formatCOP(l.amount)})`).join(' · ')
+    if (!to || to === user.uid) {
+      tellHousehold(
+        payer === user.uid ? `${myName} registró un abono de ${formatCOP(amount)}` : `${myName} registró un pago de ${payerName}`,
+        payer === user.uid ? `${detail || formatCOP(amount)}.` : `${payerName} pagó ${formatCOP(amount)}${detail ? `: ${detail}` : ''}.`,
+      )
+      return
+    }
     notifyHouseholdMembers([to], {
       fromUid: user.uid, zone: 'hogar', severity: 'info',
-      title: `${myName} te pagó ${formatCOP(amount)}`,
-      body: `${lines.map((l) => `${l.concept} (${formatCOP(l.amount)})`).join(' · ')}. Confirma que lo recibiste y en qué cuenta.`,
+      title: `${payerName} te pagó ${formatCOP(amount)}`,
+      body: `${detail}.${byOther} Confirma que lo recibiste y en qué cuenta.`,
       link: '/pendientes',
-      receipt: { householdId: activeId, paymentId, amount, fromName: myName, lines, date: date.toISOString() },
+      receipt: { householdId: activeId, paymentId, amount, fromName: payerName, lines, date: date.toISOString(), ...(payer !== user.uid ? { registeredBy: myName } : {}) },
     }).catch(() => { /* a failed notice must never undo what was saved */ })
   }
 
@@ -285,11 +295,14 @@ export default function HouseholdPage() {
         extraPlans.push({ line, plan: linePlan })
       }
       await addHouseholdDebtsBatch(toWrite)
-      for (const { line } of extraPlans.filter((x) => x.line.debtor !== user.uid)) {
+      // the payer covered someone else's debt: that person is told who paid it for them (and who registered it, if not the payer)
+      const payer = data.debtor
+      const payerName = payer === user.uid ? myName : nameOf(payer)
+      for (const { line } of extraPlans.filter((x) => x.line.debtor !== user.uid && x.line.debtor !== payer)) {
         notifyHouseholdMembers([line.debtor], {
           fromUid: user.uid, zone: 'hogar', severity: 'info',
-          title: `${myName} pagó tu deuda con ${nameOf(line.creditor)}`,
-          body: `${formatCOP(line.amount)} quedaron cubiertos.`, link: `/hogar?id=${activeId}`,
+          title: `${payerName} pagó tu deuda con ${nameOf(line.creditor)}`,
+          body: `${formatCOP(line.amount)} quedaron cubiertos.${payer !== user.uid ? ` Lo registró ${myName}.` : ''}`, link: `/hogar?id=${activeId}`,
         }).catch(() => {})
       }
 
@@ -303,7 +316,7 @@ export default function HouseholdPage() {
       }
       addToCreditor(plan.paidTo, data.amount, plan.paidLines)
       for (const { line, plan: linePlan } of extraPlans) addToCreditor(linePlan.paidTo, line.amount, linePlan.paidLines)
-      for (const [to, merged] of byCreditor) tellPayment(to, merged.amount, merged.lines, paymentId, paidAt)
+      for (const [to, merged] of byCreditor) tellPayment(to, merged.amount, merged.lines, paymentId, paidAt, payer)
 
       if (plan.kind === 'target') {
         if (plan.remainingAfter === 0) showToast(`¡Deuda "${plan.targetConcept}" 100% saldada!`, 'success')
@@ -315,7 +328,7 @@ export default function HouseholdPage() {
       }
       const coveredOthers = validExtras.filter((l) => l.debtor !== user.uid)
       if (coveredOthers.length > 0) {
-        showToast(`También cubriste la deuda de ${coveredOthers.map((l) => nameOf(l.debtor)).join(', ')}`, 'success')
+        showToast(`${payer === user.uid ? 'También cubriste' : `${payerName} también cubrió`} la deuda de ${coveredOthers.map((l) => nameOf(l.debtor)).join(', ')}`, 'success')
       }
 
       setAbonoFile(null)

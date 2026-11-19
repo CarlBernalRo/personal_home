@@ -42,6 +42,8 @@ const ZONE = {
   fijos: { icon: '📅', label: 'Gastos fijos' },
   gastos: { icon: '🛒', label: 'Gastos' },
   hogar: { icon: '🏠', label: 'Hogar' },
+  familia: { icon: '💞', label: 'Familia' },
+  recordatorios: { icon: '⏰', label: 'Recordatorio' },
 } as const
 const SEVERITY = { critical: '🔴', warning: '🟠', info: '🔵', success: '🟢' } as const
 const zoneOf = (z: unknown) => ZONE[z as keyof typeof ZONE] ?? { icon: '🔔', label: 'Aviso' }
@@ -389,7 +391,7 @@ async function householdDebt(c: Ctx, n: Doc, key: string): Promise<Msg> {
 
 async function receipt(c: Ctx, n: Doc): Promise<Msg> {
   const r = n.receipt
-  const lines = [`💰 <b>${esc(n.title)}</b>\n<i>🏠 Hogar · ${dayShort(new Date(new Date(r.date).getTime() - 5 * 3600_000))}</i>`, rule, `💵 <b>${cop(r.amount)}</b> de ${esc(r.fromName)}`]
+  const lines = [`💰 <b>${esc(n.title)}</b>\n<i>🏠 Hogar · ${dayShort(new Date(new Date(r.date).getTime() - 5 * 3600_000))}</i>`, rule, `💵 <b>${cop(r.amount)}</b> de ${esc(r.fromName)}${r.registeredBy ? ` <i>(lo registró ${esc(r.registeredBy)})</i>` : ''}`]
   if (Array.isArray(r.lines) && r.lines.length) lines.push(`\n🧾 Por estos conceptos:`, quote(r.lines.map((l: any) => `• ${esc(l.concept)} — ${cop(l.amount)}`)))
   const accounts = await c.accounts()
   if (accounts.length) lines.push(`\n🏦 Confirma en cuál cuenta lo recibiste: ${accounts.slice(0, 4).map((a) => esc(a.name)).join(' · ')}`)

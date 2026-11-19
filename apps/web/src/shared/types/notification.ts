@@ -1,5 +1,5 @@
 /** The zone of the app an alert belongs to; the notification center groups and filters by it. */
-export type NotificationZone = 'sueldo' | 'fijos' | 'gastos' | 'hogar';
+export type NotificationZone = 'sueldo' | 'fijos' | 'gastos' | 'hogar' | 'familia' | 'recordatorios';
 
 /** critical: needs action now · warning: coming up · info: for your information · success: good news. */
 export type NotificationSeverity = 'critical' | 'warning' | 'info' | 'success';
@@ -10,7 +10,10 @@ export interface PaymentReceipt {
   /** Groups the abonos of that one payment. */
   paymentId: string;
   amount: number;
+  /** Who paid (who handed the money). */
   fromName: string;
+  /** Who typed it in, when it was not the payer (e.g. the person who registers the payments of a guest). */
+  registeredBy?: string;
   /** What the money went to: one line per debt it paid. */
   lines: { concept: string; amount: number }[];
   /** ISO date of the payment. */

@@ -10,6 +10,8 @@ export interface PendingReceipt {
   paymentId: string
   fromUid: string
   fromName: string
+  /** Who typed the payment in, when it was not the payer (a guest's payment registered by a member). */
+  registeredBy?: string
   amount: number
   date: Date
   lines: { concept: string; amount: number }[]
@@ -57,6 +59,7 @@ export function usePendingReceipts() {
       const g = groups.get(key) ?? {
         key, householdId: r.householdId as string, householdName: (hh?.name as string) ?? 'Hogar', paymentId: r.paymentId as string,
         fromUid: r.debtor as string, fromName: (hh?.memberNames?.[r.debtor as string] as string) ?? 'Alguien',
+        ...(r.registeredBy && r.registeredBy !== r.debtor ? { registeredBy: (hh?.memberNames?.[r.registeredBy as string] as string) ?? 'otra persona' } : {}),
         amount: 0, date: toDate(r.date), lines: [], attachmentId: r.attachmentId as string | undefined,
       }
       g.amount += r.amount as number

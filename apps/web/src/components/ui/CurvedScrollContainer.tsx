@@ -244,22 +244,40 @@ export function CurvedScrollContainer({
     const onScroll = () => updateThumb()
     content.addEventListener('scroll', onScroll, { passive: true })
 
+    // The scroll area keeps its own size when the page around it changes width (e.g. hiding the side panel), but
+    // its content reflows and gets taller or shorter: watching the content's children catches that, so the thumb is
+    // redrawn right away instead of on the next scroll.
     const ro = new ResizeObserver(() => {
       updatePath()
     })
-    ro.observe(container)
-    ro.observe(content)
+    const observeAll = () => {
+      ro.disconnect()
+      ro.observe(container)
+      ro.observe(content)
+      for (const child of Array.from(content.children)) ro.observe(child)
+    }
+    observeAll()
 
     const mo = new MutationObserver(() => {
+      observeAll()
       updatePath()
     })
     mo.observe(content, { childList: true, subtree: true, characterData: true })
+
+    // a layout change that animates (width transitions, view transitions) settles after the observers fired
+    const onSettled = () => updatePath()
+    // only transitions of this container or of something around it can move it (hover effects inside can't)
+    const onTransitionEnd = (e: TransitionEvent) => { if (e.target instanceof Node && e.target.contains(container)) updatePath() }
+    window.addEventListener('resize', onSettled)
+    document.addEventListener('transitionend', onTransitionEnd, true)
 
     return () => {
       cancelAnimationFrame(rafId)
       clearTimeout(timer50)
       clearTimeout(timer200)
       content.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onSettled)
+      document.removeEventListener('transitionend', onTransitionEnd, true)
       ro.disconnect()
       mo.disconnect()
     }
@@ -355,7 +373,8 @@ export function CurvedScrollContainer({
         style={{ display: hasScroll ? 'block' : 'none' }}
         aria-hidden="true"
       >
-        {/* Subtle track following the corner contour */}
+        {/* Subtle track following the corner contour. Only colour and width animate: animating its shape (`d`) would
+            make the thumb be measured on the old shape for a moment after the container changes size. */}
         <path
           ref={trackPathRef}
           fill="none"
@@ -365,7 +384,7 @@ export function CurvedScrollContainer({
           strokeWidth={variant === 'plain' ? (isDragging ? 6 : 4) : (isDragging ? 5.5 : 4)}
           strokeLinecap="round"
           onPointerDown={onPointerDownTrack}
-          className="cursor-pointer pointer-events-auto transition-all duration-200"
+          className="cursor-pointer pointer-events-auto transition-[stroke,stroke-width] duration-200"
         />
 
         {/* Neon curved thumb hugging the border radius */}
@@ -376,7 +395,7 @@ export function CurvedScrollContainer({
           strokeWidth={variant === 'plain' ? (isDragging ? 6 : 4) : (isDragging ? 6.5 : isHovered ? 5.5 : 4.5)}
           strokeLinecap="round"
           onPointerDown={onPointerDownThumb}
-          className="cursor-grab active:cursor-grabbing pointer-events-auto transition-all duration-150"
+          className="cursor-grab active:cursor-grabbing pointer-events-auto transition-[stroke,stroke-width,filter] duration-150"
           style={{
             filter: variant === 'plain' ? 'none' : `drop-shadow(0 0 ${isDragging ? 12 : isHovered ? 8 : 5}px ${activeColors.glow})`,
           }}

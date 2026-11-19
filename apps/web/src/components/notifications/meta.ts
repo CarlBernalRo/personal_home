@@ -1,4 +1,4 @@
-import { AlertTriangle, Banknote, CalendarCheck, CheckCircle2, Home, Info, Receipt, ShieldAlert, type LucideIcon } from 'lucide-react'
+import { AlertTriangle, Banknote, Bell, CalendarCheck, CheckCircle2, Heart, Home, Info, Receipt, ShieldAlert, type LucideIcon } from 'lucide-react'
 import type { NotificationSeverity, NotificationZone } from '@/shared/types/notification'
 
 export const ZONE_LABEL: Record<NotificationZone, string> = {
@@ -6,6 +6,8 @@ export const ZONE_LABEL: Record<NotificationZone, string> = {
   fijos: 'Fijos',
   gastos: 'Gastos adicionales',
   hogar: 'Hogar',
+  familia: 'Familia',
+  recordatorios: 'Recordatorios',
 }
 
 export const ZONE_ICON: Record<NotificationZone, LucideIcon> = {
@@ -13,6 +15,8 @@ export const ZONE_ICON: Record<NotificationZone, LucideIcon> = {
   fijos: CalendarCheck,
   gastos: Receipt,
   hogar: Home,
+  familia: Heart,
+  recordatorios: Bell,
 }
 
 export const SEVERITY_LABEL: Record<NotificationSeverity, string> = {

@@ -320,9 +320,6 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
           <Button size="sm" notched onClick={() => setOcasional({ editing: null })}>
             <Plus size={15} /> Nuevo gasto ocasional
           </Button>
-          <Button size="sm" notched onClick={() => onProgram()}>
-            <Plus size={15} /> Programar gasto
-          </Button>
         </div>
       </div>
 
@@ -481,7 +478,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
           </div>
 
           {openProgramados && (programados.length === 0 ? (
-            <p className="text-xs text-[#8a929a] notch-sm bg-[#0a1f2f] border border-white/10 px-4 py-3">Sin gastos programados. Usa "Programar gasto" para un pago único, como una matrícula o una cuota anual.</p>
+            <p className="text-xs text-[#8a929a] notch-sm bg-[#0a1f2f] border border-white/10 px-4 py-3">Sin gastos programados. Usa "Registrar → Programar un pago" para un pago único, como una matrícula o una cuota anual.</p>
           ) : (
             <>
               <label className="flex items-center gap-2 px-1 text-[10px] font-semibold text-[#8a929a] cursor-pointer select-none">

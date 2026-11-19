@@ -269,7 +269,7 @@ export function PayScheduleForm() {
         <div className="rounded-xl border border-dashed border-white/15 bg-[#0d263a]/50 p-3 space-y-1">
           <p className="text-xs font-semibold text-[#9aa4ac]">Cuenta donde se consigna tu sueldo</p>
           <p className="text-[11px] text-[#8a929a]">
-            Aún no tienes cuentas. La "Cuenta default" se crea sola la primera vez que abres Inicio o Fijos con tu sueldo configurado, y aquí podrás elegir otra. También puedes crearlas en <Link to="/finanzas" className="text-brand-300 hover:text-brand-200">Finanzas</Link>.
+            Aún no tienes cuentas. La "Cuenta default" se crea sola la primera vez que abres Inicio o Mi dinero con tu sueldo configurado, y aquí podrás elegir otra. También puedes crearlas en <Link to="/finanzas" className="text-brand-300 hover:text-brand-200">Finanzas</Link>.
           </p>
         </div>
       )}

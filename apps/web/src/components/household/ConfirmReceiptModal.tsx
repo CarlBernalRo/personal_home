@@ -69,6 +69,7 @@ export function ConfirmReceiptModal({ open, onClose, receipt, notificationId, on
           <div className="flex items-baseline justify-between gap-3">
             <div className="min-w-0">
               <p className="text-sm font-bold text-[#f3f5f6]">{receipt.fromName} te pagó</p>
+              {receipt.registeredBy && <p className="text-[11px] text-[#8a929a]">Lo registró {receipt.registeredBy} a nombre de {receipt.fromName}.</p>}
               <p className="text-[11px] text-[#8a929a]">{format(new Date(receipt.date), "d 'de' MMMM yyyy", { locale: es })}</p>
             </div>
             <p className="text-xl font-bold font-mono text-brand-300">{formatCOP(receipt.amount)}</p>
