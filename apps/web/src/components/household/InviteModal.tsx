@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { AlertTriangle, Check, Copy, Mail, MessageCircle, Send, Trash2, UserPlus } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Check, Copy, Mail, MessageCircle, Send, Trash2, UserPlus, type LucideIcon } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Modal } from '@/components/ui/Modal'
-import { Button } from '@/components/ui/Button'
-import { Input } from '@/components/ui/Input'
 import { IconTip } from '@/components/ui/IconTip'
 import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
-import { createHouseholdInvite, deleteHouseholdInvite, getAllowedUsers, getHouseholdInvites } from '@/lib/firestore'
+import { deleteHouseholdInvite, getHouseholdInvites } from '@/lib/firestore'
 import type { HouseholdInvite, InviteStatus } from '@/shared/types/notification'
 
 interface Props {
@@ -16,14 +14,7 @@ interface Props {
   householdId: string
   householdName: string
   inviteCode: string
-  /** Current member ids (uids; legacy members may be stored as e-mails). */
-  members: string[]
-  myUid: string
-  myEmail: string
-  myName: string
 }
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 
 const STATUS: Record<InviteStatus, { label: string; cls: string }> = {
   pending: { label: 'Pendiente', cls: 'text-amber-300 bg-amber-500/10 border-amber-500/30' },
@@ -31,69 +22,38 @@ const STATUS: Record<InviteStatus, { label: string; cls: string }> = {
   declined: { label: 'Rechazada', cls: 'text-red-300 bg-red-500/10 border-red-500/30' },
 }
 
-/** Invite a person by e-mail (shows up in their notification center) or share the household code by message. */
-export function InviteModal({ open, onClose, householdId, householdName, inviteCode, members, myUid, myEmail, myName }: Props) {
+const TILE = 'group flex flex-col items-center gap-1.5 rounded-xl border border-white/10 bg-[#0d263a] px-2 py-3 text-[11px] font-semibold text-[#c7ccd1] transition hover:border-brand-400/50 hover:bg-[#133e5f] hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400'
+
+/** One share option: a round coloured icon with its name underneath; a link, or a button when it only copies. */
+function Tile({ icon: Icon, label, color, href, onClick }: { icon: LucideIcon; label: string; color: string; href?: string; onClick?: () => void }) {
+  const inner = (
+    <>
+      <span className="flex h-10 w-10 items-center justify-center rounded-full border transition group-hover:scale-105" style={{ backgroundColor: color + '22', borderColor: color + '66', color }}>
+        <Icon size={18} aria-hidden="true" />
+      </span>
+      {label}
+    </>
+  )
+  return href
+    ? <a href={href} target={href.startsWith('mailto:') ? undefined : '_blank'} rel="noopener noreferrer" className={TILE}>{inner}</a>
+    : <button type="button" onClick={onClick} className={TILE}>{inner}</button>
+}
+
+/** Invite someone to the household by sharing its code through Telegram, WhatsApp or e-mail (or copying the message). */
+export function InviteModal({ open, onClose, householdId, householdName, inviteCode }: Props) {
   const { showToast } = useToast()
   const ask = useConfirm()
-  const [email, setEmail] = useState('')
-  const [touched, setTouched] = useState(false)
-  const [sending, setSending] = useState(false)
   const [invites, setInvites] = useState<HouseholdInvite[]>([])
-  const [loadingList, setLoadingList] = useState(false)
-  // lower-case e-mails with access; null while loading or if the lookup failed (then no warning is shown)
-  const [allowed, setAllowed] = useState<Set<string> | null>(null)
   const [copied, setCopied] = useState<'code' | 'msg' | null>(null)
 
   const loadInvites = useCallback(async () => {
-    setLoadingList(true)
     try {
       const list = (await getHouseholdInvites(householdId)) as unknown as HouseholdInvite[]
       setInvites(list.sort((a, b) => +new Date(b.createdAt ?? 0) - +new Date(a.createdAt ?? 0)))
-    } catch { showToast('No se pudieron cargar las invitaciones', 'error') }
-    finally { setLoadingList(false) }
-  }, [householdId, showToast])
+    } catch { /* the list is only a courtesy for invitations sent before */ }
+  }, [householdId])
 
-  useEffect(() => {
-    if (!open) return
-    setEmail(''); setTouched(false)
-    loadInvites()
-    getAllowedUsers()
-      .then((rows) => setAllowed(new Set(rows
-        .filter((u) => u.active === true && u.deleted !== true && typeof u.email === 'string')
-        .map((u) => (u.email as string).toLowerCase()))))
-      .catch(() => setAllowed(null))
-  }, [open, loadInvites])
-
-  const clean = email.trim().toLowerCase()
-  const valid = EMAIL_RE.test(clean)
-
-  // Why this address cannot be invited (null when it can)
-  const blocker = useMemo(() => {
-    if (!valid) return null
-    if (clean === myEmail.toLowerCase()) return 'Ese es tu propio correo: ya estás en este hogar.'
-    if (members.some((m) => m.toLowerCase() === clean)) return 'Esta persona ya es miembra de este hogar.'
-    const prev = invites.find((i) => i.email === clean && i.status !== 'declined')
-    if (prev?.status === 'pending') return 'Ya hay una invitación pendiente para este correo.'
-    if (prev?.status === 'accepted') return 'Esta persona ya aceptó una invitación a este hogar.'
-    return null
-  }, [valid, clean, myEmail, members, invites])
-
-  const noAccess = valid && !blocker && allowed !== null && !allowed.has(clean)
-  const error = touched && !clean ? 'Escribe un correo' : touched && !valid ? 'Escribe un correo válido (nombre@dominio.com)' : blocker ?? undefined
-
-  async function submit(e: FormEvent) {
-    e.preventDefault()
-    setTouched(true)
-    if (!valid || blocker) return
-    setSending(true)
-    try {
-      await createHouseholdInvite({ householdId, householdName, inviteCode, email: clean, invitedBy: myUid, invitedByName: myName })
-      showToast(`Invitación enviada a ${clean}`, 'success')
-      setEmail(''); setTouched(false)
-      await loadInvites()
-    } catch { showToast('No se pudo enviar la invitación', 'error') }
-    finally { setSending(false) }
-  }
+  useEffect(() => { if (open) loadInvites() }, [open, loadInvites])
 
   async function cancel(inv: HouseholdInvite) {
     const msg = inv.status === 'pending'
@@ -107,9 +67,12 @@ export function InviteModal({ open, onClose, householdId, householdName, inviteC
     } catch { showToast('No se pudo eliminar la invitación', 'error') }
   }
 
-  const message = `Hola, te invito a mi hogar "${householdName}" en Gastos Hogar (${window.location.origin}). ` +
+  const origin = window.location.origin
+  const message = `Hola, te invito a mi hogar "${householdName}" en Gastos Hogar (${origin}). ` +
     `Para unirte: entra a la app, ve a Hogar > Unirme a hogar e ingresa el código ${inviteCode}. ` +
     'Si aún no puedes entrar a la app, pídele acceso al administrador.'
+  // Telegram shows the link as a preview card, so the address goes in `url` and is left out of the text
+  const telegramHref = `https://t.me/share/url?url=${encodeURIComponent(origin)}&text=${encodeURIComponent(message.replace(` (${origin})`, ''))}`
 
   async function copy(text: string, what: 'code' | 'msg') {
     try {
@@ -122,43 +85,40 @@ export function InviteModal({ open, onClose, householdId, householdName, inviteC
 
   return (
     <Modal open={open} onClose={onClose} title="Invitar a una persona">
-      <form onSubmit={submit} noValidate className="space-y-3">
-        <p className="text-xs text-[#9aa4ac] leading-relaxed">
-          Le llegará una invitación a sus notificaciones de la app. Al aceptarla entra directo a <span className="text-[#dcf1eb] font-semibold">{householdName}</span>.
-        </p>
-        <Input
-          label="Correo de la persona"
-          type="email"
-          inputMode="email"
-          autoComplete="off"
-          placeholder="nombre@correo.com"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          onBlur={() => setTouched(true)}
-          error={error}
-          aria-invalid={!!error}
-        />
-        {noAccess && (
-          <div role="status" className="flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
-            <AlertTriangle size={16} className="text-amber-300 flex-shrink-0 mt-0.5" aria-hidden="true" />
-            <p className="text-xs text-amber-100 leading-relaxed">
-              <span className="font-bold">Esta persona aún no tiene acceso a la app.</span> Pídele al administrador que la autorice en Usuarios. Puedes enviar la invitación igual; la verá cuando pueda entrar.
-            </p>
-          </div>
-        )}
-        <Button type="submit" notched className="w-full" disabled={sending || !!blocker}>
-          <Send size={14} /> {sending ? 'Enviando…' : 'Enviar invitación'}
-        </Button>
-      </form>
+      <p className="text-xs text-[#9aa4ac] leading-relaxed">
+        Envía el código de <span className="text-[#dcf1eb] font-semibold">{householdName}</span> por el medio que prefieras. La persona entra a la app, va a <span className="text-[#dcf1eb] font-semibold">Hogar › Unirme a hogar</span> y lo escribe.
+      </p>
 
-      {/* Invitations already created for this household */}
-      <section aria-label="Invitaciones de este hogar" className="space-y-2 pt-1">
-        <h3 className="font-pixel text-[9px] uppercase tracking-widest text-brand-400">Invitaciones</h3>
-        {loadingList && invites.length === 0 ? (
-          <p className="text-xs text-[#8a929a]">Cargando…</p>
-        ) : invites.length === 0 ? (
-          <p className="text-xs text-[#8a929a]">Aún no has invitado a nadie a este hogar.</p>
-        ) : (
+      <div className="flex items-center justify-between gap-3 rounded-2xl border border-brand-400/30 bg-brand-500/5 px-4 py-3">
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-[#8a929a]">Código del hogar</p>
+          <p className="font-mono text-2xl font-bold tracking-[0.3em] text-[#f3f5f6]">{inviteCode}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => copy(inviteCode, 'code')}
+          aria-label="Copiar código del hogar"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#0d263a] px-3 py-2 text-xs font-semibold text-[#c7ccd1] transition hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400"
+        >
+          {copied === 'code' ? <Check size={14} /> : <Copy size={14} />} {copied === 'code' ? 'Copiado' : 'Copiar'}
+        </button>
+      </div>
+
+      <section aria-label="Enviar la invitación" className="space-y-2">
+        <h3 className="font-pixel text-[9px] uppercase tracking-widest text-brand-400">Enviar por</h3>
+        <div className="grid grid-cols-4 gap-2">
+          <Tile icon={Send} label="Telegram" color="#38bdf8" href={telegramHref} />
+          <Tile icon={MessageCircle} label="WhatsApp" color="#34d399" href={`https://wa.me/?text=${encodeURIComponent(message)}`} />
+          <Tile icon={Mail} label="Correo" color="#fbbf24" href={`mailto:?subject=${encodeURIComponent(`Invitación al hogar "${householdName}"`)}&body=${encodeURIComponent(message)}`} />
+          <Tile icon={copied === 'msg' ? Check : Copy} label={copied === 'msg' ? 'Copiado' : 'Mensaje'} color="#a78bfa" onClick={() => copy(message, 'msg')} />
+        </div>
+        <p className="rounded-xl border border-white/10 bg-[#051018]/60 p-3 text-[11px] text-[#9aa4ac] leading-relaxed select-all">{message}</p>
+      </section>
+
+      {/* Invitations by e-mail sent before: kept only so they can still be cancelled */}
+      {invites.length > 0 && (
+        <section aria-label="Invitaciones anteriores" className="space-y-2 border-t border-white/[0.08] pt-4">
+          <h3 className="font-pixel text-[9px] uppercase tracking-widest text-brand-400">Invitaciones anteriores</h3>
           <ul className="space-y-1.5">
             {invites.map((inv) => (
               <li key={inv.id} className="flex items-center gap-2 rounded-xl border border-white/10 bg-[#0d263a] px-3 py-2">
@@ -178,39 +138,8 @@ export function InviteModal({ open, onClose, householdId, householdName, inviteC
               </li>
             ))}
           </ul>
-        )}
-      </section>
-
-      {/* Alternative: share the code */}
-      <section aria-label="Compartir el código" className="space-y-2.5 border-t border-white/[0.08] pt-4">
-        <h3 className="font-pixel text-[9px] uppercase tracking-widest text-brand-400">O comparte el código</h3>
-        <div className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-[#0d263a] px-3 py-2">
-          <span className="font-mono text-lg font-bold tracking-[0.25em] text-[#f3f5f6]">{inviteCode}</span>
-          <Button type="button" variant="secondary" size="sm" onClick={() => copy(inviteCode, 'code')} aria-label="Copiar código del hogar">
-            {copied === 'code' ? <Check size={14} /> : <Copy size={14} />} {copied === 'code' ? 'Copiado' : 'Copiar'}
-          </Button>
-        </div>
-        <p className="rounded-xl border border-white/10 bg-[#051018]/60 p-3 text-xs text-[#c7ccd1] leading-relaxed select-all">{message}</p>
-        <div className="grid grid-cols-3 gap-2">
-          <Button type="button" variant="secondary" size="sm" onClick={() => copy(message, 'msg')}>
-            {copied === 'msg' ? <Check size={14} /> : <Copy size={14} />} Mensaje
-          </Button>
-          <a
-            href={`https://wa.me/?text=${encodeURIComponent(message)}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium bg-[#0d263a] text-[#f0fae8] border border-brand-500/25 hover:bg-[#133e5f] hover:border-brand-400/40 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400"
-          >
-            <MessageCircle size={14} /> WhatsApp
-          </a>
-          <a
-            href={`mailto:${valid ? clean : ''}?subject=${encodeURIComponent(`Invitación al hogar "${householdName}"`)}&body=${encodeURIComponent(message)}`}
-            className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium bg-[#0d263a] text-[#f0fae8] border border-brand-500/25 hover:bg-[#133e5f] hover:border-brand-400/40 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400"
-          >
-            <Mail size={14} /> Correo
-          </a>
-        </div>
-      </section>
+        </section>
+      )}
     </Modal>
   )
 }

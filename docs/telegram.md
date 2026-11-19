@@ -251,7 +251,7 @@ Cada paso tiene **⬅️ Atrás** y **❌ Cancelar**; `/cancelar` también sirve
 
 - Para **leer** se usa la copia más nítida; para **guardar** se toma la mayor copia de hasta ~900 px y ~350 KB que Telegram ya entrega comprimida (una captura típica queda en 50–120 KB), así que no se convierte nada en el Worker.
 - Una imagen enviada como **archivo** (sin comprimir) solo se guarda si pesa ≤ 400 KB; si no, el bot avisa que se envíe como foto.
-- Se guarda en Firestore (`attachments/{id}`, tope 600 KB por documento): no usa Cloud Storage, que exige el plan Blaze.
+- Se guarda en Firestore (`attachments/{id}`, tope 400 KB por adjunto ya optimizado; en la app los archivos que no son imagen se comprimen con gzip si hace falta): no usa Cloud Storage, que exige el plan Blaze.
 - Sigue al movimiento: al **confirmar** se copia `attachmentId` al ingreso, pago fijo o gasto creado (se ve con **Ver comprobante** en `/pendientes` y en el detalle de un pago fijo). Al **descartar**, al cancelar el flujo o al vencer (24 h) se borra.
 - No se borra al eliminar después el registro confirmado (queda huérfana, pesa poco).
 

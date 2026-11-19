@@ -11,10 +11,12 @@ interface Props {
   saving: boolean
   onRename: () => void
   onDelete: () => void
+  /** Only whoever created the household can delete it. */
+  canDelete?: boolean
 }
 
 /** Rename the household or delete it with everything it holds. */
-export function HouseholdSettingsModal({ open, onClose, name, onNameChange, saving, onRename, onDelete }: Props) {
+export function HouseholdSettingsModal({ open, onClose, name, onNameChange, saving, onRename, onDelete, canDelete = true }: Props) {
   return (
     <Modal open={open} onClose={onClose} title="Configurar hogar">
       <div className="space-y-5">
@@ -29,13 +31,17 @@ export function HouseholdSettingsModal({ open, onClose, name, onNameChange, savi
             </Button>
           </div>
         </div>
-        <div className="border-t border-white/10 pt-4 space-y-2">
-          <p className="font-pixel text-[10px] text-red-400 uppercase tracking-widest font-bold">Zona de peligro</p>
-          <Button variant="danger" notched className="w-full" onClick={onDelete} disabled={saving}>
-            <Trash2 size={15} /> Eliminar hogar y todos los registros
-          </Button>
-          <p className="text-[10px] text-[#8a929a]">Esta acción no se puede deshacer.</p>
-        </div>
+        {canDelete ? (
+          <div className="border-t border-white/10 pt-4 space-y-2">
+            <p className="font-pixel text-[10px] text-red-400 uppercase tracking-widest font-bold">Zona de peligro</p>
+            <Button variant="danger" notched className="w-full" onClick={onDelete} disabled={saving}>
+              <Trash2 size={15} /> Eliminar hogar y todos los registros
+            </Button>
+            <p className="text-[10px] text-[#8a929a]">Esta acción no se puede deshacer.</p>
+          </div>
+        ) : (
+          <p className="border-t border-white/10 pt-4 text-[11px] text-[#8a929a]">Solo quien creó el hogar puede eliminarlo.</p>
+        )}
       </div>
     </Modal>
   )

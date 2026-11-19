@@ -17,7 +17,7 @@ const LATEST = 6
  * Inbox icon with a count badge that opens a dropdown preview of the movements waiting for confirmation — same
  * behaviour as the notifications bell: a quick look, then "Ver todas" to go to the full /pendientes screen.
  */
-export function PendingMovementsLink({ variant = 'mobile' }: { variant?: 'mobile' | 'sidebar' }) {
+export function PendingMovementsLink({ variant = 'mobile', panelOffset = 0, tipPlacement }: { variant?: 'mobile' | 'sidebar'; panelOffset?: number; tipPlacement?: 'top' | 'right' }) {
   const { items, counts, loading } = usePendingMovements()
   const n = counts.total
   const isMobile = useIsMobile()
@@ -36,9 +36,9 @@ export function PendingMovementsLink({ variant = 'mobile' }: { variant?: 'mobile
     } else {
       const top = Math.max(MARGIN, Math.min(r.top, window.innerHeight - 320))
       const edge = btnRef.current?.closest('aside')?.getBoundingClientRect().right ?? r.right
-      setPos({ top, left: Math.min(edge + 8, window.innerWidth - PANEL_W - MARGIN), maxH: window.innerHeight - top - MARGIN, narrow })
+      setPos({ top, left: Math.min(edge + 8 + panelOffset, window.innerWidth - PANEL_W - MARGIN), maxH: window.innerHeight - top - MARGIN, narrow })
     }
-  }, [variant])
+  }, [variant, panelOffset])
 
   useLayoutEffect(() => { if (open) place() }, [open, place])
 
@@ -92,7 +92,7 @@ export function PendingMovementsLink({ variant = 'mobile' }: { variant?: 'mobile
 
   return (
     <>
-      {open ? button : <IconTip text={label} className="inline-flex" placement={variant === 'sidebar' ? 'right' : 'top'}>{button}</IconTip>}
+      {open ? button : <IconTip text={label} className="inline-flex" placement={tipPlacement ?? (variant === 'sidebar' ? 'right' : 'top')}>{button}</IconTip>}
 
       {open && isMobile && (
         <Modal open onClose={() => setOpen(false)} title={n > 0 ? `Pendientes por confirmar · ${n}` : 'Pendientes por confirmar'}>

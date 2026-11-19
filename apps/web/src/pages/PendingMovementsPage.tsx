@@ -13,18 +13,23 @@ import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { dateGroup, type DateGroup } from '@/components/notifications/meta'
 import { useSalary } from '@/hooks/useSalary'
 import { PENDING_CHANGED, usePendingMovements } from '@/hooks/usePendingMovements'
-import { confirmPendingMovement, discardPendingMovement } from '@/lib/firestore'
+import { confirmPaymentReceipt, confirmPendingMovement, discardPendingMovement } from '@/lib/firestore'
+import { useAuth } from '@/hooks/useAuth'
+import type { PendingReceipt } from '@/hooks/usePendingReceipts'
+import { PendingContributionsCard } from '@/components/household/PendingContributionsCard'
 import { PERSONAL_CATEGORIES, formatCOP } from '@/shared'
 import type { PendingMovement, PendingKind } from '@/shared'
 import { useLayoutStore } from '@/store/layout'
 
-type Filter = 'all' | PendingKind
+type Filter = 'all' | PendingKind | 'receipt' | 'contribution'
 type Account = { id: string; name: string; balance: number }
 
 const KIND = {
   income: { label: 'Ingreso', plural: 'Ingresos', icon: Wallet, border: 'border-l-emerald-400', iconBox: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300', chip: 'text-emerald-300', sign: '+' },
   fixed: { label: 'Gasto fijo', plural: 'Gastos fijos', icon: CalendarClock, border: 'border-l-sky-400', iconBox: 'border-sky-400/30 bg-sky-400/10 text-sky-300', chip: 'text-sky-300', sign: '-' },
   occasional: { label: 'Gasto adicional', plural: 'Gastos adicionales', icon: ShoppingBag, border: 'border-l-amber-400', iconBox: 'border-amber-400/30 bg-amber-400/10 text-amber-300', chip: 'text-amber-300', sign: '-' },
+  contribution: { label: 'Aporte a gasto compartido', plural: 'Aportes por confirmar', icon: Home, border: 'border-l-sky-400', iconBox: 'border-sky-400/30 bg-sky-400/10 text-sky-300', chip: 'text-sky-300', sign: '-' },
+  receipt: { label: 'Pago recibido', plural: 'Pagos recibidos', icon: Home, border: 'border-l-emerald-400', iconBox: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300', chip: 'text-emerald-300', sign: '+' },
   abono: { label: 'Abono al hogar', plural: 'Abonos al hogar', icon: Home, border: 'border-l-violet-400', iconBox: 'border-violet-400/30 bg-violet-400/10 text-violet-300', chip: 'text-violet-300', sign: '-' },
 } as const
 
@@ -34,6 +39,8 @@ const FILTERS: { id: Filter; label: string; icon: typeof Layers }[] = [
   { id: 'fixed', label: KIND.fixed.plural, icon: CalendarClock },
   { id: 'occasional', label: KIND.occasional.plural, icon: ShoppingBag },
   { id: 'abono', label: KIND.abono.plural, icon: Home },
+  { id: 'receipt', label: KIND.receipt.plural, icon: Home },
+  { id: 'contribution', label: KIND.contribution.plural, icon: Home },
 ]
 
 const GROUPS: DateGroup[] = ['Hoy', 'Esta semana', 'Antes']
@@ -45,6 +52,8 @@ const EMPTY_TEXT: Record<Filter, string> = {
   fixed: 'No hay gastos fijos por confirmar.',
   occasional: 'No hay gastos adicionales por confirmar.',
   abono: 'No hay abonos al hogar por confirmar.',
+  receipt: 'Cuando alguien del hogar te pague, aparecerá aquí para que confirmes en qué cuenta lo recibiste.',
+  contribution: 'Cuando alguien registre que pusiste dinero en un gasto compartido, aparecerá aquí para que lo confirmes o lo rechaces.',
 }
 
 /** One movement prepared in Telegram: its details, the account it will move, and Confirmar / Descartar. */
@@ -127,10 +136,73 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
   )
 }
 
+/** Someone in the household paid you: confirming records it as your income in the account you pick, and that account's balance goes up. */
+function ReceiptCard({ r, accounts, onDone }: { r: PendingReceipt; accounts: (Account & { isDefault?: boolean })[]; onDone: () => void }) {
+  const { user } = useAuth()
+  const { showToast } = useToast()
+  // null = not touched yet: the default account (which may load after the card appears). '' is a real choice: no account.
+  const [accountId, setAccountId] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const effectiveAccount = accountId ?? ((accounts.find((a) => a.isDefault) ?? accounts[0])?.id ?? '')
+
+  async function confirm() {
+    if (!user) return
+    setBusy(true)
+    try {
+      await confirmPaymentReceipt({ householdId: r.householdId, paymentId: r.paymentId, userId: user.uid, accountId: effectiveAccount || undefined, fromName: r.fromName })
+      showToast(`Recibiste ${formatCOP(r.amount)}: quedó como ingreso${effectiveAccount ? ' en tu cuenta' : ''}`, 'success')
+      window.dispatchEvent(new Event(PENDING_CHANGED))
+      onDone()
+    } catch (e: any) {
+      showToast(e?.message ?? 'No se pudo confirmar el pago', 'error')
+    } finally { setBusy(false) }
+  }
+
+  const k = KIND.receipt
+  const Icon = k.icon
+  return (
+    <article aria-label={`Pago recibido de ${r.fromName}`} className={clsx('rounded-2xl border border-white/10 border-l-4 bg-[#0d263a]', k.border)}>
+      <div className="flex items-start gap-3 p-3">
+        <span className={clsx('flex h-9 w-9 flex-shrink-0 items-center justify-center notch-sm border', k.iconBox)} aria-hidden="true"><Icon size={16} /></span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <p className="break-words sm:truncate text-sm font-bold leading-snug text-[#f3f5f6]">{r.fromName} te pagó</p>
+            <p className="flex-shrink-0 font-mono text-sm font-bold tabular-nums text-emerald-300">+{formatCOP(r.amount)}</p>
+          </div>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[#8a929a]">
+            {r.attachmentId && <AttachmentButton compact attachmentId={r.attachmentId} />}
+            <span className={clsx('font-semibold uppercase tracking-wider', k.chip)}>{k.label}</span>
+            <span aria-hidden="true">·</span>
+            <span>{r.householdName}</span>
+            <span aria-hidden="true">·</span>
+            <time dateTime={r.date.toISOString()} className="font-mono">{format(r.date, 'd MMM yyyy', { locale: es })}</time>
+          </p>
+          <ul className="mt-2 space-y-0.5 rounded-lg border border-white/10 bg-[#0a1f2f] px-2.5 py-1.5">
+            {r.lines.map((l, i) => (
+              <li key={i} className="flex items-baseline justify-between gap-3 text-xs">
+                <span className="truncate text-[#c7ccd1]">{l.concept}</span>
+                <span className="flex-shrink-0 font-mono text-[#f0fae8]">{formatCOP(l.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      <div className="space-y-3 px-3 pb-3 sm:pl-[3.75rem]">
+        <AccountSelect label="¿En qué cuenta lo recibiste?" accounts={accounts} value={effectiveAccount} onChange={setAccountId} noneLabel="No sumarlo a una cuenta" outflow={-r.amount} />
+        <div className="flex justify-end">
+          <Button type="button" size="sm" notched disabled={busy} onClick={confirm}>
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Confirmar recibido
+          </Button>
+        </div>
+      </div>
+    </article>
+  )
+}
+
 /** The movements prepared in Telegram: each one is confirmed (it becomes a real record) or discarded here. */
 export default function PendingMovementsPage() {
   const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
-  const { items, counts, loading, refresh } = usePendingMovements()
+  const { items, receipts, contributions, counts, loading, refresh } = usePendingMovements()
   const { showToast } = useToast()
   const ask = useConfirm()
   const salary = useSalary()
@@ -149,6 +221,8 @@ export default function PendingMovementsPage() {
   }, [visible])
 
   const countOf = (f: Filter) => (f === 'all' ? counts.total : counts[f])
+  const visibleReceipts = filter === 'all' || filter === 'receipt' ? receipts : []
+  const visibleContributions = filter === 'all' || filter === 'contribution' ? contributions : []
 
   // every visible one, with the account chosen in Telegram; the ones that fail stay in the list
   async function confirmAll() {
@@ -237,21 +311,32 @@ export default function PendingMovementsPage() {
         variant="plain"
         themeColor="brand"
       >
-        {loading && items.length === 0 ? (
+        {loading && items.length === 0 && receipts.length === 0 && contributions.length === 0 ? (
           <SkeletonList count={3} />
-        ) : visible.length === 0 ? (
+        ) : visible.length === 0 && visibleReceipts.length === 0 && visibleContributions.length === 0 ? (
           <div className="notch border border-white/10 bg-[#0a1f2f] px-6 py-12 text-center">
             <Inbox size={34} className="mx-auto mb-3 text-[#6f7a83]" aria-hidden="true" />
             <p className="text-sm font-bold text-[#f0fae8]">{filter === 'all' ? 'No tienes nada pendiente' : `Sin ${KIND[filter].plural.toLowerCase()} pendientes`}</p>
             <p className="mx-auto mt-1 max-w-sm text-xs text-[#8a929a]">{EMPTY_TEXT[filter]}</p>
           </div>
         ) : (
-          GROUPS.filter((g) => grouped[g].length > 0).map((g) => (
+          <>
+          {visibleContributions.length > 0 && (
+            <PendingContributionsCard items={visibleContributions} accounts={accounts} onDone={refresh} />
+          )}
+          {visibleReceipts.length > 0 && (
+            <section aria-label="Pagos recibidos del hogar" className="space-y-2">
+              <h2 className="font-pixel text-[9px] uppercase tracking-widest text-brand-400">Pagos recibidos del hogar</h2>
+              {visibleReceipts.map((r) => <ReceiptCard key={r.key} r={r} accounts={accounts as any} onDone={refresh} />)}
+            </section>
+          )}
+          {GROUPS.filter((g) => grouped[g].length > 0).map((g) => (
             <section key={g} aria-label={g} className="space-y-2">
               <h2 className="font-pixel text-[9px] uppercase tracking-widest text-brand-400">{g}</h2>
               {grouped[g].map((pm) => <PendingCard key={pm.id} pm={pm} accounts={accounts} onDone={refresh} />)}
             </section>
-          ))
+          ))}
+          </>
         )}
       </CurvedScrollContainer>
     </div>

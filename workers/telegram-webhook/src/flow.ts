@@ -281,6 +281,13 @@ async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboar
     case 'target': {
       const hh = (await households(d.db, f.userId)).find((x) => x.h.id === f.data.householdId)
       if (!hh) return { text: `${head}${body}Ese hogar ya no está disponible.`, kb: [NAV[0]] }
+      // a household that crossed its accounts pays as the plan says: an abono never goes to one debt on its own
+      if ((hh.h as any).settlementPlan || (hh.h as any).payMode === 'plan') {
+        return {
+          text: `${head}${body}Este hogar ya <b>cruzó las cuentas</b>: el abono cuenta como pago del plan, no para una deuda suelta.`,
+          kb: [[{ text: '➡️ Continuar', data: 'f:td:auto' }], NAV[0]],
+        }
+      }
       const debts = inPaymentOrder((hh.debts as any[]).filter((x) => x.debtor === f.userId && isPendingDebt(x) && creditorOf(x, hh.members) === f.data.creditorId))
       const total = debts.reduce((s, x) => s + remainingOf(x), 0)
       const amount = f.data.amount ?? 0

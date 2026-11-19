@@ -13,7 +13,8 @@ import { AccountSelect } from '@/components/ui/AccountSelect'
 import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
 import { Button } from '@/components/ui/Button'
 import { useToast } from '@/components/ui/Toast'
-import { createHouseholdExpense, notifyHouseholdMembers } from '@/lib/firestore'
+import { createHouseholdExpense, deleteHouseholdExpense, notifyHouseholdMembers } from '@/lib/firestore'
+import { toDate } from './ledger'
 import { saveAttachment } from '@/lib/attachments'
 import { formatCOP, resolveExpenseShares, settleExpenseContributions, SplitValidationError, HOUSEHOLD_DEBT_CATEGORIES } from '@/shared'
 import type { ExpensePayerInput, ExpenseShareInput, SplitMode } from '@/shared'
@@ -53,8 +54,10 @@ const STEP_TITLE: Record<Step, string> = {
   4: 'Reparto y resumen',
 }
 
-export function HouseholdExpenseModal({ open, onClose, householdId, members, guestIds, currentUserUid, accounts, onCreated, onAddGuest }: {
+export function HouseholdExpenseModal({ open, onClose, householdId, members, guestIds, currentUserUid, accounts, onCreated, onAddGuest, editing }: {
   open: boolean
+  /** A saved expense to correct: the form opens with its data and, on saving, it replaces the old one. */
+  editing?: Record<string, any> | null
   onClose: () => void
   householdId: string
   members: HouseholdExpenseMember[]
@@ -104,12 +107,46 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, gue
   const isGuest = (uid: string) => guestIds.includes(uid)
   const needsConfirmation = (uid: string) => uid !== currentUserUid && !isGuest(uid)
 
+  // an edge waits for confirmation if either side declared a payment that someone else registered on their behalf
+  const edgeIsPending = (e: { debtor: string; creditor: string }) =>
+    (payerIds.has(e.creditor) && needsConfirmation(e.creditor)) || (payerIds.has(e.debtor) && needsConfirmation(e.debtor))
+
   const participantIds = useMemo(
     () => [...(iParticipate ? [currentUserUid] : []), ...otherParticipants],
     [iParticipate, otherParticipants],
   )
   // anyone can have fronted money — not only participants (e.g. someone pays entirely for others, without owing a share)
   const payerCandidates = members
+
+  // Correcting a saved expense: load what was registered so only the wrong values need changing
+  useEffect(() => {
+    if (!open || !editing) return
+    const shares = (editing.shares as { memberId: string; amount: number }[] | undefined) ?? []
+    const contribs = ((editing.contributions as { memberId: string; amount: number; status?: string }[] | undefined) ?? []).filter((c) => c.status !== 'declined')
+    const total = Number(editing.amount) || 0
+    const mode = (editing.splitMode as SplitMode | undefined) ?? 'equal'
+    const day = (v: unknown) => { const d = toDate(v); return Number.isNaN(d.getTime()) ? '' : format(d, 'yyyy-MM-dd') }
+    reset({
+      description: editing.description as string,
+      amount: total,
+      category: editing.category as string,
+      date: day(editing.date) || format(new Date(), 'yyyy-MM-dd'),
+      hasDueDate: !!editing.dueDate,
+      dueDate: editing.dueDate ? day(editing.dueDate) : undefined,
+      notes: (editing.notes as string | undefined) ?? '',
+    })
+    setIParticipate(shares.some((s) => s.memberId === currentUserUid))
+    setOtherParticipants(new Set(shares.filter((s) => s.memberId !== currentUserUid).map((s) => s.memberId)))
+    setPayerIds(new Set(contribs.map((c) => c.memberId)))
+    setPayerAmounts(Object.fromEntries(contribs.map((c) => [c.memberId, String(c.amount)])))
+    setSplitMode(mode)
+    setShareValues(Object.fromEntries(shares.map((s) => [
+      s.memberId,
+      mode === 'percentage' ? String(total > 0 ? Math.round((s.amount / total) * 10000) / 100 : 0) : mode === 'fixed' ? String(s.amount) : '',
+    ])))
+    setStep(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editing])
 
   function resetAll() {
     setStep(1)
@@ -217,9 +254,18 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, gue
         ...(attachmentId ? { attachmentId } : {}),
       }, guestIds)
 
+      // the corrected expense is saved first; only then the wrong one goes away, so nothing is lost if this fails midway
+      if (editing?.id) await deleteHouseholdExpense(editing.id as string, householdId, { keepPayments: true })
+
       close()
       onCreated()
-      showToast('Gasto compartido registrado', 'success')
+      if (editing?.id) showToast('Gasto corregido', 'success')
+      else showToast(
+        pendingFor.length > 0
+          ? `Gasto registrado. Las deudas aparecerán cuando ${pendingFor.map((u) => nameOf(u)).join(', ')} confirme${pendingFor.length > 1 ? 'n' : ''} su aporte`
+          : 'Gasto compartido registrado',
+        'success',
+      )
 
       const me = nameOf(currentUserUid)
       notifyHouseholdMembers(participantIds.filter((id) => id !== currentUserUid && !isGuest(id)), {
@@ -231,7 +277,7 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, gue
           fromUid: currentUserUid, zone: 'hogar', severity: 'info',
           title: `${me} dice que pusiste dinero para "${basics.description}"`,
           body: `${formatCOP(payerAmounts[uid] ? Number(payerAmounts[uid]) : 0)}. Confírmalo para que se registre como tu gasto y te empiecen a deber.`,
-          link: `/hogar?id=${householdId}`,
+          link: '/pendientes',
         }).catch(() => {})
       }
     } catch (err: any) {
@@ -246,7 +292,7 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, gue
   const canNext3 = payersValid
 
   return (
-    <Modal open={open} onClose={close} title="Nuevo gasto compartido">
+    <Modal open={open} onClose={close} title={editing ? 'Corregir gasto compartido' : 'Nuevo gasto compartido'}>
       <div className="space-y-4">
         <div className="flex items-center gap-1.5">
           {([1, 2, 3, 4] as Step[]).map((s) => (
@@ -254,6 +300,11 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, gue
           ))}
         </div>
         <p className="font-pixel text-[9px] uppercase tracking-widest text-brand-400">Paso {step} de 4 · {STEP_TITLE[step]}</p>
+        {editing && step === 1 && (
+          <p className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-[11px] leading-snug text-amber-200">
+            Cambia lo que está mal y guarda: el gasto anterior se reemplaza por este. Los pagos que ya se hicieron se conservan y se aplican a las deudas corregidas; si hay un plan de pagos fijado, se ajusta solo con la diferencia. Vuelve a elegir de qué cuenta salió tu parte.
+          </p>
+        )}
 
         {step === 1 && (
           <div className="space-y-4">
@@ -489,14 +540,14 @@ export function HouseholdExpenseModal({ open, onClose, householdId, members, gue
                         <div key={i} className="flex items-center gap-2 px-3 py-1.5">
                           <span className="min-w-0 flex-1 truncate text-xs text-[#dcf1eb]">{nameOf(e.debtor)} <ArrowRight size={11} className="inline -mt-0.5 text-amber-400" /> {nameOf(e.creditor)}</span>
                           <span className="flex-shrink-0 font-mono text-xs font-bold text-amber-300">{formatCOP(e.amount)}</span>
-                          {needsConfirmation(e.creditor) && (
+                          {edgeIsPending(e) && (
                             <span className="flex-shrink-0 rounded-full border border-sky-400/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-sky-300">pend.</span>
                           )}
                         </div>
                       ))}
                     </div>
                   )}
-                  {preview.edges.some((e) => needsConfirmation(e.creditor)) && (
+                  {preview.edges.some(edgeIsPending) && (
                     <p className="mt-1 flex items-start gap-1.5 text-[11px] text-[#9aa4ac]">
                       <Users size={12} className="mt-0.5 flex-shrink-0" /> "Pend." no cuenta como deuda todavía — se activa cuando esa persona confirme.
                     </p>

@@ -84,13 +84,13 @@ service cloud.firestore {
     }
 
     // Small copies of receipts: the ones from Telegram are created by the bot, the ones attached by hand by their owner
-    // (only small images: the picture travels inside the document as base64)
+    // (only small files: the file travels inside the document as base64)
     match /attachments/{id} {
       allow read:         if isAuth() && (isOwner(resource.data.userId) || request.auth.uid in resource.data.get('sharedWith', []));
       allow delete:       if isAuth() && isOwner(resource.data.userId);
       allow create:       if isAuth() && isOwner(request.resource.data.userId)
                           && request.resource.data.source == 'app'
-                          && request.resource.data.mime.matches('image/.*')
+                          && request.resource.data.mime is string
                           && request.resource.data.data is string
                           && request.resource.data.data.size() < 900000;
     }

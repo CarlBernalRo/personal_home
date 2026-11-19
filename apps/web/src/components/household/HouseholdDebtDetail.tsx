@@ -18,6 +18,8 @@ interface Props {
   canAbonar: boolean
   /** the other person has pending debts to cross against */
   canCross: boolean
+  /** The household pays crossed (as the plan says): this debt is not paid nor crossed on its own. */
+  planMode?: boolean
   onBack: () => void
   onCross: () => void
   onAbonar: () => void
@@ -34,7 +36,7 @@ const STATUS_CHIP = {
 const sectionTitle = 'font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold'
 
 /** Detail of one debt: what is left, its abonos and its crossings. Lives in the right pane. */
-export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId, canAbonar, canCross, onBack, onCross, onAbonar, onDelete, onDeleteAbono }: Props) {
+export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId, canAbonar, canCross, planMode, onBack, onCross, onAbonar, onDelete, onDeleteAbono }: Props) {
   const abonos = debts.filter((a) => a.tipo === 'Abono' && a.saldaId === debt.id)
   const crosses = crossings.filter((c) => c.debt1Id === debt.id || c.debt2Id === debt.id)
   const dueDate = debt.dueDate ? toDate(debt.dueDate) : null
@@ -44,17 +46,30 @@ export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId
   const creditorName = creditorId ? nameOf(creditorId) : 'la otra persona'
   const byName = (uid?: string) => nameOf(uid)
 
+  // What was paid over: abonos of the same payment(s) tied to no debt. They are a balance in favor of the debtor with
+  // this creditor, and what is left of it goes to the debts that come after (`creditApplied` on each of them).
+  const paymentIds = new Set(abonos.map((a) => a.paymentId).filter(Boolean))
+  const paidOver = debts.filter((a) => a.tipo === 'Abono' && !a.saldaId && a.paymentId && paymentIds.has(a.paymentId))
+  const paidOverTotal = paidOver.reduce((s, a) => s + (a.amount as number), 0)
+  // the balance in favor belongs to the person, whoever it was paid to: it covers any of their debts in the household
+  const creditTotal = debts.filter((a) => a.tipo === 'Abono' && !a.saldaId && a.debtor === debt.debtor).reduce((s, a) => s + (a.amount as number), 0)
+  const creditUsed = debts.filter((d) => d.tipo === 'Deuda' && d.debtor === debt.debtor).reduce((s, d) => s + ((d.creditApplied as number) || 0), 0)
+  const creditAvailable = Math.max(0, creditTotal - creditUsed)
+  const thisDebtCredit = (debt.creditApplied as number) || 0
+
   // What happened to this debt, in date order, with the balance left after each movement
   const moves = [
     ...abonos.map((a) => ({ id: `ab|${a.id}`, kind: 'abono' as const, date: toDate(a.date), amount: a.amount as number, by: byName(a.registeredBy), note: (a.notas as string) || '', attachmentId: a.attachmentId as string | undefined, onDelete: () => onDeleteAbono(a) })),
     ...crosses.map((c) => ({ id: `cr|${c.id}`, kind: 'cruce' as const, date: toDate(c.createdAt), amount: c.amount as number, by: byName(c.initiatedBy), note: (c.notes as string) || '', onDelete: undefined as (() => void) | undefined })),
+    // a balance in favor that was applied to this debt reads as one more payment, so the balance adds up
+    ...(thisDebtCredit > 0 ? [{ id: 'credit', kind: 'favor' as const, date: toDate(debt.date), amount: thisDebtCredit, by: '', note: 'saldo a favor aplicado solo', onDelete: undefined as (() => void) | undefined }] : []),
   ].sort((a, b) => a.date.getTime() - b.date.getTime())
   let running = debt.amount as number
   const steps = [
     { id: 'registro', label: 'Deuda registrada', color: '#f59e0b', date: toDate(debt.date), by: byName(debt.registeredBy), note: '', attachmentId: debt.attachmentId as string | undefined, delta: debt.amount as number, balance: running, onDelete: undefined as (() => void) | undefined },
     ...moves.map((m) => {
       running -= m.amount
-      return { id: m.id, label: m.kind === 'abono' ? `Abono a ${creditorName}` : `Cruce con una deuda de ${creditorName}`, color: m.kind === 'abono' ? '#52b69a' : '#38bdf8', date: m.date, by: m.by, note: m.note, attachmentId: 'attachmentId' in m ? m.attachmentId : undefined, delta: -m.amount, balance: running, onDelete: m.onDelete }
+      return { id: m.id, label: m.kind === 'abono' ? `Abono a ${creditorName}` : m.kind === 'favor' ? 'Cubierto con saldo a favor' : `Cruce con una deuda de ${creditorName}`, color: m.kind === 'abono' ? '#52b69a' : m.kind === 'favor' ? '#a78bfa' : '#38bdf8', date: m.date, by: m.by, note: m.note, attachmentId: 'attachmentId' in m ? m.attachmentId : undefined, delta: -m.amount, balance: running, onDelete: m.onDelete }
     }),
   ]
   const remainingNow = remainingOf(debt)
@@ -108,14 +123,19 @@ export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId
           {debt.tipo === 'Deuda' && (debt.cruzado || remainingOf(debt) <= 0) && (
             <p className="text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-2.5 font-semibold">Esta deuda ya está liquidada.</p>
           )}
-          {pending && !canCross && (
+          {pending && planMode && (
+            <p className="text-[11px] text-[#9aa4ac] bg-[#0d263a] border border-white/10 rounded-xl p-2.5">
+              Este hogar paga cruzado: esta deuda no se paga sola, entra en el cruce de cuentas. Lo que cada quien paga está en el reporte.
+            </p>
+          )}
+          {pending && !planMode && !canCross && (
             <p className="text-[11px] text-[#9aa4ac] bg-[#0d263a] border border-white/10 rounded-xl p-2.5">
               No se puede cruzar: {otherName} no tiene deudas pendientes con {debtorName}.
             </p>
           )}
 
           <div className="flex gap-2">
-            {pending && (
+            {pending && !planMode && (
               <>
                 <Button variant="secondary" notched className="flex-1" onClick={onCross} disabled={!canCross}
                   title={canCross ? undefined : `${otherName} no tiene deudas pendientes con ${debtorName} para cruzar`}>
@@ -171,6 +191,17 @@ export function HouseholdDebtDetail({ debt, debts, crossings, nameOf, creditorId
                 </li>
               ))}
             </ol>
+
+            {paidOverTotal > 0 && (
+              <div className="rounded-xl border border-violet-400/30 bg-violet-500/10 p-3 space-y-1">
+                <p className="text-xs font-semibold text-violet-300">Pagó de más: {formatCOP(paidOverTotal)} quedaron a favor de {debtorName}</p>
+                <p className="text-[11px] leading-snug text-[#c7ccd1]">
+                  {creditAvailable > 0
+                    ? <>Quedan <strong className="font-mono text-violet-200">{formatCOP(creditAvailable)}</strong> disponibles: se descuentan solos de las próximas deudas que {debtorName} tenga en el hogar, con quien sea.</>
+                    : <>Ese saldo ya se aplicó a otras deudas de {debtorName} en el hogar.</>}
+                </p>
+              </div>
+            )}
 
             <p className="flex justify-between gap-3 border-t border-white/10 pt-2 text-xs font-mono">
               <span className="text-[#9aa4ac]">Saldo actual</span>

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Download, ExternalLink, ImageOff, Loader2, Paperclip, Send } from 'lucide-react'
+import { Download, ExternalLink, FileText, ImageOff, Loader2, Paperclip, Send } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { getAttachment } from '@/lib/firestore'
+import { gunzipBase64 } from '@/lib/attachments'
 
 interface Props {
   attachmentId: string
@@ -32,7 +33,7 @@ function blobUrl(mime: string, base64: string) {
 export function AttachmentButton({ attachmentId, label = 'Ver comprobante', compact = false }: Props) {
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<State>('idle')
-  const [file, setFile] = useState<{ mime: string; data: string } | null>(null)
+  const [file, setFile] = useState<{ mime: string; data: string; name?: string; encoding?: string } | null>(null)
 
   async function show() {
     setOpen(true)
@@ -41,7 +42,7 @@ export function AttachmentButton({ attachmentId, label = 'Ver comprobante', comp
     try {
       const a = await getAttachment(attachmentId)
       if (!a) { setState('missing'); return }
-      setFile(a)
+      setFile(a.encoding === 'gzip' ? { ...a, data: await gunzipBase64(a.data), encoding: undefined } : a)
       setState('ready')
     } catch { setState('missing') }
   }
@@ -55,7 +56,9 @@ export function AttachmentButton({ attachmentId, label = 'Ver comprobante', comp
     return () => { URL.revokeObjectURL(url); setHref('') }
   }, [file, open])
 
+  const isImg = !file || file.mime.startsWith('image/')
   const ext = file?.mime.split('/')[1]?.replace('jpeg', 'jpg') ?? 'jpg'
+  const downloadName = file?.name || `comprobante.${ext}`
 
   const viewer = (
     <Modal open={open} onClose={() => setOpen(false)} title="Comprobante">
@@ -80,16 +83,18 @@ export function AttachmentButton({ attachmentId, label = 'Ver comprobante', comp
       ) : (
         <div className="space-y-3">
           <div className="overflow-hidden rounded-xl border border-white/10 bg-black/30">
-            <img src={`data:${file!.mime};base64,${file!.data}`} alt="Comprobante enviado desde Telegram" className="mx-auto max-h-[60vh] w-auto max-w-full" />
+            {isImg
+              ? <img src={`data:${file!.mime};base64,${file!.data}`} alt="Comprobante" className="mx-auto max-h-[60vh] w-auto max-w-full" />
+              : <div className="flex flex-col items-center gap-2 px-4 py-8 text-center"><FileText size={36} className="text-brand-300" /><p className="break-all text-sm font-semibold text-[#f0fae8]">{downloadName}</p></div>}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="flex items-center gap-1.5 text-[11px] text-[#8a929a]"><Send size={11} className="text-sky-300" /> Enviado desde Telegram · {kb(file!.data)} KB</p>
+            <p className="flex items-center gap-1.5 text-[11px] text-[#8a929a]"><Send size={11} className="text-sky-300" /> {kb(file!.data)} KB</p>
             <div className="flex items-center gap-2">
               <a href={href || undefined} target="_blank" rel="noreferrer" aria-disabled={!href}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#0d263a] px-2.5 py-1.5 text-xs font-semibold text-[#c7ccd1] transition hover:text-white">
                 <ExternalLink size={13} /> Abrir
               </a>
-              <a href={href || undefined} download={`comprobante.${ext}`} aria-disabled={!href}
+              <a href={href || undefined} download={downloadName} aria-disabled={!href}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-brand-400/40 bg-brand-500/10 px-2.5 py-1.5 text-xs font-semibold text-brand-300 transition hover:bg-brand-500/20">
                 <Download size={13} /> Descargar
               </a>

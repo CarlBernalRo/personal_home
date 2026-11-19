@@ -146,7 +146,9 @@ export function NotificationCard({ n, compact = false, historical = false, onNav
 
       {receipt && (
         <div className="px-3 pb-3 pl-[3.75rem]">
-          {receipt.confirmed ? (
+          {receipt.cancelled ? (
+            <p className="text-xs font-semibold text-[#8a929a]">Este pago fue eliminado por quien lo registró</p>
+          ) : receipt.confirmed ? (
             <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-300"><CheckCircle2 size={13} /> Recibido y registrado como ingreso</p>
           ) : (
             <Button type="button" size="sm" notched onClick={() => setConfirming(true)} aria-label={`Confirmar pago recibido de ${receipt.fromName}`}>

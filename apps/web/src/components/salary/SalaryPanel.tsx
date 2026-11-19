@@ -19,7 +19,7 @@ import type { SalaryState } from '@/hooks/useSalary'
 import { useAuth } from '@/hooks/useAuth'
 import { useMoneyMask } from '@/hooks/useMoneyMask'
 import { TransferModal } from '@/components/fixed/TransferModal'
-import { cashOnHand, nextPayDate, salaryLedgers } from '@/shared'
+import { cashOnHand, nextPayDate, salaryLedgers, topAccounts } from '@/shared'
 
 interface Props {
   salary: SalaryState
@@ -167,7 +167,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
 
       {full && salary.accounts.length > 0 && (() => {
         // With accounts, the money on hand is what the accounts hold: the total and what each one has
-        const total = salary.accounts.reduce((sum: number, a: any) => sum + (a.balance as number), 0)
+        const total = topAccounts(salary.accounts as any[]).reduce((sum: number, a: any) => sum + (a.balance as number), 0)
         return (
           <div className="rounded-2xl border border-white/10 bg-[#0a1f2f] p-4 sm:p-5 space-y-3 shadow-xl">
             <div className="flex items-center justify-between gap-3">
@@ -185,7 +185,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
               </p>
             </div>
             <div className="space-y-1.5 border-t border-white/10 pt-3 text-xs font-mono">
-              {salary.accounts.map((a: any) => (
+              {topAccounts(salary.accounts as any[]).map((a: any) => (
                 <p key={a.id} className="flex items-center justify-between gap-3 text-[#c7ccd1]">
                   <span className="flex items-center gap-2 min-w-0">
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: (a.color as string) ?? '#52b69a' }} aria-hidden="true" />
@@ -252,7 +252,7 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
             {/* Row 1: everything that adds to the period */}
             <div className="flex items-start justify-between gap-3">
               <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-emerald-500/15 border border-emerald-400/40 text-[11px] font-bold text-emerald-300" aria-hidden="true">+</span>
-              <div className="flex flex-1 flex-wrap items-center justify-end gap-x-3 gap-y-1 text-right text-xs font-mono">
+              <div className="flex flex-1 flex-col gap-1 text-xs font-mono [&>span]:flex [&>span]:items-baseline [&>span]:justify-between [&>span]:gap-3">
                 <span className="text-[#c7ccd1]">Sueldo <span className="font-bold text-[#f0fae8]">{cop(currentPeriod.amount)}</span></span>
                 {ledger.carryIn > 0 && (
                   <span className="text-sky-300">Sobrante anterior <span className="font-bold">+{cop(ledger.carryIn)}</span></span>
@@ -266,19 +266,19 @@ export function SalaryPanel({ salary, expenses, paymentIndex, variant = 'full' }
             {/* Row 2: everything that comes out of it */}
             <div className="flex items-start justify-between gap-3">
               <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-red-500/15 border border-red-400/40 text-[11px] font-bold text-red-300" aria-hidden="true">−</span>
-              <div className="flex flex-1 flex-wrap items-center justify-end gap-x-3 gap-y-1 text-right text-xs font-mono">
+              <div className="flex flex-1 flex-col gap-1 text-xs font-mono [&>span]:flex [&>span]:items-baseline [&>span]:justify-between [&>span]:gap-3">
                 {ledger.carryIn < 0 && (
                   <span className="text-red-300">Faltante anterior <span className="font-bold">−{cop(Math.abs(ledger.carryIn))}</span></span>
                 )}
-                <span className="inline-flex items-center text-[#c7ccd1]"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.fixed }} aria-hidden="true" />Gastos fijos <span className="font-bold text-[#f0fae8] ml-1">−{cop(ledger.committed)}</span></span>
+                <span className="inline-flex items-center text-[#c7ccd1]"><span className="inline-flex items-center"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.fixed }} aria-hidden="true" />Gastos fijos</span> <span className="font-bold text-[#f0fae8] ml-1">−{cop(ledger.committed)}</span></span>
                 {ledger.additionalSpent > 0 && (
-                  <span className="inline-flex items-center text-[#c7ccd1]"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.additional }} aria-hidden="true" />Gastos adicionales <span className="font-bold text-[#f0fae8] ml-1">−{cop(ledger.additionalSpent)}</span></span>
+                  <span className="inline-flex items-center text-[#c7ccd1]"><span className="inline-flex items-center"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.additional }} aria-hidden="true" />Gastos adicionales</span> <span className="font-bold text-[#f0fae8] ml-1">−{cop(ledger.additionalSpent)}</span></span>
                 )}
                 {ledger.variableSpent > 0 && (
-                  <span className="inline-flex items-center text-[#c7ccd1]"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.occasional }} aria-hidden="true" />Gastos ocasionales <span className="font-bold text-[#f0fae8] ml-1">−{cop(ledger.variableSpent)}</span></span>
+                  <span className="inline-flex items-center text-[#c7ccd1]"><span className="inline-flex items-center"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.occasional }} aria-hidden="true" />Gastos ocasionales</span> <span className="font-bold text-[#f0fae8] ml-1">−{cop(ledger.variableSpent)}</span></span>
                 )}
                 {ledger.variableReserved > 0 && (
-                  <span className="inline-flex items-center text-amber-300"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.reserved }} aria-hidden="true" />Reservado para ocasionales <span className="font-bold ml-1">−{cop(ledger.variableReserved)}</span></span>
+                  <span className="inline-flex items-center text-amber-300"><span className="inline-flex items-center"><i className="not-italic inline-block w-2 h-2 rounded-[3px] mr-1.5" style={{ backgroundColor: SERIES.reserved }} aria-hidden="true" />Reservado para ocasionales</span> <span className="font-bold ml-1">−{cop(ledger.variableReserved)}</span></span>
                 )}
               </div>
             </div>

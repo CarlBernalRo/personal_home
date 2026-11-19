@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { settleExpenseContributions } from './householdExpenseSettlement';
+import { settleExpenseContributions, materializeReadyEdges, isExpenseIncomplete } from './householdExpenseSettlement';
+import type { ExpenseContribution } from '../types/householdExpense';
 
 const sum = (edges: { amount: number }[]) => edges.reduce((s, e) => s + e.amount, 0);
 
@@ -53,5 +54,59 @@ describe('settleExpenseContributions', () => {
 
   it('returns nothing for no participants and no payers', () => {
     expect(settleExpenseContributions([], [])).toEqual([]);
+  });
+});
+
+describe('materializeReadyEdges', () => {
+  const c = (memberId: string, status: ExpenseContribution['status'], edges: ExpenseContribution['edges']): ExpenseContribution =>
+    ({ memberId, amount: 0, status, edges });
+
+  it('creates an edge once its pending creditor confirms', () => {
+    const { toCreate, updated } = materializeReadyEdges([
+      c('a', 'confirmed', []),
+      c('b', 'confirmed', [{ debtor: 'a', amount: 50, created: false }]),
+    ]);
+    expect(toCreate).toEqual([{ debtor: 'a', creditor: 'b', amount: 50 }]);
+    expect(updated[1].edges[0].created).toBe(true);
+  });
+
+  it('holds an edge while its debtor still has a pending payment', () => {
+    const { toCreate } = materializeReadyEdges([
+      c('a', 'confirmed', [{ debtor: 'b', amount: 50, created: false }]),
+      c('b', 'pending', []),
+    ]);
+    expect(toCreate).toEqual([]);
+  });
+
+  it('holds an edge when both parties are pending until the second confirms', () => {
+    const edge = { debtor: 'b', amount: 50, created: false };
+    expect(materializeReadyEdges([c('a', 'pending', [edge]), c('b', 'pending', [])]).toCreate).toEqual([]);
+    expect(materializeReadyEdges([c('a', 'confirmed', [edge]), c('b', 'pending', [])]).toCreate).toEqual([]);
+    expect(materializeReadyEdges([c('a', 'confirmed', [edge]), c('b', 'confirmed', [])]).toCreate).toEqual([{ debtor: 'b', creditor: 'a', amount: 50 }]);
+  });
+
+  it('uses the explicit creditor when the edge hangs on the debtor', () => {
+    const { toCreate } = materializeReadyEdges([
+      c('a', 'confirmed', []),
+      c('b', 'confirmed', [{ debtor: 'b', creditor: 'a', amount: 30, created: false }]),
+    ]);
+    expect(toCreate).toEqual([{ debtor: 'b', creditor: 'a', amount: 30 }]);
+  });
+
+  it('never re-creates an edge, and never creates one whose party declined', () => {
+    expect(materializeReadyEdges([c('a', 'confirmed', [{ debtor: 'b', amount: 5, created: true }]), c('b', 'confirmed', [])]).toCreate).toEqual([]);
+    expect(materializeReadyEdges([c('a', 'confirmed', [{ debtor: 'b', amount: 5, created: false }]), c('b', 'declined', [])]).toCreate).toEqual([]);
+    expect(materializeReadyEdges([c('a', 'declined', [{ debtor: 'b', amount: 5, created: false }]), c('b', 'confirmed', [])]).toCreate).toEqual([]);
+  });
+
+  it('legacy edges (no created flag) count as created iff the owner was confirmed', () => {
+    expect(materializeReadyEdges([c('a', 'confirmed', [{ debtor: 'b', amount: 5 }]), c('b', 'confirmed', [])]).toCreate).toEqual([]);
+    expect(materializeReadyEdges([c('a', 'pending', [{ debtor: 'b', amount: 5 }]), c('b', 'confirmed', [])]).toCreate).toEqual([]);
+  });
+
+  it('flags an expense with a declined contribution as incomplete', () => {
+    expect(isExpenseIncomplete([{ status: 'confirmed' }, { status: 'declined' }])).toBe(true);
+    expect(isExpenseIncomplete([{ status: 'pending' }])).toBe(false);
+    expect(isExpenseIncomplete(undefined)).toBe(false);
   });
 });

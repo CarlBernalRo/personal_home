@@ -104,3 +104,52 @@ export function planAbono(i: AbonoInput): AbonoPlan {
   }
   return { rows, paidLines, paidTo: creditor, kind: 'allocated', allocations: allocations.length };
 }
+
+/**
+ * A person who paid more than they owed has a balance in their favor in the household: the abonos tied to no debt.
+ * This puts it to work on the debts that person still has open, whoever they are owed to, as if it had been abonado
+ * to them: each such debt gets `creditApplied` (and `paidAbono` grows by the same amount), so what is "still owed"
+ * already counts it. The debts owed to the person the credit was paid to come first, then the rest, each in payment
+ * order. It only changes the copy shown on screen; the stored records stay as they are.
+ */
+export function applyCreditToDebts<T extends { id: string; tipo: string; debtor: string; creditor?: string | null; lender?: string | null; amount: number; crossedAmount?: number; paidAbono?: number; cruzado?: boolean; saldaId?: string | null; dueDate?: unknown; date?: unknown; createdAt?: unknown }>(debts: T[], members: string[]): (T & { creditApplied?: number })[] {
+  // credit per debtor, remembering whom it was paid to (those debts get it first)
+  const credit = new Map<string, Map<string, number>>();
+  for (const a of debts) {
+    if (a.tipo !== 'Abono' || a.saldaId) continue;
+    const byCreditor = credit.get(a.debtor) ?? new Map<string, number>();
+    byCreditor.set(a.creditor ?? '', (byCreditor.get(a.creditor ?? '') ?? 0) + a.amount);
+    credit.set(a.debtor, byCreditor);
+  }
+  if (credit.size === 0) return debts;
+  const applied = new Map<string, number>();
+  for (const [debtor, byCreditor] of credit) {
+    const open = () => inPaymentOrder(debts.filter((d) => d.tipo === 'Deuda' && d.debtor === debtor && isPendingDebt(d) && remainingOf(d) - (applied.get(d.id) ?? 0) > 0));
+    for (const [creditorKey, total] of byCreditor) {
+      let left = total;
+      const sameCreditor = (d: T) => (creditorOf(d, members) ?? '') === creditorKey;
+      const ordered = [...open().filter(sameCreditor), ...open().filter((d) => !sameCreditor(d))];
+      for (const d of ordered) {
+        if (left <= 0) break;
+        const use = Math.min(left, remainingOf(d) - (applied.get(d.id) ?? 0));
+        if (use > 0) { applied.set(d.id, (applied.get(d.id) ?? 0) + use); left -= use; }
+      }
+    }
+  }
+  return debts.map((d) => {
+    const use = applied.get(d.id);
+    return use ? { ...d, paidAbono: (d.paidAbono || 0) + use, creditApplied: use } : d;
+  });
+}
+
+/**
+ * The household's stored rows as the screen (and the Telegram bot) read them: each debt carries what its abonos paid
+ * (`paidAbono`, from the abonos tied to it through `saldaId`) and then the balances in favor are put to work on top
+ * (`applyCreditToDebts`). One function so every reader says the same.
+ */
+export function householdDebtsWithCredit<T extends { id: string; tipo: string; debtor: string; creditor?: string | null; lender?: string | null; amount: number; crossedAmount?: number; paidAbono?: number; cruzado?: boolean; saldaId?: string | null; dueDate?: unknown; date?: unknown; createdAt?: unknown }>(raw: T[], members: string[]): (T & { creditApplied?: number })[] {
+  const paid = new Map<string, number>();
+  for (const x of raw) if (x.tipo === 'Abono' && x.saldaId) paid.set(x.saldaId, (paid.get(x.saldaId) || 0) + x.amount);
+  const withPaid = raw.map((d) => (d.tipo === 'Deuda' ? { ...d, paidAbono: paid.get(d.id) || 0, creditApplied: 0 } : d));
+  return applyCreditToDebts(withPaid, members);
+}

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { UseFormReturn } from 'react-hook-form'
 import { z } from 'zod'
 import { clsx } from 'clsx'
-import { Plus, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, ChevronDown, Coins } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
 import { Avatar } from '@/components/ui/Avatar'
 import { MoneyInput } from '@/components/ui/MoneyInput'
@@ -11,13 +11,13 @@ import { Select } from '@/components/ui/Select'
 import { AccountSelect } from '@/components/ui/AccountSelect'
 import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
 import { Button } from '@/components/ui/Button'
-import { formatCOP, HOUSEHOLD_DEBT_CATEGORIES, remainingOf, isPendingDebt, inPaymentOrder, creditorOf, owedByCreditor } from '@/shared'
+import { formatCOP, HOUSEHOLD_DEBT_CATEGORIES, remainingOf, creditorOf, owedByCreditor, isPendingDebt, inPaymentOrder } from '@/shared'
 import type { Rec } from './ledger'
 
-/** One more debtor whose debt — to any creditor, not just the one this payment already goes to — this payment
- *  also covers. Settled straight away, same as a guest's abono already is: no confirmation step, the money
- *  really did move (just not necessarily through the primary payer's own creditor). */
-export interface ExtraAbonoLine { id: string; debtor: string; amount: number; creditor: string | null }
+/** One more payment that goes out with the main one: either another debt of the payer's own (to a different
+ *  creditor) or someone else's debt. Settled straight away, same as a guest's abono already is: no confirmation
+ *  step on the covered person's side — the money really did move. `targetDebtId` aims it at one specific debt. */
+export interface ExtraAbonoLine { id: string; debtor: string; amount: number; creditor: string | null; targetDebtId?: string | null }
 
 export const CAT_OPTIONS = HOUSEHOLD_DEBT_CATEGORIES.map((c) => ({ value: c.id, label: c.label }))
 
@@ -39,14 +39,21 @@ export const debtSchema = z.object({
 export type DebtForm = z.infer<typeof debtSchema>
 
 interface Props {
+  /** The signed-in user: account balances are shown only when the payment is theirs. */
+  currentUserId: string
   open: boolean
   onClose: () => void
   form: UseFormReturn<DebtForm>
-  onSubmit: (data: DebtForm, extraLines: ExtraAbonoLine[]) => void
+  /** `mainTargetId` is the debt the main payment is aimed at (null = spread over that creditor's debts). */
+  onSubmit: (data: DebtForm, extraLines: ExtraAbonoLine[], mainTargetId: string | null) => void
   debts: Rec[]
-  /** abono aimed at one specific debt (from "Abonar" on a debt) */
-  saldaTargetId: string | null
-  /** debt picked in the general abono's selector */
+  /** The debts this payment is about: one debt, or every creditor of one shared expense. null = a general abono. */
+  scopeIds: string[] | null
+  /** The payments the report says this person has to make to end even: the form opens with them filled in. */
+  planPays?: { to: string; name: string; amount: number }[] | null
+  /** The household has a payment plan everybody was told: paying a debt on its own still works, but changes the plan. */
+  planActive?: boolean
+  /** debt picked in the old selector (cleared: the modal now picks whom to pay instead) */
   selectedTargetDebtId: string | null
   onPickTarget: (id: string | null) => void
   members: string[]
@@ -62,325 +69,355 @@ interface Props {
   onFile: (file: File | null) => void
 }
 
-const quickBtn = 'px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[#f3f5f6] text-[11px] font-semibold transition'
+const keyOf = (c: string | null | undefined) => c ?? ''
+const fromKey = (k: string) => (k === '' ? null : k)
 
-/** Abono modal with live simulation of the remaining balance. */
-export function AbonoModal({ open, onClose, form, onSubmit, debts, saldaTargetId, selectedTargetDebtId, onPickTarget, members, guestIds, colorOf, photoOf, accounts, nameOf, debtorOptions, saving, file, onFile }: Props) {
-  const watchedAmount = Number(form.watch('amount')) || 0
+/** What the payer can pay in step 1: one debt of the chosen expense, or (general abono) everything owed to a creditor. */
+interface PayItem { key: string; creditor: string | null; owed: number; debtId: string | null; label: string | null; /** What the report says to pay them (plan mode). */ planned?: number }
+
+type StepNo = 1 | 2 | 3
+const STEP_TITLE: Record<StepNo, string> = { 1: 'A quién le pagas', 2: 'Deuda de alguien más', 3: 'Detalles del pago' }
+
+/** Abono modal in steps, like the shared-expense one: whom you pay → someone else's debt too (optional) → details. */
+export function AbonoModal({
+  currentUserId, open, onClose, form, onSubmit, debts, scopeIds, planPays, planActive, selectedTargetDebtId, onPickTarget, members, guestIds,
+  colorOf, photoOf, accounts, nameOf, debtorOptions, saving, file, onFile,
+}: Props) {
   const watchedDebtor = form.watch('debtor')
-  const effectiveTargetId = saldaTargetId || selectedTargetDebtId
-  const targetDebt = effectiveTargetId ? debts.find((d) => d.id === effectiveTargetId) : null
-  const targetRemaining = targetDebt ? remainingOf(targetDebt) : 0
-  const targetPaid = targetDebt ? (targetDebt.paidAbono || 0) + (targetDebt.crossedAmount || 0) : 0
-  // Whom the abono goes to: the creditor of the debt it settles, or the one chosen when several people are owed
-  const creditorLines = owedByCreditor(debts as any[], watchedDebtor, members)
-  const watchedCreditor = form.watch('creditor')
-  const creditorId = targetDebt ? creditorOf(targetDebt as any, members) : (watchedCreditor || (creditorLines.length === 1 ? creditorLines[0].creditor : null))
-  const debtorPending = inPaymentOrder(debts.filter((d) => d.debtor === watchedDebtor && isPendingDebt(d) && (!creditorId || creditorOf(d as any, members) === creditorId)))
-  const totalDebtorPending = debtorPending.reduce((s, d) => s + remainingOf(d), 0)
-  const maxAbonable = targetDebt ? targetRemaining : totalDebtorPending
-  const simRemaining = Math.max(0, maxAbonable - watchedAmount)
-  const isOverMax = maxAbonable > 0 && watchedAmount > maxAbonable
-  const setAmount = (v: number) => form.setValue('amount', v, { shouldValidate: true })
 
-  // Covering someone else's debt in the same payment — "isabel pays her own and also Andrés's, even to a
-  // different creditor". Settled immediately, same as a guest's abono: no confirmation step. Each line keeps
-  // its own creditor, since the person being covered may owe more than one.
-  const [extraLines, setExtraLines] = useState<ExtraAbonoLine[]>([])
-  useEffect(() => { if (open) setExtraLines([]) }, [open])
-  /** Everything this uid still owes, split by whom — not just to the primary payment's creditor. */
-  const creditorsOf = (uid: string) => owedByCreditor(debts as any[], uid, members).filter((l) => l.owed > 0)
-  const totalOwedAny = (uid: string) => creditorsOf(uid).reduce((s, l) => s + l.owed, 0)
-  const addableMembers = members.filter((uid) => uid !== watchedDebtor && !extraLines.some((l) => l.debtor === uid) && totalOwedAny(uid) > 0)
-  const extraTotal = extraLines.reduce((s, l) => s + (Number(l.amount) || 0), 0)
-  function addExtraLine() {
-    const uid = addableMembers[0]
-    if (!uid) return
-    const first = creditorsOf(uid)[0]
-    setExtraLines((prev) => [...prev, { id: crypto.randomUUID(), debtor: uid, amount: first?.owed ?? 0, creditor: first?.creditor ?? null }])
-  }
-  function updateExtraLine(id: string, patch: Partial<ExtraAbonoLine>) {
-    setExtraLines((prev) => prev.map((l) => l.id === id ? { ...l, ...patch } : l))
-  }
-  function removeExtraLine(id: string) {
-    setExtraLines((prev) => prev.filter((l) => l.id !== id))
-  }
+  // The debts the payment is about, as long as they still belong to the person paying (the payer can be switched in step 3)
+  const scopeDebts = scopeIds
+    ? scopeIds.map((id) => debts.find((d) => d.id === id)).filter((d): d is Rec => !!d && d.debtor === watchedDebtor && remainingOf(d) > 0)
+    : null
+  const scoped = !!scopeDebts && scopeDebts.length > 0
+  const planned = !scoped && !!planPays && planPays.length > 0
+  const title = scoped ? `Abonar a: ${scopeDebts![0].concept}` : planned ? 'Registrar los pagos del reporte' : 'Registrar abono al hogar'
 
-  // Typed more than this debtor owes: offer to route the leftover to whoever owes the most elsewhere in the
-  // household, instead of just refusing the amount. If that person owes more than one creditor, which debt the
-  // excess goes to is picked by hand below (their avatar per creditor), not guessed.
-  const excess = Math.max(0, watchedAmount - maxAbonable)
-  const excessCandidate = excess > 0
-    ? [...addableMembers].sort((a, b) => totalOwedAny(b) - totalOwedAny(a))[0]
-    : undefined
-  const excessCandidateCreditors = excessCandidate ? creditorsOf(excessCandidate) : []
-  function coverExcessWith(uid: string, creditor: string | null, owed: number) {
-    const amount = Math.min(excess, owed)
-    setExtraLines((prev) => {
-      const existing = prev.find((l) => l.debtor === uid && l.creditor === creditor)
-      if (existing) return prev.map((l) => l.id === existing.id ? { ...l, amount: l.amount + amount } : l)
-      return [...prev, { id: crypto.randomUUID(), debtor: uid, amount, creditor }]
+  // with a plan, the people to pay are the ones the report says — even someone this person has no registered debt with
+  const registeredOwed = (uid: string) => owedByCreditor(debts as any[], watchedDebtor, members).find((l) => l.creditor === uid)?.owed ?? 0
+  const ownItems: PayItem[] = planned
+    ? planPays!.map((pp) => ({ key: `c>${pp.to}`, creditor: pp.to, owed: registeredOwed(pp.to), debtId: null, label: null, planned: pp.amount }))
+    : scoped
+    ? scopeDebts!.map((d) => ({ key: d.id as string, creditor: (creditorOf(d as any, members) as string | null | undefined) ?? null, owed: remainingOf(d), debtId: d.id as string, label: d.concept as string }))
+    : owedByCreditor(debts as any[], watchedDebtor, members).filter((l) => l.owed > 0).map((l) => ({ key: `c>${keyOf(l.creditor)}`, creditor: l.creditor ?? null, owed: l.owed, debtId: null, label: null }))
+  const totalOwn = ownItems.reduce((s, i) => s + i.owed, 0)
+  const capOf = (key: string) => ownItems.find((i) => i.key === key)?.owed ?? 0
+
+  const [step, setStep] = useState<StepNo>(1)
+  // Step 1 — whom the payer pays (item key → amount)
+  const [paying, setPaying] = useState<Record<string, number>>({})
+  // Step 2 — someone else's debts also covered (debt id → amount), and which person is unfolded
+  const [covering, setCovering] = useState<Record<string, number>>({})
+  const [unfolded, setUnfolded] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    if (selectedTargetDebtId) onPickTarget(null)
+    // a single thing to pay starts chosen; with several, the person picks whom
+    setPaying(planned ? Object.fromEntries(ownItems.map((i) => [i.key, i.planned ?? i.owed])) : ownItems.length === 1 ? { [ownItems[0].key]: ownItems[0].owed } : {})
+    setCovering({})
+    setUnfolded(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, watchedDebtor, scopeIds, planPays])
+
+  // a new payment always starts at step 1; switching who pays from the last step only clears what was chosen
+  useEffect(() => { if (open) setStep(1) }, [open, scopeIds, planPays])
+
+  function togglePaying(key: string) {
+    setPaying((prev) => {
+      if (key in prev) { const { [key]: _gone, ...rest } = prev; return rest }
+      return { ...prev, [key]: capOf(key) }
     })
-    setAmount(maxAbonable)
   }
+  // paying more than is owed is fine: what is left over stays as a balance in the payer's favor with that creditor
+  const setPayingAmount = (key: string, v: number) => setPaying((prev) => ({ ...prev, [key]: Math.max(0, v) }))
+
+  const payingTotal = Object.values(paying).reduce((s, v) => s + (Number(v) || 0), 0)
+  /** What of the payer's debts step 1 covers (an overpayment to one creditor never covers another's debt). */
+  const coveredOwn = ownItems.reduce((s, i) => s + Math.min(Number(paying[i.key]) || 0, i.owed), 0)
+  /** Paid above what was owed, per item: it becomes a saldo a favor with that creditor. */
+  const surplusOf = (i: PayItem) => Math.max(0, (Number(paying[i.key]) || 0) - i.owed)
+  const totalSurplus = ownItems.reduce((s, i) => s + surplusOf(i), 0)
+  /** What the payer still owes after step 1: other people's debts can only be covered once this is zero. */
+  const ownLeft = Math.max(0, totalOwn - coveredOwn)
+  const step2Open = totalOwn > 0 && ownLeft === 0
+
+  // Other people with something owed: each pending debt of theirs, in the order it is paid
+  const others = members
+    .filter((uid) => uid !== watchedDebtor)
+    .map((uid) => ({ uid, list: inPaymentOrder(debts.filter((d) => d.debtor === uid && isPendingDebt(d))) as Rec[] }))
+    .filter((p) => p.list.length > 0)
+  function toggleCovering(id: string, owed: number) {
+    setCovering((prev) => {
+      if (id in prev) { const { [id]: _gone, ...rest } = prev; return rest }
+      return { ...prev, [id]: owed }
+    })
+  }
+  const setCoveringAmount = (id: string, v: number, owed: number) => setCovering((prev) => ({ ...prev, [id]: Math.max(0, Math.min(v, owed)) }))
+
+  // What gets written: the first thing chosen is the "main" payment, the rest ride along as extra lines
+  const payingItems = ownItems.filter((i) => (Number(paying[i.key]) || 0) > 0)
+  const mainItem = payingItems[0]
+  const mainAmount = mainItem ? paying[mainItem.key] : 0
+  const ownExtra: ExtraAbonoLine[] = payingItems.slice(1).map((i) => ({ id: `own>${i.key}`, debtor: watchedDebtor, creditor: i.creditor, amount: paying[i.key], targetDebtId: i.debtId }))
+  const othersExtra: ExtraAbonoLine[] = step2Open
+    ? others.flatMap((p) => p.list
+        .filter((d) => (Number(covering[d.id as string]) || 0) > 0)
+        .map((d) => ({ id: d.id as string, debtor: p.uid, creditor: (creditorOf(d as any, members) as string | null | undefined) ?? null, amount: covering[d.id as string], targetDebtId: d.id as string })))
+    : []
+  const total = payingTotal + othersExtra.reduce((s, l) => s + l.amount, 0)
+  const canSubmit = mainAmount > 0 && !saving
+
+  // the form's own fields follow the main payment
+  useEffect(() => {
+    form.setValue('amount', mainAmount, { shouldValidate: mainAmount > 0 })
+    form.setValue('creditor', mainItem?.creditor ?? '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mainAmount, mainItem?.key])
+
+  const confirmPayment = form.handleSubmit((data) => onSubmit({ ...data, amount: mainAmount, creditor: mainItem?.creditor ?? '' }, [...ownExtra, ...othersExtra], mainItem ? mainItem.debtId : null))
+
+  const avatar = (uid: string | null, size = 24) => uid
+    ? <Avatar name={nameOf(uid)} photoURL={photoOf(uid)} color={colorOf(uid)} size={size} />
+    : <span className="inline-flex items-center justify-center rounded-full bg-white/10 text-[10px] text-[#8a929a]" style={{ width: size, height: size }}>?</span>
+  const guestTag = (uid: string) => (guestIds.includes(uid) ? ' (invitado)' : '')
+  const you = watchedDebtor === currentUserId
 
   return (
-    <Modal open={open} onClose={onClose} title={targetDebt ? `Abonar a: ${targetDebt.concept}` : 'Registrar abono al hogar'}>
-      <form onSubmit={form.handleSubmit((data) => onSubmit(data, extraLines))} className="space-y-4">
+    <Modal open={open} onClose={onClose} title={title}>
+      <form
+        onSubmit={(e) => {
+          // Never submits by itself: Enter only moves on a step, and the payment is saved ONLY by the final button
+          e.preventDefault()
+          if (step < 3 && (step === 1 ? mainAmount > 0 : true)) setStep((v) => (v + 1) as StepNo)
+        }}
+        className="space-y-4"
+      >
         <input type="hidden" {...form.register('tipo')} value="Abono" />
 
-        {!saldaTargetId && creditorLines.length > 1 && (
-          <Select
-            label="¿A quién le abonas?"
-            options={creditorLines.map((l) => ({ value: l.creditor ?? '', label: `${l.creditor ? nameOf(l.creditor) : 'Sin definir'} · le debes ${formatCOP(l.owed)}` }))}
-            value={creditorId ?? ''}
-            onChange={(e) => {
-              const c = e.target.value
-              form.setValue('creditor', c)
-              onPickTarget(null)
-              const owed = creditorLines.find((l) => (l.creditor ?? '') === c)?.owed ?? 0
-              form.setValue('amount', owed)
-            }}
-          />
-        )}
-
-        {!saldaTargetId && debtorPending.length > 0 && (
-          <div className="space-y-1">
-            <label className="text-sm font-medium text-[#dcf1eb]">¿Cómo deseas aplicar el abono?</label>
-            <select
-              value={selectedTargetDebtId || ''}
-              onChange={(e) => {
-                const val = e.target.value
-                onPickTarget(val || null)
-                if (val) {
-                  const chosen = debtorPending.find((d) => d.id === val)
-                  if (chosen) {
-                    form.setValue('category', chosen.category || 'otros_hogar')
-                    form.setValue('amount', remainingOf(chosen))
-                  }
-                } else {
-                  form.setValue('amount', totalDebtorPending > 0 ? totalDebtorPending : 0)
-                }
-              }}
-              className="w-full rounded-xl border border-brand-500/20 bg-[#0a1f2f] px-3 py-2.5 text-sm text-white outline-none transition focus:border-brand-500"
-            >
-              <option value="">Distribuir entre deudas pendientes (antiguas primero)</option>
-              {debtorPending.map((d) => (
-                <option key={d.id} value={d.id}>Abonar a: {d.concept} (Saldo: {formatCOP(remainingOf(d))})</option>
-              ))}
-            </select>
-          </div>
-        )}
-        {targetDebt ? (
-          <div className="bg-[#0d263a] border border-white/10 rounded-xl p-3.5 space-y-2">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <span className="font-pixel text-[9px] text-brand-400 uppercase tracking-widest font-bold block">Deuda seleccionada</span>
-                <p className="text-sm font-bold text-[#f3f5f6]">{targetDebt.concept}</p>
-                {creditorId && <p className="text-[11px] text-[#9aa4ac]">Le abonas a {nameOf(creditorId)}</p>}
-              </div>
-              <div className="text-right flex-shrink-0">
-                <span className="text-[10px] text-[#8a929a] block">Saldo pendiente</span>
-                <p className="text-base font-bold text-amber-300 font-mono">{formatCOP(targetRemaining)}</p>
-              </div>
-            </div>
-            {targetPaid > 0 && (
-              <div className="flex items-center gap-2 text-[11px] text-[#9aa4ac] pt-1 border-t border-white/10 flex-wrap">
-                <span>Monto original: <strong className="text-[#f3f5f6] font-mono">{formatCOP(targetDebt.amount)}</strong></span>
-                <span className="text-brand-300 font-mono">· {formatCOP(targetPaid)} cubierto</span>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="bg-[#0d263a] border border-white/10 rounded-xl p-3 flex items-center justify-between gap-2">
-              <div>
-                <span className="text-[10px] text-[#8a929a] block">Saldo total adeudado</span>
-                <p className="text-sm font-bold text-[#f3f5f6]">{nameOf(watchedDebtor)}{creditorId ? ` → ${nameOf(creditorId)}` : ''}</p>
-              </div>
-              <p className="text-base font-bold text-amber-300 font-mono">{formatCOP(totalDebtorPending)}</p>
-            </div>
-
-          </div>
-        )}
-
-        <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-[#dcf1eb]">Monto a abonar</label>
-          <div className="currency-field has-suffix">
-            <span className="currency-affix-prefix">$</span>
-            <MoneyInput
-              placeholder="0"
-              {...form.register('amount')}
-              className="w-full rounded-xl border border-brand-500/20 bg-[#0a1f2f] px-3 py-2.5 text-sm text-white outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20"
-              aria-label="Monto a abonar en pesos colombianos"
-            />
-            <span className="currency-affix-suffix">COP</span>
-          </div>
-          {form.formState.errors.amount?.message && <p className="text-xs text-red-400">{form.formState.errors.amount.message}</p>}
-
-          {maxAbonable > 0 && (
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              <button type="button" onClick={() => setAmount(maxAbonable)} className="px-2.5 py-1 rounded-lg bg-brand-500/15 hover:bg-brand-500/25 border border-brand-500/30 text-brand-300 text-[11px] font-semibold transition">
-                Saldar todo ({formatCOP(maxAbonable)})
-              </button>
-              {maxAbonable >= 20000 && <button type="button" onClick={() => setAmount(Math.round(maxAbonable / 2))} className={quickBtn}>50% ({formatCOP(Math.round(maxAbonable / 2))})</button>}
-              {maxAbonable > 100000 && <button type="button" onClick={() => setAmount(100000)} className={quickBtn}>$100.000</button>}
-              {maxAbonable > 200000 && <button type="button" onClick={() => setAmount(200000)} className={quickBtn}>$200.000</button>}
-            </div>
-          )}
+        <div className="flex items-center gap-1.5">
+          {([1, 2, 3] as StepNo[]).map((n) => (
+            <span key={n} className={`h-1 flex-1 rounded-full ${n <= step ? 'bg-brand-400' : 'bg-white/10'}`} />
+          ))}
         </div>
+        <p className="font-pixel text-[9px] uppercase tracking-widest text-brand-400">Paso {step} de 3 · {STEP_TITLE[step]}</p>
 
-        {watchedAmount > 0 && maxAbonable > 0 && (
-          <div className={clsx(
-            'p-3.5 rounded-xl border text-xs space-y-1.5 transition-all',
-            isOverMax && !excessCandidate ? 'bg-red-500/10 border-red-500/30 text-red-300'
-              : isOverMax ? 'bg-sky-500/10 border-sky-400/30 text-sky-200'
-              : simRemaining === 0 ? 'bg-brand-500/20 border-brand-400/50 text-brand-300'
-              : 'bg-[#0d263a] border-white/10 text-[#f0fae8]',
-          )}>
-            <div className="flex items-center justify-between font-mono">
-              <span className="text-[#8a929a]">Saldo actual adeudado:</span>
-              <span>{formatCOP(maxAbonable)}</span>
-            </div>
-            <div className="flex items-center justify-between font-mono text-sky-300 font-semibold">
-              <span>− Tu abono:</span>
-              <span>{formatCOP(watchedAmount)}</span>
-            </div>
-            <div className="border-t border-white/10 pt-1.5 flex items-center justify-between font-mono font-bold">
-              <span>Nuevo saldo pendiente:</span>
-              <span className={simRemaining === 0 ? 'text-emerald-300' : 'text-amber-300'}>{formatCOP(simRemaining)}</span>
-            </div>
-            {isOverMax && excessCandidate ? (
-              <div className="pt-1 space-y-2">
-                <p className="text-[11px]">
-                  Estás pagando <strong className="font-mono">{formatCOP(excess)}</strong> más de lo que debes. Ese excedente puede cubrir parte de lo que <strong>{nameOf(excessCandidate)}</strong> debe{excessCandidateCreditors.length > 1 ? ' — elige a cuál de sus deudas:' : '.'}
-                </p>
-                {excessCandidateCreditors.length === 1 ? (
-                  <button
-                    type="button"
-                    onClick={() => coverExcessWith(excessCandidate, excessCandidateCreditors[0].creditor, excessCandidateCreditors[0].owed)}
-                    className="w-full py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-sky-200 text-[11px] font-semibold transition"
-                  >
-                    Sí, cubrir {formatCOP(Math.min(excess, excessCandidateCreditors[0].owed))} de lo que le debe a {nameOf(excessCandidateCreditors[0].creditor)}
-                  </button>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {excessCandidateCreditors.map((l) => (
-                      <button
-                        key={l.creditor ?? 'sin-definir'}
-                        type="button"
-                        onClick={() => coverExcessWith(excessCandidate, l.creditor, l.owed)}
-                        className="flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/40 text-sky-100 text-[11px] font-semibold transition"
-                      >
-                        {l.creditor && <Avatar name={nameOf(l.creditor)} photoURL={photoOf(l.creditor)} color={colorOf(l.creditor)} size={20} className="!ring-sky-300/40" />}
-                        {nameOf(l.creditor)} · {formatCOP(Math.min(excess, l.owed))}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="text-[11px] text-[#8a929a] pt-1">
-                {isOverMax
-                  ? `El abono no puede superar el saldo pendiente de ${formatCOP(maxAbonable)}.`
-                  : simRemaining === 0
-                    ? '¡Con este abono la deuda quedará 100% saldada!'
-                    : `Se abonarán ${formatCOP(watchedAmount)} para disminuir la deuda. Quedará un saldo pendiente de ${formatCOP(simRemaining)}.`}
+        {/* 1 — whom the payer pays */}
+        {step === 1 && (
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-bold text-[#f0fae8]">{`¿A quién le paga${you ? 's' : ` ${nameOf(watchedDebtor)}`}?`}</h3>
+            {ownItems.length > 0 && (planned
+              ? <p className="text-[11px] text-[#8a929a] leading-snug">Esto es lo que dice el reporte para que quedes a mano con todos: ya está puesto cada pago. Si a alguien no le debes nada registrado, ese pago queda como saldo a tu favor con esa persona y se aplica solo a lo que debes a los demás.</p>
+              : <p className="text-[11px] text-[#8a929a] leading-snug">Toca a cada persona a la que se le debe. Puedes pagarle a varias en el mismo pago. Si pagas más de lo que debes, lo que sobra queda como saldo a tu favor.</p>)}
+            {planActive && !planned && (
+              <p className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-200">
+                Hay un plan de pagos fijado. Si pagas una deuda por fuera de lo que dice el plan, el plan se ajusta solo con una línea extra para que todos sigan quedando a mano; lo más simple es pagar lo que dice el reporte.
               </p>
             )}
           </div>
+          {ownItems.length === 0 ? (
+            <p className="rounded-xl border border-white/10 bg-[#0d263a] p-3 text-xs text-[#8a929a]">{nameOf(watchedDebtor)} no tiene deudas pendientes.</p>
+          ) : (
+            <div className="space-y-2">
+              {ownItems.map((it) => {
+                const picked = it.key in paying
+                return (
+                  <div key={it.key} className={clsx('rounded-xl border p-2.5 transition', picked ? 'border-brand-400/60 bg-brand-500/10' : 'border-white/10 bg-[#0d263a]')}>
+                    <button type="button" onClick={() => togglePaying(it.key)} aria-pressed={picked} className="flex w-full items-center gap-2.5 text-left">
+                      {avatar(it.creditor, 30)}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold text-[#f0fae8]">{it.creditor ? nameOf(it.creditor) : 'Sin definir'}{it.creditor ? guestTag(it.creditor) : ''}</span>
+                        <span className="block text-[10px] font-mono text-[#8a929a]">{it.label ? `${it.label} · ` : ''}{planned && it.owed === 0 ? 'Sin deuda registrada con esta persona' : `Se le debe ${formatCOP(it.owed)}`}</span>
+                      </span>
+                      <span className={clsx('flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border', picked ? 'border-brand-400 bg-brand-400 text-[#04141f]' : 'border-white/25')} aria-hidden="true">
+                        {picked && <Check size={13} />}
+                      </span>
+                    </button>
+                    {picked && (
+                      <div className="mt-2 flex items-center gap-2 pl-[38px]">
+                        <div className="currency-field flex-1">
+                          <span className="currency-affix-prefix">$</span>
+                          <MoneyInput
+                            placeholder="0"
+                            value={String(paying[it.key])}
+                            onChange={(e) => setPayingAmount(it.key, Number(e.target.value) || 0)}
+                            className="w-full rounded-lg border border-brand-500/20 bg-[#0a1f2f] px-2.5 py-1.5 text-sm text-white outline-none focus:border-brand-500"
+                            aria-label={`Monto a pagar a ${nameOf(it.creditor)}`}
+                          />
+                        </div>
+                        <button type="button" onClick={() => setPayingAmount(it.key, it.planned ?? it.owed)} className="rounded-lg border border-brand-500/30 bg-brand-500/15 px-2 py-1.5 text-[10px] font-semibold text-brand-300 hover:bg-brand-500/25 transition whitespace-nowrap">
+                          {it.planned !== undefined ? 'Según el reporte' : 'Todo'} {formatCOP(it.planned ?? it.owed)}
+                        </button>
+                      </div>
+                    )}
+                    {picked && surplusOf(it) > 0 && (
+                      <p className="mt-1.5 pl-[38px] text-[11px] leading-snug text-emerald-300">
+                        Pagas {formatCOP(surplusOf(it))} de más: quedan <strong className="font-mono">{formatCOP(surplusOf(it))}</strong> a favor {you ? 'tuyo' : `de ${nameOf(watchedDebtor)}`} con {it.creditor ? nameOf(it.creditor) : 'esa persona'}.
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+              {ownLeft > 0 && payingTotal > 0 && (
+                <p className="text-[11px] text-amber-300/90">Después de este pago {you ? 'quedarías' : `quedaría ${nameOf(watchedDebtor)}`} debiendo {formatCOP(ownLeft)}.</p>
+              )}
+            </div>
+          )}
+        </div>
         )}
 
-        {creditorId && (
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-[#dcf1eb]">¿Cubres también la deuda de alguien más?</label>
-            {extraLines.map((line) => {
-              const lineCreditors = creditorsOf(line.debtor)
-              return (
-                <div key={line.id} className="space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <Select
-                      options={[
-                        { value: line.debtor, label: `${nameOf(line.debtor)}${guestIds.includes(line.debtor) ? ' (invitado)' : ''} · debe ${formatCOP(totalOwedAny(line.debtor))}` },
-                        ...addableMembers.map((uid) => ({ value: uid, label: `${nameOf(uid)}${guestIds.includes(uid) ? ' (invitado)' : ''} · debe ${formatCOP(totalOwedAny(uid))}` })),
-                      ]}
-                      value={line.debtor}
-                      onChange={(e) => {
-                        const uid = e.target.value
-                        const first = creditorsOf(uid)[0]
-                        updateExtraLine(line.id, { debtor: uid, amount: first?.owed ?? 0, creditor: first?.creditor ?? null })
-                      }}
-                      className="flex-1"
-                    />
-                    <div className="currency-field w-32 flex-shrink-0">
-                      <span className="currency-affix-prefix">$</span>
-                      <MoneyInput
-                        placeholder="0"
-                        value={String(line.amount)}
-                        onChange={(e) => updateExtraLine(line.id, { amount: Number(e.target.value) || 0 })}
-                        className="w-full rounded-lg border border-brand-500/20 bg-[#0a1f2f] px-2.5 py-1.5 text-sm text-white outline-none focus:border-brand-500"
-                        aria-label={`Monto que cubres por ${nameOf(line.debtor)}`}
-                      />
-                    </div>
-                    <button type="button" onClick={() => removeExtraLine(line.id)} aria-label={`Quitar a ${nameOf(line.debtor)}`} className="p-2 rounded-lg text-[#8a929a] hover:text-red-300 hover:bg-red-500/10 transition flex-shrink-0">
-                      <X size={14} />
+        {/* 2 — someone else's debt, only once the payer's own are covered */}
+        {step === 2 && (
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-bold text-[#f0fae8]">¿Pagas también la deuda de alguien más?</h3>
+            {step2Open && <p className="text-[11px] text-[#8a929a] leading-snug">Opcional. Abre a la persona y marca qué deuda suya cubres, completa o parcial.</p>}
+          </div>
+          {planned ? (
+            <p className="rounded-xl border border-white/10 bg-[#0d263a] p-3 text-[11px] leading-snug text-[#8a929a]">El reporte ya tiene en cuenta lo que debes a todos y lo que te deben: con los pagos del paso 1 quedas a mano. Puedes pasar al siguiente paso.</p>
+          ) : !step2Open ? (
+            <p className="rounded-xl border border-white/10 bg-[#0d263a] p-3 text-[11px] leading-snug text-[#8a929a]">
+              {totalOwn === 0
+                ? 'Aquí no hay deudas propias que pagar.'
+                : <>Primero se cubren las deudas propias: {payingTotal > 0 ? <>faltan <strong className="font-mono text-[#dcf1eb]">{formatCOP(ownLeft)}</strong> en el paso 1.</> : 'elige a quién pagas en el paso 1.'}</>}
+            </p>
+          ) : others.length === 0 ? (
+            <p className="rounded-xl border border-white/10 bg-[#0d263a] p-3 text-[11px] text-[#8a929a]">Nadie más tiene deudas pendientes en el hogar.</p>
+          ) : (
+            <div className="space-y-2">
+              {others.map((p) => {
+                const isOpen = unfolded === p.uid
+                const chosen = p.list.filter((d) => (d.id as string) in covering).length
+                const owedTotal = p.list.reduce((s, d) => s + remainingOf(d), 0)
+                return (
+                  <div key={p.uid} className={clsx('rounded-xl border transition', chosen > 0 ? 'border-sky-400/50 bg-sky-500/10' : 'border-white/10 bg-[#0d263a]')}>
+                    <button type="button" onClick={() => setUnfolded(isOpen ? null : p.uid)} aria-expanded={isOpen} className="flex w-full items-center gap-2.5 p-2.5 text-left">
+                      {avatar(p.uid, 30)}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold text-[#f0fae8]">{nameOf(p.uid)}{guestTag(p.uid)}</span>
+                        <span className="block text-[10px] font-mono text-[#8a929a]">Debe {formatCOP(owedTotal)}{chosen > 0 ? ` · cubres ${chosen}` : ''}</span>
+                      </span>
+                      <ChevronDown size={16} className={clsx('flex-shrink-0 text-[#8a929a] transition-transform', isOpen && 'rotate-180')} />
                     </button>
-                  </div>
-                  {lineCreditors.length > 1 && (
-                    <div className="pl-1 space-y-1">
-                      <p className="text-[10px] text-[#8a929a]">{nameOf(line.debtor)} le debe a varias personas — ¿a cuál le cubres?</p>
-                      <div className="flex flex-wrap gap-2">
-                        {lineCreditors.map((l) => (
-                          <button
-                            key={l.creditor ?? 'sin-definir'}
-                            type="button"
-                            onClick={() => updateExtraLine(line.id, { creditor: l.creditor, amount: l.owed })}
-                            className={clsx(
-                              'flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full border text-[11px] font-semibold transition',
-                              line.creditor === l.creditor ? 'bg-brand-500/20 border-brand-400/60 text-brand-200' : 'bg-white/5 border-white/15 text-[#c7ccd1] hover:border-white/30',
-                            )}
-                          >
-                            {l.creditor && <Avatar name={nameOf(l.creditor)} photoURL={photoOf(l.creditor)} color={colorOf(l.creditor)} size={20} className="!ring-white/15" />}
-                            {nameOf(l.creditor)} · {formatCOP(l.owed)}
-                          </button>
-                        ))}
+                    {isOpen && (
+                      <div className="space-y-2 border-t border-white/10 p-2.5">
+                        {p.list.map((d) => {
+                          const id = d.id as string
+                          const owed = remainingOf(d)
+                          const cred = (creditorOf(d as any, members) as string | null | undefined) ?? null
+                          const on = id in covering
+                          return (
+                            <div key={id} className="space-y-1.5">
+                              <button type="button" onClick={() => toggleCovering(id, owed)} aria-pressed={on} className="flex w-full items-center gap-2 text-left">
+                                <span className={clsx('flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border', on ? 'border-sky-400 bg-sky-400 text-[#04141f]' : 'border-white/25')} aria-hidden="true">
+                                  {on && <Check size={13} />}
+                                </span>
+                                <span className="flex flex-shrink-0 items-center gap-1">
+                                  {avatar(p.uid, 22)}
+                                  <span aria-hidden="true" className="text-sky-300">→</span>
+                                  {avatar(cred, 22)}
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-[11px] font-semibold text-[#dcf1eb]">{d.concept}</span>
+                                  <span className="block truncate text-[10px] text-[#8a929a]">con {cred ? nameOf(cred) : 'sin definir'}</span>
+                                </span>
+                                <span className="font-mono text-[11px] text-[#9aa4ac] flex-shrink-0">{formatCOP(owed)}</span>
+                              </button>
+                              {on && (
+                                <div className="flex items-center gap-2 pl-7">
+                                  <div className="currency-field flex-1">
+                                    <span className="currency-affix-prefix">$</span>
+                                    <MoneyInput
+                                      placeholder="0"
+                                      value={String(covering[id])}
+                                      onChange={(e) => setCoveringAmount(id, Number(e.target.value) || 0, owed)}
+                                      className="w-full rounded-lg border border-sky-400/30 bg-[#0a1f2f] px-2.5 py-1.5 text-sm text-white outline-none focus:border-sky-400"
+                                      aria-label={`Monto que cubres de ${d.concept} de ${nameOf(p.uid)}`}
+                                    />
+                                  </div>
+                                  <button type="button" onClick={() => setCoveringAmount(id, owed, owed)} className="rounded-lg border border-sky-400/30 bg-sky-500/15 px-2 py-1.5 text-[10px] font-semibold text-sky-200 hover:bg-sky-500/25 transition whitespace-nowrap">
+                                    Toda
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-            {addableMembers.length > 0 && (
-              <button type="button" onClick={addExtraLine} className={clsx(quickBtn, 'flex items-center gap-1')}>
-                <Plus size={12} /> Agregar a alguien más
-              </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+        )}
+
+        {/* 3 — details of the payment */}
+        {step === 3 && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-white/10 bg-[#0d263a] p-3 space-y-2">
+              <p className="text-[10px] uppercase tracking-wider text-[#8a929a]">Revisa antes de confirmar</p>
+              <ul className="space-y-1">
+                {payingItems.map((i) => (
+                  <li key={i.key} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="min-w-0 truncate text-[#dcf1eb]">{you ? 'Tú' : nameOf(watchedDebtor)} → {i.creditor ? nameOf(i.creditor) : 'sin definir'}{i.label ? ` · ${i.label}` : ''}</span>
+                    <span className="font-mono text-[#f0fae8] flex-shrink-0">{formatCOP(paying[i.key])}</span>
+                  </li>
+                ))}
+                {othersExtra.map((l) => (
+                  <li key={l.id} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="min-w-0 truncate text-sky-200">{nameOf(l.debtor)} → {l.creditor ? nameOf(l.creditor) : 'sin definir'} (su deuda)</span>
+                    <span className="font-mono text-sky-100 flex-shrink-0">{formatCOP(l.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+              {totalSurplus > 0 && (
+                <p className="text-[11px] text-emerald-300">Saldo a favor que queda: <strong className="font-mono">{formatCOP(totalSurplus)}</strong></p>
+              )}
+              <div className="flex items-center justify-between gap-2 border-t border-white/10 pt-2">
+                <span className="text-xs text-[#9aa4ac]">Total del pago</span>
+                <span className="font-mono text-lg font-bold text-brand-300">{formatCOP(total)}</span>
+              </div>
+            </div>
+            {mainAmount <= 0 && (
+              <p className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">Falta elegir a quién se le paga: vuelve al paso 1.</p>
             )}
-            {extraTotal > 0 && (
-              <p className="text-[11px] text-[#8a929a]">Total del pago: <span className="font-mono font-semibold text-[#f0fae8]">{formatCOP(watchedAmount + extraTotal)}</span> (tu parte + lo que cubres por otros).</p>
-            )}
+            <Input label="Concepto (opcional)" placeholder="ej. Abono de mercado…" {...form.register('concept')} error={form.formState.errors.concept?.message} />
+            <Select label="¿Quién abona?" options={debtorOptions} {...form.register('debtor')} />
+            <AccountSelect
+              label="¿De qué cuenta sale el pago?"
+              accounts={accounts}
+              value={form.watch('accountId') ?? ''}
+              onChange={(id) => form.setValue('accountId', id)}
+              noneLabel="Sin descontar de una cuenta"
+              outflow={total}
+              hideBalance={!you}
+            />
+            <Select label="Categoría" options={CAT_OPTIONS} {...form.register('category')} />
+            <Input label="Fecha del abono" type="date" {...form.register('date')} />
+            <Input label="Notas (opcional)" placeholder="ej. Transferencia Nequi…" {...form.register('notas')} />
+            <AttachmentPicker file={file} onChange={onFile} />
           </div>
         )}
 
-        <Input label="Concepto (opcional)" placeholder="ej. Abono de mercado…" {...form.register('concept')} error={form.formState.errors.concept?.message} />
-        <Select label="¿Quién abona?" options={debtorOptions} {...form.register('debtor')} />
-        <AccountSelect
-          label="¿De qué cuenta sale el pago?"
-          accounts={accounts}
-          value={form.watch('accountId') ?? ''}
-          onChange={(id) => form.setValue('accountId', id)}
-          noneLabel="Sin descontar de una cuenta"
-          outflow={watchedAmount + extraTotal}
-        />
-        <Select label="Categoría" options={CAT_OPTIONS} {...form.register('category')} />
-        <Input label="Fecha del abono" type="date" {...form.register('date')} />
-        <Input label="Notas (opcional)" placeholder="ej. Transferencia Nequi…" {...form.register('notas')} />
-        <AttachmentPicker file={file} onChange={onFile} />
-
-        <div className="flex gap-2 pt-1">
-          <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" notched className="flex-1" disabled={saving || isOverMax}>
-            {saving ? 'Guardando…' : 'Registrar abono'}
-          </Button>
+        <div className="flex gap-2 pt-2">
+          {step > 1 && (
+            <Button type="button" variant="secondary" className="flex-1" onClick={() => setStep((v) => (v - 1) as StepNo)}>
+              <ArrowLeft size={14} /> Atrás
+            </Button>
+          )}
+          {step === 1 && <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>Cancelar</Button>}
+          {step < 3 ? (
+            <Button key="next" type="button" notched className="flex-1" disabled={step === 1 && mainAmount <= 0} onClick={() => setStep((v) => (v + 1) as StepNo)}>
+              Siguiente <ArrowRight size={14} />
+            </Button>
+          ) : (
+            <Button key="confirm" type="button" notched className="flex-1" disabled={!canSubmit} onClick={() => void confirmPayment()}>
+              <Coins size={14} /> {saving ? 'Guardando…' : 'Confirmar y registrar'}
+            </Button>
+          )}
         </div>
       </form>
     </Modal>

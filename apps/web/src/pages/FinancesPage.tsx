@@ -1,17 +1,10 @@
 import { useEffect, useState } from 'react'
-import { AccountSelect } from '@/components/ui/AccountSelect'
-import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
-import { withAttachment } from '@/lib/attachments'
 import { TransferModal } from '@/components/fixed/TransferModal'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Edit2, Trash2, Wallet, DollarSign, PiggyBank, Sparkles, ArrowLeftRight, ChevronDown } from 'lucide-react'
-import { format } from 'date-fns'
-import { es } from 'date-fns/locale'
+import { Plus, Edit2, Trash2, Wallet, PiggyBank, Sparkles, ArrowLeftRight } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Card } from '@/components/ui/Card'
-import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
@@ -21,15 +14,13 @@ import { ProgressBar } from '@/components/ui/ProgressBar'
 import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/hooks/useAuth'
-import { usePeriodReveal } from '@/hooks/usePeriodReveal'
 import { useMoneyMask } from '@/hooks/useMoneyMask'
 import { useLayoutStore } from '@/store/layout'
 import {
   addAccount, getAccounts, updateAccount, deleteAccount,
   addSavingsGoal, getSavingsGoals, updateSavingsGoal, deleteSavingsGoal,
-  addIncome, getIncomes, deleteIncome,
 } from '@/lib/firestore'
-import { formatCOP } from '@/shared'
+import { formatCOP, topAccounts } from '@/shared'
 import type { AccountType } from '@/shared'
 import { AppIcon, EmptyMark, GOAL_ICON_KEYS } from '@/components/ui/AppIcon'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
@@ -53,12 +44,6 @@ const accountSchema = z.object({
   color:   z.string(),
 })
 
-const incomeSchema = z.object({
-  concept: z.string().min(1, 'Concepto requerido'),
-  amount:  z.coerce.number().positive('El monto debe ser mayor a 0'),
-  date:    z.string().min(1),
-})
-
 const goalSchema = z.object({
   name:          z.string().min(1, 'Nombre requerido'),
   targetAmount:  z.coerce.number().positive('La meta debe ser mayor a 0'),
@@ -69,11 +54,10 @@ const goalSchema = z.object({
 const addMoneySchema = z.object({ amount: z.coerce.number().positive('El monto a abonar debe ser mayor a 0') })
 
 type AccountForm  = z.infer<typeof accountSchema>
-type IncomeForm   = z.infer<typeof incomeSchema>
 type GoalForm     = z.infer<typeof goalSchema>
 type AddMoneyForm = z.infer<typeof addMoneySchema>
 
-type Tab = 'movimientos' | 'ingresos' | 'ahorros'
+type Tab = 'movimientos' | 'ahorros'
 
 export default function FinancesPage() {
   const { user, profile } = useAuth()
@@ -83,17 +67,14 @@ export default function FinancesPage() {
   const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
   const [activeTab, setActiveTab] = useState<Tab>('movimientos')
   // Account picked on the left to narrow the movements (null = all), and a counter that makes the movements reload
-  const [accountFilter, setAccountFilter] = useState<string | null>(null)
+  // several accounts can be picked at once; empty = all
+  const [accountFilter, setAccountFilter] = useState<string[]>([])
   const [refreshKey, setRefreshKey] = useState(0)
 
   const [accounts, setAccounts]   = useState<any[]>([])
   const [moving, setMoving]       = useState(false)
-  // Account a new income is deposited into ('' = none)
-  const [incAccount, setIncAccount] = useState('')
-  const [incomes, setIncomes]     = useState<any[]>([])
   const [goals, setGoals]         = useState<any[]>([])
   const [loadingAcc, setLoadingAcc] = useState(true)
-  const [loadingInc, setLoadingInc] = useState(true)
   const [loadingGls, setLoadingGls] = useState(true)
 
   // Account modal
@@ -101,10 +82,8 @@ export default function FinancesPage() {
   const [editAcc, setEditAcc]   = useState<any>(null)
   const [savingAcc, setSavingAcc] = useState(false)
   const [selectedColor, setSelectedColor] = useState(COLORS[0])
-
-  // Income modal
-  const [openInc, setOpenInc]   = useState(false)
-  const [savingInc, setSavingInc] = useState(false)
+  // The account this one lives inside (a cuenta hija); empty = it holds money on its own
+  const [parentId, setParentId] = useState('')
 
   // Goal modals
   const [openGoal, setOpenGoal]   = useState(false)
@@ -116,10 +95,6 @@ export default function FinancesPage() {
   const accForm  = useForm<AccountForm>({
     resolver: zodResolver(accountSchema),
     defaultValues: { type: 'checking', color: COLORS[0] },
-  })
-  const incForm  = useForm<IncomeForm>({
-    resolver: zodResolver(incomeSchema),
-    defaultValues: { date: format(new Date(), 'yyyy-MM-dd') },
   })
   const goalForm = useForm<GoalForm>({
     resolver: zodResolver(goalSchema),
@@ -143,13 +118,6 @@ export default function FinancesPage() {
     setLoadingAcc(false)
     setRefreshKey((k) => k + 1)
   }
-  async function loadIncomes() {
-    if (!user) return
-    const data = await getIncomes(user.uid)
-    setIncomes(data as any[])
-    setRefreshKey((k) => k + 1)
-    setLoadingInc(false)
-  }
   async function loadGoals() {
     if (!user) return
     const data = await getSavingsGoals(user.uid)
@@ -159,7 +127,6 @@ export default function FinancesPage() {
 
   useEffect(() => {
     loadAccounts()
-    loadIncomes()
     loadGoals()
   }, [user])
 
@@ -167,12 +134,14 @@ export default function FinancesPage() {
   function openCreateAcc() {
     setEditAcc(null)
     setSelectedColor(COLORS[0])
+    setParentId('')
     accForm.reset({ type: 'checking', color: COLORS[0] })
     setOpenAcc(true)
   }
   function openEditAcc(acc: any) {
     setEditAcc(acc)
     setSelectedColor(acc.color)
+    setParentId((acc.parentId as string | undefined) ?? '')
     accForm.reset({ name: acc.name, type: acc.type, color: acc.color })
     setOpenAcc(true)
   }
@@ -180,12 +149,12 @@ export default function FinancesPage() {
     if (!user) return
     setSavingAcc(true)
     try {
-      const payload = { ...data, color: selectedColor }
+      const payload = { ...data, color: selectedColor, parentId }
       if (editAcc) {
         // the balance is never typed: it comes from the incomes, payments and moves of the account
         await updateAccount(editAcc.id, payload)
       } else {
-        await addAccount({ ...payload, balance: 0, userId: user.uid, currency: 'COP' })
+        await addAccount({ ...payload, parentId: parentId || undefined, balance: 0, userId: user.uid, currency: 'COP' })
       }
       accForm.reset()
       setOpenAcc(false)
@@ -202,45 +171,6 @@ export default function FinancesPage() {
     await deleteAccount(id)
     setAccounts((prev) => prev.filter((a) => a.id !== id))
     showToast('Cuenta eliminada', 'delete')
-  }
-
-  useEffect(() => {
-    if (openInc) { setIncAccount((accounts.find((a) => a.isDefault) ?? accounts[0])?.id ?? ''); setIncFile(null) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openInc])
-
-  const [incFile, setIncFile] = useState<File | null>(null)
-  // ── Incomes ────────────────────────────────────────────────────────────────
-  async function onSubmitInc(data: IncomeForm) {
-    if (!user) return
-    setSavingInc(true)
-    try {
-      const date = new Date(data.date + 'T12:00:00')
-      await withAttachment(user.uid, incFile, (attachmentId) => addIncome({
-        userId:  user.uid,
-        concept: data.concept,
-        amount:  data.amount,
-        month:   format(date, 'yyyy-MM'),
-        date,
-        ...(incAccount ? { accountId: incAccount } : {}),
-        ...(attachmentId ? { attachmentId } : {}),
-      }))
-      incForm.reset({ date: format(new Date(), 'yyyy-MM-dd') })
-      setOpenInc(false)
-      loadIncomes()
-      loadAccounts() // the chosen account's balance went up
-      showToast('Ingreso agregado', 'success')
-    } catch {
-      showToast('Error al guardar', 'error')
-    } finally {
-      setSavingInc(false)
-    }
-  }
-  async function handleDeleteInc(id: string) {
-    if (!(await ask('¿Eliminar este ingreso?', { title: 'Eliminar ingreso' }))) return
-    await deleteIncome(id)
-    setIncomes((prev) => prev.filter((i) => i.id !== id))
-    showToast('Ingreso eliminado', 'delete')
   }
 
   // ── Savings goals ──────────────────────────────────────────────────────────
@@ -288,23 +218,20 @@ export default function FinancesPage() {
   }
 
   // ── Derived ────────────────────────────────────────────────────────────────
-  const totalBalance   = accounts.reduce((s: number, a: any) => s + (a.balance as number), 0)
+  // pockets are already inside their parent's balance: the total counts only accounts that hold money on their own
+  const mainAccounts   = topAccounts(accounts as any[])
+  const totalBalance   = mainAccounts.reduce((s: number, a: any) => s + (a.balance as number), 0)
+  // the accounts a pocket can live inside: any account that is not itself a pocket (nor the one being edited)
+  const parentOptions  = mainAccounts.filter((a: any) => a.id !== editAcc?.id)
+  const editHasPockets  = !!editAcc && accounts.some((a: any) => a.parentId === editAcc.id)
+  // main accounts first, each followed by the pockets inside it
+  const ordered         = mainAccounts.flatMap((a: any) => [a, ...accounts.filter((k: any) => k.parentId === a.id)])
   const now            = new Date()
-  const currentMonth   = format(now, 'yyyy-MM')
-  const monthIncomes   = incomes.filter((i: any) => i.month === currentMonth)
-  const totalMonthInc  = monthIncomes.reduce((s: number, i: any) => s + (i.amount as number), 0)
   const totalSaved     = goals.reduce((s: number, g: any) => s + (g.currentAmount as number), 0)
   const totalTarget    = goals.reduce((s: number, g: any) => s + (g.targetAmount as number), 0)
 
-  // Ingresos: only the current salary period shows at first; "Cargar período anterior" reveals one more at a time.
-  const salariesForPeriods = incomes.filter((i: any) => i.kind === 'salary').map((i: any) => ({ id: i.id as string, date: (i.date instanceof Date ? i.date : new Date(i.date)) as Date, amount: i.amount as number }))
-  const schedule = ((profile as any)?.paySchedule ?? null)
-  const { cutoff: incomesCutoff, canLoadMore: canLoadMoreIncomes, loadMore: loadMoreIncomes } = usePeriodReveal(salariesForPeriods, schedule)
-  const visibleIncomes = incomesCutoff ? incomes.filter((i: any) => (i.date instanceof Date ? i.date : new Date(i.date)).getTime() >= incomesCutoff.getTime()) : incomes
-
   const TABS: { key: Tab; label: string; icon: string }[] = [
     { key: 'movimientos', label: 'Movimientos', icon: 'list' },
-    { key: 'ingresos',    label: 'Ingresos',    icon: 'cash' },
     { key: 'ahorros',     label: 'Ahorros',     icon: 'savings' },
   ]
   const paneProps = {
@@ -338,7 +265,7 @@ export default function FinancesPage() {
             </span>
             <div className="min-w-0">
               <p className="text-xs font-semibold text-[#9aa4ac]">Dinero en tus cuentas</p>
-              <p className="text-[10px] text-[#5f6a72]">Total de {accounts.length} {accounts.length === 1 ? 'cuenta' : 'cuentas'}</p>
+              <p className="text-[10px] text-[#5f6a72]">Total de {mainAccounts.length} {mainAccounts.length === 1 ? 'cuenta' : 'cuentas'}</p>
             </div>
           </div>
           <p className={clsx('text-xl sm:text-2xl font-bold font-mono tabular-nums flex-shrink-0', totalBalance < 0 ? 'text-red-400' : 'text-sky-200')}>
@@ -367,20 +294,23 @@ export default function FinancesPage() {
           </div>
         ) : (
           <div className="space-y-2.5">
-            {accounts.map((acc: any) => {
+            {ordered.map((acc: any) => {
               const typeInfo = ACCOUNT_TYPES.find((t) => t.value === acc.type)
-              const selected = accountFilter === acc.id
+              const selected = accountFilter.includes(acc.id as string)
+              const pocket = !!acc.parentId
+              const parentName = pocket ? (accounts.find((a: any) => a.id === acc.parentId)?.name as string | undefined) : undefined
+              const kids = accounts.filter((k: any) => k.parentId === acc.id)
               return (
                 <div
                   key={acc.id as string}
-                  className={clsx('notch-sm p-3.5 bg-[#0a1f2f] border transition-all flex items-center justify-between gap-3', selected ? 'bg-white/[0.06]' : 'hover:border-white/25')}
+                  className={clsx('notch-sm p-3.5 bg-[#0a1f2f] border transition-all flex items-center justify-between gap-3', selected ? 'bg-white/[0.06]' : 'hover:border-white/25', pocket && 'ml-5 border-dashed')}
                   style={{ borderColor: selected ? (acc.color as string) : (acc.color as string) + '35' }}
                 >
                   <button
                     type="button"
-                    onClick={() => setAccountFilter(selected ? null : (acc.id as string))}
+                    onClick={() => setAccountFilter((prev) => (selected ? prev.filter((x) => x !== acc.id) : [...prev, acc.id as string]))}
                     aria-pressed={selected}
-                    title={selected ? 'Ver los movimientos de todas las cuentas' : `Ver solo los movimientos de ${acc.name}`}
+                    title={selected ? `Quitar ${acc.name} del filtro` : `Sumar ${acc.name} al filtro de movimientos`}
                     className="flex items-center gap-3 min-w-0 flex-1 text-left"
                   >
                     <span
@@ -391,8 +321,20 @@ export default function FinancesPage() {
                     </span>
                     <span className="min-w-0">
                       <span className="block font-bold text-sm text-[#f3f5f6] truncate">{acc.name as string}</span>
-                      <span className="block text-[11px] text-[#8a929a]">{typeInfo?.label ?? acc.type}{acc.isDefault ? ' · por defecto' : ''}</span>
-                      <span className="block text-sm font-bold font-mono mt-0.5" style={{ color: acc.color }}>{cop(acc.balance as number)}</span>
+                      <span className="block text-[11px] text-[#8a929a]">{pocket ? `Cuenta hija${parentName ? ` de ${parentName}` : ''}` : (typeInfo?.label ?? acc.type)}{acc.isDefault ? ' · por defecto' : ''}</span>
+                      {pocket ? (
+                        <span className="block mt-0.5">
+                          <span className="block text-sm font-bold font-mono" style={{ color: acc.color }}>
+                            {acc.balance < 0 ? `Te deben ${cop(-(acc.balance as number))}` : acc.balance > 0 ? `Tienes ${cop(acc.balance as number)} de otros` : 'En cero'}
+                          </span>
+                          <span className="block text-[10px] text-[#8a929a]">El dinero está en {parentName ?? 'la cuenta madre'}; aquí solo se lleva por aparte.</span>
+                        </span>
+                      ) : (
+                        <span className="block mt-0.5">
+                          <span className="block text-sm font-bold font-mono" style={{ color: acc.color }}>{cop(acc.balance as number)}</span>
+                          {kids.length > 0 && <span className="block text-[10px] text-[#8a929a]">Saldo real del banco · incluye {kids.length === 1 ? 'su cuenta hija' : `sus ${kids.length} cuentas hijas`}</span>}
+                        </span>
+                      )}
                     </span>
                   </button>
                   <div className="flex gap-1 flex-shrink-0">
@@ -433,101 +375,6 @@ export default function FinancesPage() {
       {/* ── MOVIMIENTOS tab ────────────────────────────────────────────────── */}
       {activeTab === 'movimientos' && (
         <AccountMovements accounts={accounts} accountFilter={accountFilter} onAccountFilter={setAccountFilter} refreshKey={refreshKey} />
-      )}
-
-      {/* ── INGRESOS tab ───────────────────────────────────────────────────── */}
-      {activeTab === 'ingresos' && (
-        <div className="space-y-4 slide-up">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs text-[#9aa4ac]">
-                Ingresos este mes:{' '}
-                <span className="font-bold text-brand-400 font-mono text-sm ml-1">
-                  {cop(totalMonthInc)}
-                </span>
-              </p>
-            </div>
-            <Button onClick={() => setOpenInc(true)} size="sm" notched={true}>
-              <Plus size={15} /> Nuevo ingreso
-            </Button>
-          </div>
-
-          {incomesCutoff && (
-            <p className="text-[11px] text-[#8a929a]">
-              Mostrando desde el {format(incomesCutoff, 'd MMM yyyy', { locale: es })}{canLoadMoreIncomes ? ' (período actual)' : ''}
-            </p>
-          )}
-
-          {loadingInc ? (
-            <SkeletonList count={3} />
-          ) : incomes.length === 0 ? (
-            <div className="notch bg-[#0a1f2f] border border-white/10 text-center py-12 p-6">
-              <EmptyMark name="cash" />
-              <p className="text-sm font-bold text-[#f0fae8]">Sin ingresos registrados</p>
-              <p className="text-xs text-[#8a929a] mt-1">Registra tus entradas de dinero (salario, honorarios, etc.).</p>
-            </div>
-          ) : visibleIncomes.length === 0 ? (
-            <div className="notch bg-[#0a1f2f] border border-white/10 text-center py-12 p-6">
-              <EmptyMark name="cash" />
-              <p className="text-sm font-bold text-[#f0fae8]">Sin ingresos en este período</p>
-              <p className="text-xs text-[#8a929a] mt-1">Carga el período anterior para ver los ingresos de antes.</p>
-            </div>
-          ) : (
-            <div className="space-y-2.5">
-              {visibleIncomes.map((inc: any) => (
-                <div
-                  key={inc.id as string}
-                  className="notch-sm flex items-start sm:items-center justify-between gap-2 p-3.5 bg-[#0a1f2f] border border-white/[0.08] hover:border-brand-500/30 transition-all group"
-                >
-                  <div className="flex items-start sm:items-center gap-3 min-w-0">
-                    <div className="w-10 h-10 notch-sm bg-brand-500/15 border border-brand-500/30 flex items-center justify-center flex-shrink-0 text-brand-300 glow-brand-sm">
-                      <AppIcon name="cash" size={18} />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs sm:text-sm font-semibold text-[#f0fae8] break-words sm:truncate">{inc.concept as string}</p>
-                      <p className="text-[10px] text-[#8a929a] mt-0.5">
-                        {format(inc.date instanceof Date ? inc.date : new Date(inc.date), 'dd MMMM yyyy', { locale: es })}
-                      </p>
-                      {(() => {
-                        const acc = inc.accountId ? accounts.find((x: any) => x.id === inc.accountId) : null
-                        return (
-                          <p className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[10px] text-[#9aa4ac]">
-                            <span className="inline-flex items-center gap-1.5">
-                              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: acc ? (acc.color as string) : '#5f6a72' }} aria-hidden="true" />
-                              {acc ? acc.name as string : inc.accountId ? 'Cuenta eliminada' : 'Sin cuenta asignada'}
-                            </span>
-                          </p>
-                        )
-                      })()}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-                    {inc.attachmentId && <AttachmentButton compact attachmentId={inc.attachmentId as string} />}
-                    <span className="text-xs sm:text-sm font-bold text-emerald-300 font-mono whitespace-nowrap">
-                      +{cop(inc.amount as number)}
-                    </span>
-                    <button
-                      onClick={() => handleDeleteInc(inc.id as string)}
-                      className="p-1.5 rounded-lg text-[#5f6a72] hover:text-red-400 hover:bg-red-500/10 transition"
-                      title="Eliminar ingreso"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {canLoadMoreIncomes && (
-            <div className="flex justify-center pt-1">
-              <Button type="button" variant="secondary" size="sm" notched onClick={loadMoreIncomes}>
-                <ChevronDown size={14} /> Cargar período anterior
-              </Button>
-            </div>
-          )}
-        </div>
       )}
 
       {/* ── AHORROS tab ────────────────────────────────────────────────────── */}
@@ -637,6 +484,21 @@ export default function FinancesPage() {
         <form onSubmit={accForm.handleSubmit(onSubmitAcc)} className="space-y-4">
           <Input label="Nombre de la cuenta" placeholder="ej. Bancolombia, Nequi, Billetera…" {...accForm.register('name')} error={accForm.formState.errors.name?.message} />
           <Select label="Tipo" options={ACCOUNT_TYPES.map((t) => ({ value: t.value, label: t.label }))} {...accForm.register('type')} />
+          {!editHasPockets && parentOptions.length > 0 && (
+            <div className="space-y-1">
+              <Select
+                label="¿Es una cuenta hija?"
+                value={parentId}
+                onChange={(e) => setParentId(e.target.value)}
+                options={[{ value: '', label: 'No, guarda dinero por su cuenta' }, ...parentOptions.map((a: any) => ({ value: a.id as string, label: `Sí, está dentro de ${a.name}` }))]}
+              />
+              <p className="text-[11px] leading-snug text-[#8a929a]">
+                {parentId
+                  ? 'El dinero sigue en la cuenta madre: cada movimiento que registres aquí resta o suma allá, y aquí queda por aparte (por ejemplo, lo que alguien te debe).'
+                  : 'Úsalo cuando el dinero esté físicamente en otra cuenta pero quieras llevar esos movimientos separados.'}
+              </p>
+            </div>
+          )}
           <div className="rounded-xl border border-white/10 bg-[#0d263a] p-3 space-y-1">
             <p className="text-xs font-semibold text-[#c7ccd1]">
               Saldo{editAcc ? `: ${cop(editAcc.balance as number)}` : ' inicial: $ 0'}
@@ -665,21 +527,6 @@ export default function FinancesPage() {
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenAcc(false)}>Cancelar</Button>
             <Button type="submit" className="flex-1" disabled={savingAcc} notched={true}>{savingAcc ? 'Guardando…' : 'Guardar Cuenta'}</Button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Income Modal */}
-      <Modal open={openInc} onClose={() => setOpenInc(false)} title="Nuevo Ingreso">
-        <form onSubmit={incForm.handleSubmit(onSubmitInc)} className="space-y-4">
-          <Input label="Concepto" placeholder="ej. Sueldo quincena, Proyecto freelance…" {...incForm.register('concept')} error={incForm.formState.errors.concept?.message} />
-          <Input label="Monto (COP)" money placeholder="0" {...incForm.register('amount')} error={incForm.formState.errors.amount?.message} />
-          <Input label="Fecha" type="date" {...incForm.register('date')} />
-          <AccountSelect label="¿A qué cuenta llegó?" accounts={accounts} value={incAccount} onChange={setIncAccount} noneLabel="Sin sumar a una cuenta" />
-          <AttachmentPicker file={incFile} onChange={setIncFile} />
-          <div className="flex gap-2 pt-2">
-            <Button type="button" variant="secondary" className="flex-1" onClick={() => setOpenInc(false)}>Cancelar</Button>
-            <Button type="submit" className="flex-1" disabled={savingInc} notched={true}>{savingInc ? 'Guardando…' : 'Guardar Ingreso'}</Button>
           </div>
         </form>
       </Modal>

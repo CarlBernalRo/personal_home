@@ -24,6 +24,8 @@ export interface ExpenseRow {
   accountId?: string
   /** Screenshot of the spend, when it came from Telegram. */
   attachmentId?: string
+  /** Observation left on the spend. */
+  notes?: string
 }
 
 interface Props {
@@ -126,12 +128,13 @@ export function ExpenseTimeline({ rows, showToday, onDelete, onEdit, accounts = 
                             {/* on a phone the whole name is shown (it wraps); on a wide screen it is cut to keep the rows even */}
                             <span className="block text-sm font-semibold text-[#f0fae8] break-words sm:truncate">{r.description}</span>
                             <span className="block text-[10px] font-mono text-[#8a929a]">{r.household ? 'Abono en el hogar' : (cat?.label ?? r.category)}</span>
+                            {r.notes && <span className="block break-words text-[11px] italic text-[#9aa4ac]">{r.notes}</span>}
                             <AccountChip account={accounts.find((a) => a.id === r.accountId)} />
                           </span>
                         </span>
                         {/* phone: amount and type on one line, the actions at the end; wide screen: fixed columns so rows line up */}
-                        <span className="flex items-center justify-between gap-3 sm:justify-end sm:flex-shrink-0 border-t border-white/[0.06] pt-2 sm:border-0 sm:pt-0">
-                          <span className="text-base sm:text-sm font-mono tabular-nums font-semibold sm:w-28 sm:text-right text-rose-300">−{formatCOP(r.amount)}</span>
+                        <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 sm:flex-nowrap sm:justify-end sm:flex-shrink-0 border-t border-white/[0.06] pt-2 sm:border-0 sm:pt-0">
+                          <span className="whitespace-nowrap text-base sm:text-sm font-mono tabular-nums font-semibold sm:w-28 sm:text-right text-rose-300">−{formatCOP(r.amount)}</span>
                           <span className="flex items-center gap-2">
                             {r.attachmentId ? <AttachmentButton compact attachmentId={r.attachmentId} /> : <span className="hidden sm:block w-7 flex-shrink-0" aria-hidden="true" />}
                             <span className={clsx('sm:w-[11.5rem] text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', KIND[kind].chip)}>

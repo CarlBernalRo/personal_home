@@ -8,6 +8,7 @@ import ExpensesPage from '@/pages/ExpensesPage'
 import FixedExpensesPage from '@/pages/FixedExpensesPage'
 import HouseholdPage from '@/pages/HouseholdPage'
 import FinancesPage from '@/pages/FinancesPage'
+import IncomesPage from '@/pages/IncomesPage'
 import ProfilePage from '@/pages/ProfilePage'
 import AdminUsersPage from '@/pages/AdminUsersPage'
 import NotificationsPage from '@/pages/NotificationsPage'
@@ -63,6 +64,7 @@ export const router = createBrowserRouter([
       { path: 'fijos',        element: <FixedExpensesPage /> },
       { path: 'hogar',        element: <HouseholdPage /> },
       { path: 'finanzas',     element: <FinancesPage /> },
+      { path: 'ingresos',     element: <IncomesPage /> },
       ...(SeedPage ? [{ path: 'seed', element: <Suspense fallback={null}><SeedPage /></Suspense> }] : []),
       { path: 'notificaciones', element: <NotificationsPage /> },
       { path: 'pendientes',     element: <PendingMovementsPage /> },

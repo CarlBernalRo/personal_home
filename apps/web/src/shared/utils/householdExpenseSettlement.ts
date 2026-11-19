@@ -1,3 +1,5 @@
+import type { ExpenseContribution } from '../types/householdExpense';
+
 export interface ExpenseSettlementEdge {
   debtor: string;
   creditor: string;
@@ -45,3 +47,34 @@ export function settleExpenseContributions(
   }
   return edges;
 }
+
+/**
+ * Which of an expense's settlement edges can become real debts right now. An edge needs *both* of its parties
+ * confirmed: a creditor nobody has vouched for is owed nothing, and a debtor whose own declared payment is still
+ * pending has a net nobody has verified. Someone with no contribution on the expense (a plain participant) counts
+ * as confirmed. Edges whose party declined never materialize — the expense is then incomplete (`isExpenseIncomplete`).
+ * Returns the edges to write as debts plus the contributions with those edges flagged `created`.
+ */
+export function materializeReadyEdges(contributions: ExpenseContribution[]): {
+  toCreate: ExpenseSettlementEdge[];
+  updated: ExpenseContribution[];
+} {
+  const statusOf = (id: string) => contributions.find((c) => c.memberId === id)?.status ?? 'confirmed';
+  const toCreate: ExpenseSettlementEdge[] = [];
+  const updated = contributions.map((c) => ({
+    ...c,
+    edges: c.edges.map((e) => {
+      const creditor = e.creditor ?? c.memberId;
+      const already = e.created ?? c.status === 'confirmed';
+      if (already) return e.created === true ? e : { ...e, created: true };
+      if (statusOf(e.debtor) !== 'confirmed' || statusOf(creditor) !== 'confirmed') return e;
+      toCreate.push({ debtor: e.debtor, creditor, amount: e.amount });
+      return { ...e, created: true };
+    }),
+  }));
+  return { toCreate, updated };
+}
+
+/** A declared contribution was rejected: part of the expense's settlement can never be created until it is fixed. */
+export const isExpenseIncomplete = (contributions: { status: string }[] | undefined) =>
+  (contributions ?? []).some((c) => c.status === 'declined');

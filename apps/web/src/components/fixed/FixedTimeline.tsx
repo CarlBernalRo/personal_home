@@ -208,7 +208,7 @@ export function FixedTimeline({ month, bounds, expenses, paymentIndex, onSelect,
                   ))}
                   {(spendDays.get(day) ?? []).map((x) => (
                     <div key={x.id} className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 px-3 py-2 rounded-lg border border-amber-400/40 bg-amber-500/10">
-                      <span className="flex items-start gap-1.5 text-sm font-semibold text-amber-200 min-w-0"><Receipt size={13} className="flex-shrink-0 mt-1 sm:mt-0" aria-hidden="true" /> <span className="break-words sm:truncate">{x.concept}</span></span>
+                      <span className="flex items-start gap-1.5 text-sm font-semibold text-amber-200 min-w-0"><Receipt size={13} className="flex-shrink-0 mt-1 sm:mt-0" aria-hidden="true" /> <span className="min-w-0"><span className="block break-words sm:truncate">{x.concept}</span>{x.notes && <span className="block break-words text-[11px] font-normal italic text-amber-100/70">{x.notes}</span>}</span></span>
                       <span className="flex items-center justify-end gap-2 sm:flex-shrink-0">
                         {x.attachmentId && <AttachmentButton compact attachmentId={x.attachmentId} />}
                         <span className="whitespace-nowrap text-base sm:text-sm font-mono font-bold text-rose-300">−{formatCOP(x.amount)}</span>

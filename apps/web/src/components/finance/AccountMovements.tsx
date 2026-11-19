@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { endOfDay, format, startOfDay, startOfMonth, subDays, subMonths, endOfMonth } from 'date-fns'
-import { CalendarRange, ChevronDown, X } from 'lucide-react'
+import { CalendarDays, CalendarRange, ChevronDown, List, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuth } from '@/hooks/useAuth'
 import { useHouseholdOwed } from '@/hooks/useHouseholdOwed'
@@ -12,6 +12,7 @@ import type { AccountLite } from '@/components/ui/AccountChip'
 import { AccountFilter } from '@/components/ui/AccountFilter'
 import { Button } from '@/components/ui/Button'
 import { SkeletonList } from '@/components/ui/Skeleton'
+import { MovementCalendar } from './MovementCalendar'
 import { MOVEMENT_ZONES, MovementTimeline, type Movement, type MovementZone } from './MovementTimeline'
 
 const asDate = (d: unknown) => (d instanceof Date ? d : new Date(d as any))
@@ -42,9 +43,9 @@ function rangeOf(preset: Preset, from: string, to: string): { start: Date | null
 
 interface Props {
   accounts: (AccountLite & { balance?: number })[]
-  /** Account picked on the left (null = all). */
-  accountFilter: string | null
-  onAccountFilter: (id: string | null) => void
+  /** Accounts picked (on the left or in the chips); empty = all. */
+  accountFilter: string[]
+  onAccountFilter: (ids: string[]) => void
   /** Changes when something that moves money is saved, so the list is read again. */
   refreshKey: number
 }
@@ -58,7 +59,10 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
   const { abonos } = useHouseholdOwed(true)
   const households = useMyHouseholds(true)
   const [raw, setRaw] = useState<{ incomes: any[]; payments: any[]; expenses: any[]; transfers: any[] } | null>(null)
-  const [zone, setZone] = useState<MovementZone | null>(null)
+  // several zones can be on at once; empty = all
+  const [zones, setZones] = useState<MovementZone[]>([])
+  const toggleZone = (z: MovementZone) => setZones((prev) => (prev.includes(z) ? prev.filter((x) => x !== z) : [...prev, z]))
+  const [view, setView] = useState<'list' | 'calendar'>('list')
   const [preset, setPreset] = useState<Preset>('all')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
@@ -127,12 +131,15 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
   const { start: presetStart, end } = rangeOf(preset, from, to)
   const start = preset === 'all' ? periodCutoff : presetStart
   const inDates = (m: Movement) => (!start || m.date.getTime() >= start.getTime()) && (!end || m.date.getTime() <= end.getTime())
+  const inAccounts = (m: Movement) => accountFilter.length === 0 || (!!m.accountId && accountFilter.includes(m.accountId))
+  const inZones = (m: Movement) => zones.length === 0 || zones.includes(m.zone)
+  const filtering = preset !== 'all' || accountFilter.length > 0 || zones.length > 0
   // what the date and account filters leave; the zone chips count within it
   const base = movements
     .filter(inDates)
     // a movement without an account (the household ones) isn't in any account's list
-    .filter((m) => !accountFilter || m.accountId === accountFilter)
-  const shown = base.filter((m) => !zone || m.zone === zone)
+    .filter(inAccounts)
+  const shown = base.filter(inZones)
   const entered = shown.filter((m) => m.amount > 0).reduce((s, m) => s + m.amount, 0)
   const left = shown.filter((m) => m.amount < 0).reduce((s, m) => s - m.amount, 0)
   const count = (z: MovementZone) => base.filter((m) => m.zone === z).length
@@ -143,8 +150,22 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
 
   return (
     <div className="space-y-4">
-      {/* Date filter: quick spans and a free range */}
-      <div className="space-y-2">
+      <div className="inline-flex gap-1 rounded-xl border border-white/[0.06] bg-[#0d263a] p-1 text-xs" role="group" aria-label="Vista de los movimientos">
+        {([['list', 'Lista', List], ['calendar', 'Calendario', CalendarDays]] as const).map(([id, label, Icon]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setView(id)}
+            aria-pressed={view === id}
+            className={clsx('inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition', view === id ? 'border border-white/10 bg-[#0a1f2f] font-semibold text-white' : 'text-[#8a929a] hover:text-white')}
+          >
+            <Icon size={13} aria-hidden="true" /> {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Date filter: quick spans and a free range (the calendar has its own month navigation) */}
+      {view === 'list' && <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filtrar por fecha">
           <span className="text-[10px] uppercase tracking-wider text-[#8a929a] mr-1 inline-flex items-center gap-1"><CalendarRange size={11} aria-hidden="true" /> Fecha</span>
           {PRESETS.map((p) => (
@@ -178,14 +199,14 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
         )}
         {preset !== 'all' && dateText && <p className="text-[11px] text-[#8a929a]">Mostrando del {dateText}</p>}
         {preset === 'all' && periodCutoff && <p className="text-[11px] text-[#8a929a]">Mostrando desde el {format(periodCutoff, 'd MMM yyyy')}{canLoadMore ? ' (período actual)' : ''}</p>}
-      </div>
+      </div>}
 
       <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filtrar por zona">
         <button
           type="button"
-          onClick={() => setZone(null)}
-          aria-pressed={zone === null}
-          className={clsx('rounded-lg border px-3 py-1.5 text-xs font-semibold transition', zone === null ? 'border-white/40 bg-white/10 text-white' : 'border-white/10 bg-[#0d263a] text-[#9aa4ac] hover:text-white')}
+          onClick={() => setZones([])}
+          aria-pressed={zones.length === 0}
+          className={clsx('rounded-lg border px-3 py-1.5 text-xs font-semibold transition', zones.length === 0 ? 'border-white/40 bg-white/10 text-white' : 'border-white/10 bg-[#0d263a] text-[#9aa4ac] hover:text-white')}
         >
           Todos ({base.length})
         </button>
@@ -193,13 +214,13 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
           <button
             key={id}
             type="button"
-            onClick={() => setZone(zone === id ? null : id)}
-            aria-pressed={zone === id}
+            onClick={() => toggleZone(id)}
+            aria-pressed={zones.includes(id)}
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition',
-              zone === id ? 'text-white' : 'border-white/10 bg-[#0d263a] text-[#9aa4ac] hover:text-white',
+              zones.includes(id) ? 'text-white' : 'border-white/10 bg-[#0d263a] text-[#9aa4ac] hover:text-white',
             )}
-            style={zone === id ? { backgroundColor: color + '33', borderColor: color } : undefined}
+            style={zones.includes(id) ? { backgroundColor: color + '33', borderColor: color } : undefined}
           >
             <Icon size={12} aria-hidden="true" style={{ color }} /> {label} ({count(id)})
           </button>
@@ -208,14 +229,21 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
 
       <AccountFilter accounts={accounts} value={accountFilter} onChange={onAccountFilter} />
 
-      <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#9aa4ac]">
+      {view === 'list' && <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#9aa4ac]">
         <span>Entró <span className="font-mono font-semibold text-brand-300">{formatCOP(entered)}</span></span>
         <span>Salió <span className="font-mono font-semibold text-[#f0fae8]">{formatCOP(left)}</span></span>
         <span className="text-[#8a929a]">{shown.length} {shown.length === 1 ? 'movimiento' : 'movimientos'}</span>
-      </p>
+        {filtering && (
+          <button type="button" onClick={() => { setZones([]); onAccountFilter([]); setPreset('all'); setFrom(''); setTo('') }} className="inline-flex items-center gap-1 font-semibold text-brand-300 hover:text-brand-200 transition">
+            <X size={11} aria-hidden="true" /> Quitar filtros
+          </button>
+        )}
+      </p>}
 
       {!raw ? (
         <SkeletonList count={4} />
+      ) : view === 'calendar' ? (
+        <MovementCalendar items={movements.filter((m) => inAccounts(m) && inZones(m))} accounts={accounts} />
       ) : shown.length === 0 ? (
         <div className="notch bg-[#0a1f2f] border border-white/10 text-center py-12 px-6">
           <p className="text-sm font-bold text-[#f0fae8]">Sin movimientos</p>
@@ -225,7 +253,7 @@ export function AccountMovements({ accounts, accountFilter, onAccountFilter, ref
         <MovementTimeline items={shown} accounts={accounts} />
       )}
 
-      {preset === 'all' && canLoadMore && (
+      {view === 'list' && preset === 'all' && canLoadMore && (
         <div className="flex justify-center pt-1">
           <Button type="button" variant="secondary" size="sm" notched onClick={loadMore}>
             <ChevronDown size={14} /> Cargar período anterior

@@ -24,7 +24,7 @@ function net(debts: any[], uid: string, crossings: any[]) {
 describe('balanceBreakdown', () => {
   it('is debts minus abonos minus crossed', () => {
     const debts = [debt('a', ME, 100, d(2026, 10, 1), { crossedAmount: 20 }), abono('p', ME, 30, d(2026, 10, 5))]
-    expect(balanceBreakdown(debts, [], ME)).toEqual({ deuda: 100, abono: 30, cruzado: 20, saldo: 50 })
+    expect(balanceBreakdown(debts, [], ME)).toEqual({ deuda: 100, abono: 30, abonoDeudas: 30, aFavor: 0, cruzado: 20, saldo: 50 })
   })
 
   it('counts a crossing made in your favour against the total balance', () => {
@@ -33,8 +33,13 @@ describe('balanceBreakdown', () => {
     expect(balanceBreakdown(debts, crossings, AL).saldo).toBe(20)
   })
 
+  it('splits what was paid over the debts as a balance in favor', () => {
+    const debts = [debt('a', ME, 123, d(2026, 10, 1)), abono('p', ME, 200, d(2026, 10, 5))]
+    expect(balanceBreakdown(debts, [], ME)).toEqual({ deuda: 123, abono: 200, abonoDeudas: 123, aFavor: 77, cruzado: 0, saldo: -77 })
+  })
+
   it('is empty without a person', () => {
-    expect(balanceBreakdown([], [], undefined)).toEqual({ deuda: 0, abono: 0, cruzado: 0, saldo: 0 })
+    expect(balanceBreakdown([], [], undefined)).toEqual({ deuda: 0, abono: 0, abonoDeudas: 0, aFavor: 0, cruzado: 0, saldo: 0 })
   })
 })
 
@@ -195,5 +200,15 @@ describe('state by due date, like Gastos fijos', () => {
   })
   it('a paid debt is never overdue', () => {
     expect(st(d(2026, 10, 1), { paidAbono: 100 })).toBe('settled')
+  })
+})
+
+describe('payments to several people', () => {
+  it('keeps one row per person paid, even when they share a paymentId', () => {
+    const paid = (id: string, creditor: string, amount: number) => ({ id, debtor: ME, amount, date: d(2026, 10, 5), concept: id, tipo: 'Abono', paymentId: 'P1', creditor })
+    const rows = buildLedger([paid('x', 'ale', 30), paid('y', 'sofi', 20)], [], ME, AL).rows
+    const nested = nestByDebt(rows)
+    expect(nested).toHaveLength(2)
+    expect(nested.map((r) => Math.abs(r.delta)).sort()).toEqual([20, 30])
   })
 })

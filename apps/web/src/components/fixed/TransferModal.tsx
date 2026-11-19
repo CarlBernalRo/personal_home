@@ -12,7 +12,7 @@ interface Props {
   open: boolean
   onClose: () => void
   userId: string
-  accounts: { id: string; name: string; balance: number }[]
+  accounts: { id: string; name: string; balance: number; parentId?: string }[]
   onDone: () => void
 }
 
@@ -41,6 +41,8 @@ export function TransferModal({ open, onClose, userId, accounts, onDone }: Props
   const from = accounts.find((a) => a.id === fromId)
   const to = accounts.find((a) => a.id === toId)
   const value = Number(amount)
+  // between a parent and its own cuenta hija the money stays in the same bank account: only what is written down moves
+  const sameBank = !!from && !!to && (from.parentId === to.id || to.parentId === from.id)
   const options = accounts.map((a) => ({ value: a.id, label: `${a.name} · ${formatCOP(a.balance)}` }))
 
   async function onSubmit(e: React.FormEvent) {
@@ -68,10 +70,13 @@ export function TransferModal({ open, onClose, userId, accounts, onDone }: Props
         <Select label="Sale de" value={fromId} onChange={(e) => { setFromId(e.target.value); setError(null) }} options={options} />
         <Select label="Llega a" value={toId} onChange={(e) => { setToId(e.target.value); setError(null) }} options={options} />
         <Input label="Monto (COP)" money placeholder="0" value={amount} onChange={(e) => { setAmount(e.target.value); setError(null) }} />
-        {from && value > from.balance && (
+        {from && !sameBank && !from.parentId && value > from.balance && (
           <p className="text-[11px] text-red-300">{from.name} tiene {formatCOP(from.balance)}: quedaría en negativo.</p>
         )}
-        {from && to && value > 0 && from.id !== to.id && (
+        {from && to && value > 0 && from.id !== to.id && sameBank && (
+          <p className="text-[11px] text-[#8a929a]">El dinero sigue en el mismo banco: el saldo real no cambia, solo se reparte lo que se lleva en cada una.</p>
+        )}
+        {from && to && value > 0 && from.id !== to.id && !sameBank && (
           <p className="text-[11px] text-[#8a929a]">
             {from.name} quedará con {formatCOP(from.balance - value)} y {to.name} con {formatCOP(to.balance + value)}.
           </p>

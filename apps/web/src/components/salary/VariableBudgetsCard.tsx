@@ -14,6 +14,7 @@ import type { SalaryState } from '@/hooks/useSalary'
 import { useAuth } from '@/hooks/useAuth'
 import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
 import { withAttachment } from '@/lib/attachments'
+import { ObservationField } from '@/components/ui/ObservationField'
 import { HouseholdDebtCard } from '@/components/fixed/HouseholdDebtCard'
 import { followsHousehold, formatCOP, isPaused, monthKey, type VariableBudget } from '@/shared'
 
@@ -26,7 +27,7 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
   const ask = useConfirm()
 
   const [spendFor, setSpendFor] = useState<VariableBudget | null>(null)
-  const [spend, setSpend] = useState({ amount: '', date: format(new Date(), 'yyyy-MM-dd') })
+  const [spend, setSpend] = useState({ amount: '', date: format(new Date(), 'yyyy-MM-dd'), notes: '' })
   const [accountId, setAccountId] = useState('')
   const { user } = useAuth()
   const [file, setFile] = useState<File | null>(null)
@@ -46,7 +47,7 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
     && (b.source !== 'household-debt' || owedOf(b) > 0 || inRange.some((s) => s.budgetId === b.id)))
 
   function openSpend(b: VariableBudget) {
-    setSpend({ amount: '', date: format(new Date(), 'yyyy-MM-dd') })
+    setSpend({ amount: '', date: format(new Date(), 'yyyy-MM-dd'), notes: '' })
     setAccountId(salary.pickAccount(b.accountId))
     setFile(null)
     setError(null)
@@ -61,7 +62,7 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
     const [y, m, d] = spend.date.split('-').map(Number)
     setSaving(true)
     try {
-      await withAttachment(user!.uid, file, (attachmentId) => registerSpend(spendFor, amount, new Date(y, m - 1, d), accountId, attachmentId))
+      await withAttachment(user!.uid, file, (attachmentId) => registerSpend(spendFor, amount, new Date(y, m - 1, d), accountId, attachmentId, spend.notes))
       salary.rememberAccount(accountId)
       setSpendFor(null)
       showToast('Gasto registrado', 'success')
@@ -145,7 +146,10 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
                   <div className="border-t border-white/10 pt-2 space-y-1">
                     {mine.map((s) => (
                       <div key={s.id} className="flex items-center justify-between gap-2 text-[11px]">
-                        <span className="text-[#9aa4ac]">{shortDate(s.date)}</span>
+                        <span className="min-w-0 text-[#9aa4ac]">
+                          {shortDate(s.date)}
+                          {s.notes && <span className="block break-words text-[10px] italic text-[#8a929a]">{s.notes}</span>}
+                        </span>
                         <span className="flex items-center gap-1.5">
                           <span className="font-mono text-[#f0fae8]">−{formatCOP(s.amount)}</span>
                           <button
@@ -175,6 +179,7 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
           <Input label="Monto gastado (COP)" money placeholder="0" value={spend.amount} onChange={(e) => { setSpend({ ...spend, amount: e.target.value }); setError(null) }} />
           <Input label="Fecha" type="date" value={spend.date} onChange={(e) => setSpend({ ...spend, date: e.target.value })} />
           <AccountSelect label="¿De qué cuenta sale el dinero?" accounts={salary.accounts} value={accountId} onChange={setAccountId} outflow={Number(spend.amount) || 0} />
+          <ObservationField value={spend.notes} onChange={(notes) => setSpend({ ...spend, notes })} />
           <AttachmentPicker file={file} onChange={setFile} />
           {error && <p className="text-xs text-red-400">{error}</p>}
           <div className="flex gap-2 pt-2">

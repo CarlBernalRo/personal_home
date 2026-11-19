@@ -30,6 +30,15 @@ export interface ExpensePayerInput {
   amount: number;
 }
 
+export interface ExpenseContributionEdge {
+  debtor: string;
+  /** Omitted = the contribution's own member (the legacy shape). */
+  creditor?: string;
+  amount: number;
+  /** The debt already exists. Missing on older records: then it exists iff the owner is not 'pending'. */
+  created?: boolean;
+}
+
 export interface ExpenseContribution {
   memberId: string;
   amount: number;
@@ -40,8 +49,13 @@ export interface ExpenseContribution {
    * confirm it from the household's pending contributions.
    */
   status: 'confirmed' | 'pending' | 'declined';
-  /** Who ends up owing this contributor, and how much — materialized as real debts once (and only once) confirmed. */
-  edges: { debtor: string; amount: number }[];
+  /**
+   * The debts this contributor's confirmation gates. Normally the ones where they are the creditor; when the
+   * creditor is already confirmed but the *debtor* declared a payment still pending, the edge hangs on the debtor
+   * (their net depends on a payment nobody has confirmed). `creditor` is omitted when it is this contributor.
+   * An edge becomes a real debt only once every party in it has confirmed, and `created` records that it did.
+   */
+  edges: ExpenseContributionEdge[];
 }
 
 export interface HouseholdExpense {

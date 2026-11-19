@@ -10,6 +10,11 @@ export interface Account {
   color: string;
   /** The account created for people who had payments set up before accounts existed. */
   isDefault?: boolean;
+  /**
+   * Set on a "cuenta hija" (bolsillo): money that lives inside this parent account but is tracked apart (e.g. what someone
+   * else owes you). Its movements are its own; the parent's balance shown is what the bank really holds: its own + its pockets'.
+   */
+  parentId?: string;
   /** Last time the balance was typed by hand (matched to the bank): debits due before it are already inside it. */
   balanceSetAt?: Date;
   createdAt: Date;

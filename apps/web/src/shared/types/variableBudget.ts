@@ -30,6 +30,8 @@ export interface VariableSpend {
   date: Date;
   amount: number;
   concept: string;
+  /** Observation left when the spend was registered. */
+  notes?: string;
   /** Screenshot of the spend (`attachments/{id}`), when it was registered from Telegram. */
   attachmentId?: string;
 }

@@ -40,7 +40,9 @@ export interface LedgerRow {
   /** this row stands for a shared expense, not one debt: `children` holds every debtor→creditor edge it generated */
   isExpenseGroup?: boolean
   /** on an expense group: who declared putting money in, and how much — independent of `children`, which is who ended up owing whom */
-  expensePayers?: { uid: string; amount: number; pending: boolean }[]
+  expensePayers?: { uid: string; amount: number; pending: boolean; declined: boolean }[]
+  /** a declared payer rejected their contribution: part of the settlement can't exist until the expense is fixed or deleted */
+  expenseIncomplete?: boolean
 }
 
 /**
@@ -111,7 +113,7 @@ export function splitByMonth(rows: LedgerRow[], monthStart: Date) {
 
 /** Step-by-step breakdown of a person's all-time balance: deudas - abonos - cruzado. */
 export function balanceBreakdown(debts: Rec[], crossings: Rec[], uid: string | undefined) {
-  if (!uid) return { deuda: 0, abono: 0, cruzado: 0, saldo: 0 }
+  if (!uid) return { deuda: 0, abono: 0, abonoDeudas: 0, aFavor: 0, cruzado: 0, saldo: 0 }
   const own = debts.filter((d) => d.debtor === uid)
   const sum = (list: Rec[], f: (d: Rec) => number) => list.reduce((s, d) => s + f(d), 0)
   const deudas = own.filter((d) => d.tipo === 'Deuda')
@@ -120,7 +122,9 @@ export function balanceBreakdown(debts: Rec[], crossings: Rec[], uid: string | u
   const crossedOwn = sum(deudas, (d) => (d.crossedAmount as number) || 0)
   const crossedInFavor = crossings.filter((c) => c.debt2PersonId === uid && !c.debt2Id).reduce((s, c) => s + (c.amount as number), 0)
   const cruzado = crossedOwn + crossedInFavor
-  return { deuda, abono, cruzado, saldo: deuda - abono - cruzado }
+  // what was paid over what was owed is a balance in this person's favor (an abono tied to no debt makes it)
+  const aFavor = Math.min(abono, Math.max(0, abono + cruzado - deuda))
+  return { deuda, abono, abonoDeudas: abono - aFavor, aFavor, cruzado, saldo: deuda - abono - cruzado }
 }
 
 export type StatusKey = 'overdue' | 'due-soon' | 'pending' | 'settled' | 'crossed' | 'abono'
@@ -181,7 +185,9 @@ function paymentKeys(rows: LedgerRow[]): Map<LedgerRow, string> {
     keys.set(r, `legacy-${n}`)
     prev = r
   }
-  for (const r of rows) if (r.kind === 'abono' && r.debt?.paymentId) keys.set(r, r.debt.paymentId as string)
+  // one paymentId can hold abonos of different people and to different creditors: each pair is its own row, so its
+  // amount, receipt state and delete only ever speak for that part
+  for (const r of rows) if (r.kind === 'abono' && r.debt?.paymentId) keys.set(r, `${r.debt.paymentId}|${r.debtor}|${(r.debt.creditor as string | undefined) ?? ''}`)
   return keys
 }
 
@@ -247,17 +253,21 @@ export function groupByExpense(rows: LedgerRow[], expenses: Rec[]): LedgerRow[] 
     if (expenseId && expenseById.has(expenseId)) { edgesOf.set(expenseId, [...(edgesOf.get(expenseId) ?? []), r]); continue }
     out.push(r)
   }
+  // An expense whose every debt waits for someone's confirmation has no debt rows yet: without this it would be saved
+  // and yet appear nowhere. It still gets its row, with no edges, until the debts exist.
+  for (const id of expenseById.keys()) if (!edgesOf.has(id)) edgesOf.set(id, [])
 
   for (const [expenseId, edges] of edgesOf) {
     const exp = expenseById.get(expenseId)!
-    const last = edges[edges.length - 1]
+    // with no edges, the running totals are those of the last movement before it
+    const before = [...rows].filter((r) => r.date <= toDate(exp.date)).pop()
+    const last: LedgerRow = edges[edges.length - 1] ?? before ?? { isMe: false, myTotal: 0, partnerTotal: 0, diffAfter: 0, totals: {}, totalOwed: 0 } as LedgerRow
     const payers = ((exp.contributions as Rec[] | undefined) ?? [])
-      .filter((c) => c.status !== 'declined')
-      .map((c) => ({ uid: c.memberId as string, amount: c.amount as number, pending: c.status === 'pending' }))
+      .map((c) => ({ uid: c.memberId as string, amount: c.amount as number, pending: c.status === 'pending', declined: c.status === 'declined' }))
     out.push({
       date: toDate(exp.date), debtor: exp.registeredBy as string, concept: exp.description as string,
       delta: exp.amount as number, kind: 'deuda', isExpenseGroup: true, key: `exp-${expenseId}`,
-      children: edges, expensePayers: payers, isMe: last.isMe, myTotal: last.myTotal, partnerTotal: last.partnerTotal,
+      children: edges, expensePayers: payers, expenseIncomplete: payers.some((p) => p.declined), isMe: last.isMe, myTotal: last.myTotal, partnerTotal: last.partnerTotal,
       diffAfter: last.diffAfter, totals: last.totals, totalOwed: last.totalOwed,
     })
   }

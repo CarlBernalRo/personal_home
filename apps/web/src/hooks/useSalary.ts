@@ -70,6 +70,7 @@ export function useSalary() {
             date: e.date instanceof Date ? e.date : new Date(e.date),
             amount: e.amount,
             concept: e.description ?? '',
+            notes: (e.notes as string | undefined) || undefined,
             attachmentId: e.attachmentId as string | undefined,
           })),
       )
@@ -177,7 +178,7 @@ export function useSalary() {
   const allSpends = useMemo(() => {
     if (linked.length === 0) return spends
     // an abono belongs to the budget that follows its household (a specific one wins over "all")
-    const abonoSpends = household.abonos.flatMap((a) => {
+    const abonoSpends = household.abonos.flatMap((a): VariableSpend[] => {
       const owner = linked.find((b) => b.householdIds?.includes(a.householdId)) ?? linked.find((b) => !b.householdIds?.length)
       return owner ? [{ id: `abono|${a.id}`, budgetId: owner.id, date: a.date, amount: a.amount, concept: 'Abono en el hogar' }] : []
     })
@@ -211,7 +212,7 @@ export function useSalary() {
   const removeBudget = (id: string) => saveBudgets(budgets.filter((b) => b.id !== id))
   const removeBudgets = (ids: string[]) => saveBudgets(budgets.filter((b) => !ids.includes(b.id)))
 
-  async function registerSpend(budget: VariableBudget, amount: number, date: Date, accountId = '', attachmentId?: string) {
+  async function registerSpend(budget: VariableBudget, amount: number, date: Date, accountId = '', attachmentId?: string, notes = '') {
     if (!user) return
     const account = validAccount(accountId)
     await addExpense({
@@ -224,13 +225,14 @@ export function useSalary() {
       type: 'variable',
       isRecurring: false,
       variableBudgetId: budget.id,
+      ...(notes.trim() ? { notes: notes.trim() } : {}),
       ...(attachmentId ? { attachmentId } : {}),
     })
     await load()
   }
 
   /** A spend from the Gastos screen: not tied to a budget, but it counts toward the balance. */
-  async function addPersonalExpense(data: { description: string; amount: number; category: string; date: Date; accountId?: string; attachmentId?: string }) {
+  async function addPersonalExpense(data: { description: string; amount: number; category: string; date: Date; accountId?: string; attachmentId?: string; notes?: string }) {
     if (!user) return
     const account = validAccount(data.accountId)
     await addExpense({
@@ -243,6 +245,7 @@ export function useSalary() {
       type: 'variable',
       isRecurring: false,
       tracked: true,
+      ...(data.notes?.trim() ? { notes: data.notes.trim() } : {}),
       ...(data.attachmentId ? { attachmentId: data.attachmentId } : {}),
     })
     await load()
@@ -251,7 +254,7 @@ export function useSalary() {
   /** Edits a registered spend; its account's balance follows the change. */
   async function editPersonalExpense(
     id: string,
-    data: { description: string; amount: number; category: string; date: Date; accountId?: string },
+    data: { description: string; amount: number; category: string; date: Date; accountId?: string; notes?: string },
     prev: { amount: number; accountId?: string },
   ) {
     const account = validAccount(data.accountId)

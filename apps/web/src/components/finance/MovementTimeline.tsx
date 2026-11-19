@@ -1,14 +1,14 @@
-import { Fragment } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { format, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { ArrowLeftRight, Banknote, CalendarCheck, Home, Receipt } from 'lucide-react'
+import { ArrowLeftRight, Banknote, CalendarCheck, Coins, GitMerge, Home, Receipt, Trash2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatCOP } from '@/shared'
 import { AccountChip, type AccountLite } from '@/components/ui/AccountChip'
 import { SERIES } from '@/components/dashboard/shared'
 
-export type MovementZone = 'fixed' | 'additional' | 'household' | 'income' | 'transfer'
+export type MovementZone = 'fixed' | 'additional' | 'household' | 'income' | 'transfer' | 'payment' | 'crossing'
 
 export interface Movement {
   id: string
@@ -21,6 +21,10 @@ export interface Movement {
   accountId?: string
   /** Screenshot of the movement (`attachments/{id}`), when it came from Telegram. */
   attachmentId?: string
+  /** Something to do right on the row (e.g. confirm a payment received), shown before the kind chip. */
+  action?: ReactNode
+  /** With `onDelete` given, false hides this row's delete button. */
+  canDelete?: boolean
 }
 
 export const MOVEMENT_ZONES: { id: MovementZone; label: string; color: string; icon: typeof Receipt }[] = [
@@ -31,10 +35,19 @@ export const MOVEMENT_ZONES: { id: MovementZone; label: string; color: string; i
   { id: 'transfer',   label: 'Traslados',   color: '#84cc16',         icon: ArrowLeftRight },
 ]
 
+/** Kinds used by the household's payment history: not part of the account filters, so kept apart from MOVEMENT_ZONES. */
+const EXTRA_ZONES: { id: MovementZone; label: string; color: string; icon: typeof Receipt }[] = [
+  { id: 'payment',  label: 'Pago',  color: '#52b69a', icon: Coins },
+  { id: 'crossing', label: 'Cruce', color: '#38bdf8', icon: GitMerge },
+]
+const zoneById = (id: MovementZone) => [...MOVEMENT_ZONES, ...EXTRA_ZONES].find((z) => z.id === id)!
+
 interface Props {
   /** Newest first. */
   items: Movement[]
   accounts: AccountLite[]
+  /** When given, each row gets a delete button (e.g. the Ingresos screen, where entries are the user's own to remove). */
+  onDelete?: (m: Movement) => void
 }
 
 /**
@@ -42,7 +55,7 @@ interface Props {
  * with its chip on the right), here for movements and newest first. The border and chip take the color of
  * the zone each movement belongs to.
  */
-export function MovementTimeline({ items, accounts }: Props) {
+export function MovementTimeline({ items, accounts, onDelete }: Props) {
   const today = startOfDay(new Date())
 
   const byDay = new Map<number, Movement[]>()
@@ -75,7 +88,7 @@ export function MovementTimeline({ items, accounts }: Props) {
           const net = group.reduce((s, m) => s + m.amount, 0)
           // node colour: the zone of the day's biggest movement
           const lead = [...group].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0]
-          const nodeColor = MOVEMENT_ZONES.find((z) => z.id === lead.zone)!.color
+          const nodeColor = zoneById(lead.zone).color
           return (
             <Fragment key={day}>
               {markerBefore === day && marker}
@@ -88,7 +101,7 @@ export function MovementTimeline({ items, accounts }: Props) {
 
                 <div className="space-y-1.5">
                   {group.map((m) => {
-                    const zone = MOVEMENT_ZONES.find((z) => z.id === m.zone)!
+                    const zone = zoneById(m.zone)
                     const Icon = zone.icon
                     const acc = accounts.find((a) => a.id === m.accountId)
                     return (
@@ -106,12 +119,13 @@ export function MovementTimeline({ items, accounts }: Props) {
                             {acc ? <AccountChip account={acc} /> : m.zone === 'household' ? <span className="block text-[10px] font-mono text-[#5f6a72]">Sin cuenta asignada</span> : null}
                           </span>
                         </span>
-                        <span className="flex items-center justify-between gap-3 sm:justify-end sm:flex-shrink-0">
-                          <span className={clsx('sm:w-28 text-left sm:text-right text-base sm:text-sm font-mono tabular-nums font-semibold', m.amount >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
+                        <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 sm:flex-nowrap sm:justify-end sm:flex-shrink-0">
+                          <span className={clsx('whitespace-nowrap sm:w-28 text-left sm:text-right text-base sm:text-sm font-mono tabular-nums font-semibold', m.amount >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
                             {m.amount >= 0 ? '+' : '−'}{formatCOP(Math.abs(m.amount))}
                           </span>
                           {/* fixed-width chip so the amounts and kinds line up from row to row; the attachment sits just left of it */}
                           <span className="flex items-center gap-2">
+                            {m.action}
                             {m.attachmentId ? <AttachmentButton compact attachmentId={m.attachmentId} /> : <span className="hidden sm:block w-7 flex-shrink-0" aria-hidden="true" />}
                             <span
                               className="sm:w-[8.5rem] text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border"
@@ -119,6 +133,17 @@ export function MovementTimeline({ items, accounts }: Props) {
                             >
                               {zone.label}
                             </span>
+                            {onDelete && m.canDelete !== false && (
+                              <button
+                                type="button"
+                                onClick={() => onDelete(m)}
+                                className="p-1.5 rounded-lg text-[#5f6a72] hover:text-red-400 hover:bg-red-500/10 transition flex-shrink-0"
+                                title="Eliminar"
+                                aria-label={`Eliminar ${m.concept}`}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
                           </span>
                         </span>
                       </div>

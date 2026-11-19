@@ -16,10 +16,13 @@ const LATEST = 6
 interface Props {
   /** sidebar: panel opens to the right of the button · mobile: near full-screen sheet under the header */
   variant: 'sidebar' | 'mobile'
+  tipPlacement?: 'top' | 'right'
+  /** Extra px to the right of the sidebar edge, when something else (the tray menu) sits between the sidebar and the panel. */
+  panelOffset?: number
 }
 
 /** Bell with an unread badge (99+) that opens a dropdown with the latest notifications. */
-export function NotificationBell({ variant }: Props) {
+export function NotificationBell({ variant, panelOffset = 0, tipPlacement }: Props) {
   const { notifications, unread, markAllRead, loading } = useNotifications()
   const isMobile = useIsMobile()
   const navigate = useNavigate()
@@ -41,9 +44,9 @@ export function NotificationBell({ variant }: Props) {
       const top = Math.max(MARGIN, Math.min(r.top, window.innerHeight - 320))
       // opens beside the sidebar, not on top of it
       const edge = btnRef.current?.closest('aside')?.getBoundingClientRect().right ?? r.right
-      setPos({ top, left: Math.min(edge + 8, window.innerWidth - PANEL_W - MARGIN), maxH: window.innerHeight - top - MARGIN, narrow })
+      setPos({ top, left: Math.min(edge + 8 + panelOffset, window.innerWidth - PANEL_W - MARGIN), maxH: window.innerHeight - top - MARGIN, narrow })
     }
-  }, [variant])
+  }, [variant, panelOffset])
 
   useLayoutEffect(() => { if (open) place() }, [open, place])
 
@@ -111,7 +114,7 @@ export function NotificationBell({ variant }: Props) {
   return (
     <>
       {/* The tooltip would sit on top of the open panel, so it is dropped while it is open */}
-      {open ? button : <IconTip text={label} className="inline-flex" placement={variant === 'sidebar' ? 'right' : 'top'}>{button}</IconTip>}
+      {open ? button : <IconTip text={label} className="inline-flex" placement={tipPlacement ?? (variant === 'sidebar' ? 'right' : 'top')}>{button}</IconTip>}
       {/* Phones: the notifications rise as a bottom sheet like every other dialog */}
       {open && isMobile && (
         <Modal open onClose={() => setOpen(false)} title={unread > 0 ? `Notificaciones · ${unread} sin leer` : 'Notificaciones'}>

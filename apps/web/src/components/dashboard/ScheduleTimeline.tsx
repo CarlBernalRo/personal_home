@@ -12,7 +12,7 @@ import { useToast } from '@/components/ui/Toast'
 import { useDisplayName } from '@/hooks/useDisplayName'
 import { downloadPeriodReport } from '@/lib/periodReport'
 import {
-  entryKey, formatCOP, monthEntries, monthKey, monthRange, payDatesBetween, salaryLedgers, PERSONAL_CATEGORIES, FIXED_EXPENSE_CATEGORIES,
+  entryKey, formatCOP, topAccounts, monthEntries, monthKey, monthRange, payDatesBetween, salaryLedgers, PERSONAL_CATEGORIES, FIXED_EXPENSE_CATEGORIES,
   type PeriodLedger, type SalaryPeriod,
 } from '@/shared'
 import { compactCOP, DashCard, EmptyNote, SERIES } from './shared'
@@ -320,7 +320,7 @@ function PeriodDetail({ block, salary, expenses, paymentIndex, onClose }: {
           account: accountName(x.accountId),
         })),
         occasional: detail.occasional.map((x) => ({ concept: x.concept, date: x.date, amount: x.amount })),
-        accounts: salary.accounts.map((a: any) => ({ name: a.name as string, balance: a.balance as number })),
+        accounts: topAccounts(salary.accounts as any[]).map((a: any) => ({ name: a.name as string, balance: a.balance as number })),
       })
     } catch {
       showToast('No se pudo generar el reporte', 'error')

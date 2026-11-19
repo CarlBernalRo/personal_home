@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { UserPhoto } from '@/components/ui/UserPhoto'
-import { LayoutDashboard, Receipt, CalendarCheck, Home, Wallet, User, LogOut, ShieldCheck, Inbox } from 'lucide-react'
+import { LayoutDashboard, Receipt, CalendarCheck, UsersRound, Wallet, User, LogOut, ShieldCheck, Inbox, Banknote } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useRef, useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
@@ -19,6 +19,7 @@ import { useAutoDebits } from '@/hooks/useAutoDebits'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 import { PendingMovementsPrompt } from '@/components/pending/PendingMovementsPrompt'
 import { PendingMovementsLink } from '@/components/pending/PendingMovementsLink'
+import { TrayMenu } from '@/components/layout/TrayMenu'
 import { PanelCollapseToggle } from '@/components/ui/PanelCollapseToggle'
 import { BalanceVisibilityToggle } from '@/components/ui/BalanceVisibilityToggle'
 import { usePendingMovements } from '@/hooks/usePendingMovements'
@@ -32,6 +33,8 @@ interface NavItemDef {
   end?: boolean
   /** Only in the desktop sidebar: the phone bar is already full (it has its own shortcut in the header). */
   desktopOnly?: boolean
+  /** On desktop it is not in the sidebar list: it sits in the tray menu (the arrow in the footer). The phone bar keeps it. */
+  inTray?: boolean
   accent: string
   glow: string
   gradient: string
@@ -65,9 +68,17 @@ const BASE_NAV: NavItemDef[] = [
     gradient: 'linear-gradient(145deg, rgba(52, 160, 164, 0.16), rgba(10, 32, 33, 0.08))',
   },
   {
+    to: '/ingresos',
+    label: 'Ingresos',
+    icon: Banknote,
+    accent: '#a78bfa',
+    glow: 'rgba(167, 139, 250, 0.5)',
+    gradient: 'linear-gradient(145deg, rgba(167, 139, 250, 0.16), rgba(35, 24, 70, 0.08))',
+  },
+  {
     to: '/hogar',
     label: 'Hogar',
-    icon: Home,
+    icon: UsersRound,
     accent: '#168aad',
     glow: 'rgba(22, 138, 173, 0.5)',
     gradient: 'linear-gradient(145deg, rgba(22, 138, 173, 0.16), rgba(4, 27, 34, 0.08))',
@@ -76,6 +87,7 @@ const BASE_NAV: NavItemDef[] = [
     to: '/finanzas',
     label: 'Finanzas',
     icon: Wallet,
+    inTray: true,
     accent: '#76c893',
     glow: 'rgba(118, 200, 147, 0.5)',
     gradient: 'linear-gradient(145deg, rgba(118, 200, 147, 0.16), rgba(18, 45, 28, 0.08))',
@@ -255,7 +267,7 @@ export default function Layout() {
   const pendingCount = usePendingMovements().counts.total
   // due automatic debits are saved as soon as the person is in the app, whichever screen they land on
   useAutoDebits()
-  const wideScreen = ['/', '/fijos', '/gastos', '/hogar', '/notificaciones', '/pendientes', '/perfil', '/finanzas'].includes(useLocation().pathname)
+  const wideScreen = ['/', '/fijos', '/gastos', '/hogar', '/notificaciones', '/pendientes', '/perfil', '/finanzas', '/ingresos'].includes(useLocation().pathname)
   // The sidebar is icons only: sections are named by their tooltips, and it never expands
   const collapsed = true
 
@@ -307,8 +319,8 @@ export default function Layout() {
 
           {/* Navigation Links */}
           <nav className={clsx('flex-1 overflow-y-auto flex flex-col justify-center py-4 space-y-1.5', collapsed ? 'px-2' : 'px-3')}>
-            {/* Pendientes por confirmar lives next to the bell in the footer (same level), not in this list */}
-            {navItems.filter((i) => i.to !== '/pendientes').map(({ to, label, icon: Icon, end, accent, glow, gradient }) => (
+            {/* Pendientes and Finanzas live in the tray menu (the arrow in the footer), not in this list */}
+            {navItems.filter((i) => i.to !== '/pendientes' && !i.inTray).map(({ to, label, icon: Icon, end, accent, glow, gradient }) => (
               <SideTip key={to} label={label}>
               <NavLink
                 to={to}
@@ -358,10 +370,7 @@ export default function Layout() {
 
           {/* Footer with Session & Profile */}
           <div className={clsx('pb-4 pt-3 border-t border-white/[0.08] space-y-2.5 flex-shrink-0', collapsed ? 'px-2' : 'px-3.5')}>
-            <div className={clsx('flex items-center justify-center gap-1.5', collapsed && 'flex-col')}>
-              <PendingMovementsLink variant="sidebar" />
-              <NotificationBell variant="sidebar" />
-            </div>
+            <TrayMenu />
             <SessionTimer collapsed={collapsed} />
             <ProfileMenu variant="sidebar" collapsed={collapsed} />
           </div>

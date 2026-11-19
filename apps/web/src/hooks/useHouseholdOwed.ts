@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
-import { calcNetBalance, getHouseholdCrossings, getHouseholdDebts, getHouseholdIds } from '@/lib/firestore'
-import { debtLines, recordsAsOf, type DebtLine } from '@/shared'
+import { getHousehold, getHouseholdDebts, getHouseholdExpenses, getHouseholdIds } from '@/lib/firestore'
+import type { DebtLine } from '@/shared'
+import { householdStanding, type HouseholdStanding } from '@/components/household/standing'
 
 export interface HouseholdAbono {
   id: string
@@ -14,36 +15,46 @@ export interface HouseholdAbono {
 
 interface HouseholdRecords {
   householdId: string
+  household: Record<string, any>
+  expenses: any[]
   debts: any[]
-  crossings: any[]
 }
 
 /**
- * What the user owes across their households (the same net balance the household screen shows:
- * debts minus abonos and crossings), per household so an expense can follow all of them or only
- * some, plus the abonos they paid, which are real money out. Only loads when `enabled`, so users
- * without a household-linked expense cost no reads.
+ * What the user owes across their households, worked out like the household screen's report: what each one
+ * put and paid against their share, so being owed in a household is not shown as a debt, and the shared plan
+ * once its accounts were crossed. Per household, so an expense can follow all of them or only some, plus the
+ * abonos they paid, which are real money out. Only loads when `enabled`, so users without a
+ * household-linked expense cost no reads.
  */
 export function useHouseholdOwed(enabled: boolean) {
   const { user, profile } = useAuth()
   const ids = getHouseholdIds(profile)
   const idsKey = ids.join(',')
   const [records, setRecords] = useState<HouseholdRecords[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!enabled || !user || ids.length === 0) {
       setRecords([])
+      setLoading(false)
       return
     }
     let cancelled = false
-    Promise.all(ids.map(async (id) => {
-      const [debts, crossings] = await Promise.all([
+    setLoading(true)
+    Promise.all(ids.map(async (id): Promise<HouseholdRecords | null> => {
+      const [household, expenses, debts] = await Promise.all([
+        getHousehold(id).catch(() => null),
+        getHouseholdExpenses(id).catch(() => []),
         getHouseholdDebts(id).catch(() => []),
-        getHouseholdCrossings(id).catch(() => []),
       ])
-      return { householdId: id, debts: debts as any[], crossings: crossings as any[] }
+      // an inactive household has nothing pending and is kept out of the dashboard and Fijos
+      if (!household || (household as any).archivedAt) return null
+      return { householdId: id, household: household as Record<string, any>, expenses: expenses as any[], debts: debts as any[] }
     })).then((perHousehold) => {
-      if (!cancelled) setRecords(perHousehold)
+      if (cancelled) return
+      setRecords(perHousehold.filter((r): r is HouseholdRecords => !!r))
+      setLoading(false)
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -55,39 +66,44 @@ export function useHouseholdOwed(enabled: boolean) {
     [records],
   )
 
-  const netAt = useCallback((r: HouseholdRecords, date: Date) => {
-    const asOf = recordsAsOf(r.debts, r.crossings, date)
-    return { asOf, net: Math.max(0, calcNetBalance(asOf.debts, user?.uid ?? '', asOf.crossings)) }
-  }, [user])
+  // the same day is asked for many times (every day of a calendar), so each day is worked out once
+  const cache = useMemo(() => new Map<string, HouseholdStanding>(), [records, user])
+  const standingAt = useCallback((r: HouseholdRecords, date: Date | null) => {
+    const key = `${r.householdId}|${date ? date.toDateString() : 'now'}`
+    let s = cache.get(key)
+    if (!s) {
+      s = householdStanding(r.household, r.expenses, r.debts, user?.uid ?? '', date ?? undefined)
+      cache.set(key, s)
+    }
+    return s
+  }, [cache, user])
 
   /** What was (or will be) owed on a date: only the records that exist by then count. */
   const owedAt = useCallback(
     (date: Date, householdIds?: string[] | null) => user
-      ? pick(householdIds).reduce((sum, r) => sum + netAt(r, date).net, 0)
+      ? pick(householdIds).reduce((sum, r) => sum + standingAt(r, date).owes, 0)
       : 0,
-    [pick, netAt, user],
+    [pick, standingAt, user],
   )
 
   /** The part of that debt without an agreed date (those with one are painted on their own date). */
   const undatedOwedAt = useCallback(
     (date: Date, householdIds?: string[] | null) => user
-      ? pick(householdIds).reduce((sum, r) => {
-          const { asOf, net } = netAt(r, date)
-          return sum + debtLines(asOf.debts, user.uid, r.householdId, net)
-            .filter((l) => !l.dueDate)
-            .reduce((s, l) => s + l.remaining, 0)
-        }, 0)
+      ? pick(householdIds).reduce((sum, r) => sum + standingAt(r, date).lines
+          .filter((l) => !l.dueDate)
+          .reduce((s, l) => s + l.remaining, 0), 0)
       : 0,
-    [pick, netAt, user],
+    [pick, standingAt, user],
   )
 
-  /** Every pending debt, one by one. */
-  const lines = useMemo<DebtLine[]>(
-    () => (user
-      ? records.flatMap((r) => debtLines(r.debts, user.uid, r.householdId, Math.max(0, calcNetBalance(r.debts, user.uid, r.crossings))))
-      : []),
-    [records, user],
+  /** Where the user stands today in each household. */
+  const standings = useMemo<HouseholdStanding[]>(
+    () => (user ? records.map((r) => standingAt(r, null)) : []),
+    [records, standingAt, user],
   )
+
+  /** Every pending payment, one by one. */
+  const lines = useMemo<DebtLine[]>(() => standings.flatMap((s) => s.lines), [standings])
 
   const abonos = useMemo<HouseholdAbono[]>(
     () => records.flatMap((r) => r.debts
@@ -103,5 +119,7 @@ export function useHouseholdOwed(enabled: boolean) {
     [records, user],
   )
 
-  return { owed: owedAt(new Date()), owedAt, undatedOwedAt, lines, abonos }
+  const owed = useMemo(() => standings.reduce((s, x) => s + x.owes, 0), [standings])
+
+  return { owed, owedAt, undatedOwedAt, lines, abonos, standings, loading }
 }

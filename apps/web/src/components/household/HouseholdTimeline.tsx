@@ -4,7 +4,7 @@ import { format, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
 import { Avatar } from '@/components/ui/Avatar'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Pencil, Trash2 } from 'lucide-react'
 import { formatCOP, remainingOf } from '@/shared'
 import { STATUS_META, STATUS_SEVERITY, statusOf, type LedgerRow, type Rec } from './ledger'
 
@@ -27,6 +27,12 @@ interface Props {
   /** Who is looking, and what to do when they want to confirm a payment they received. */
   myUid?: string
   onConfirmReceipt?: (payment: LedgerRow) => void
+  /** A shared expense with no debt yet (everything waits for a confirmation) can still be deleted from here: nothing has moved. */
+  onDeleteExpense?: (expenseId: string, concept: string) => void
+  /** Opens a shared expense to correct its values. */
+  onEditExpense?: (expenseId: string) => void
+  /** A payment (all the abonos it was split into) can be removed by whoever registered it, e.g. one made by mistake. */
+  onDeletePayment?: (payment: LedgerRow) => void
   /** Name of one of my accounts, to say where a payment came from. */
   accountName?: (id: string) => string | null
   colorOf: (uid: string) => string
@@ -38,7 +44,7 @@ interface Props {
 const VERB = { deuda: 'registró', abono: 'abonó', cruce: 'cruzó' } as const
 
 /** Vertical timeline of the month, like Gastos Fijos: each day is a node, each movement a row bordered by its state. */
-export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false, olderCount = 0, showingOlder = false, onToggleOlder, myName, partnerName, nameOf, photoOf, accountName, colorOf, myUid, onConfirmReceipt, showToday, onSelectDebt }: Props) {
+export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false, olderCount = 0, showingOlder = false, onToggleOlder, myName, partnerName, nameOf, photoOf, accountName, colorOf, myUid, onConfirmReceipt, onDeleteExpense, onEditExpense, onDeletePayment, showToday, onSelectDebt }: Props) {
   const today = startOfDay(new Date())
   // debts whose abonos / crossings are unfolded
   const [open, setOpen] = useState<Set<string>>(new Set())
@@ -139,7 +145,9 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                               {(r.debt?.expenseId || isGroup) && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">gasto compartido</span>}
                             </span>
                             <span className="block text-[10px] font-mono text-[#8a929a]">
-                              {isGroup
+                              {isGroup && kids.length === 0
+                                ? `esperando que confirme ${(r.expensePayers ?? []).filter((p) => p.pending).map((p) => nameOf(p.uid)).join(', ') || 'quien pagó'}`
+                                : isGroup
                                 ? `repartido entre ${kids.length} ${kids.length === 1 ? 'persona' : 'personas'}`
                                 : r.kind === 'deuda' && r.debt?.loanId && r.debt?.lender
                                   ? `${nameOf(r.debt.lender)} prestó`
@@ -162,8 +170,41 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                           <span className="flex items-center gap-2">
                             {attachmentId ? <AttachmentButton compact attachmentId={attachmentId} /> : <span className="hidden sm:block w-7 flex-shrink-0" aria-hidden="true" />}
                             <span className={clsx('sm:w-24 text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', STATUS_META[status].chip)}>
-                              {STATUS_META[status].label}
+                              {isGroup && kids.length === 0 ? 'Por confirmar' : STATUS_META[status].label}
                             </span>
+                            {isPayment && onDeletePayment && kids.length > 0 && kids.every((k) => k.debt?.registeredBy === myUid) && (
+                              <button
+                                type="button"
+                                onClick={() => onDeletePayment(r)}
+                                className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition flex-shrink-0"
+                                title="Eliminar este pago"
+                                aria-label={`Eliminar el pago de ${formatCOP(Math.abs(r.delta))}`}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                            {isGroup && onEditExpense && r.key?.startsWith('exp-') && (
+                              <button
+                                type="button"
+                                onClick={() => onEditExpense(r.key!.slice(4))}
+                                className="p-1.5 rounded-lg text-[#8a929a] hover:text-brand-300 hover:bg-brand-500/10 transition flex-shrink-0"
+                                title="Corregir este gasto"
+                                aria-label={`Corregir ${r.concept}`}
+                              >
+                                <Pencil size={14} />
+                              </button>
+                            )}
+                            {isGroup && kids.length === 0 && onDeleteExpense && r.key?.startsWith('exp-') && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteExpense(r.key!.slice(4), r.concept)}
+                                className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition flex-shrink-0"
+                                title="Eliminar gasto (aún no tiene movimientos)"
+                                aria-label={`Eliminar ${r.concept}`}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
                           </span>
                         </span>
                       </>
@@ -192,6 +233,11 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
 
                         {unfolded && kids.length > 0 && isGroup && (
                           <div className="border-t border-white/10 px-3 py-2.5 space-y-3">
+                            {r.expenseIncomplete && (
+                              <p className="rounded-md border border-red-400/30 bg-red-500/10 px-2 py-1.5 text-[11px] text-red-200">
+                                Alguien rechazó su aporte: las deudas que dependían de él no se crearon y el reparto quedó incompleto. Elimina este gasto y vuelve a registrarlo con los datos correctos.
+                              </p>
+                            )}
                             {(r.expensePayers?.length ?? 0) > 0 && (
                               <div className="space-y-1">
                                 <p className="text-[10px] uppercase tracking-wider text-[#8a929a]">Quiénes pagaron</p>
@@ -200,6 +246,7 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                                     <li key={p.uid} className="flex items-center gap-2.5 text-[11px]">
                                       <Avatar name={nameOf(p.uid)} photoURL={photoOf(p.uid)} size={22} color={colorOf(p.uid)} className="!ring-white/15 flex-shrink-0" />
                                       <span className="min-w-0 flex-1 truncate text-[#dcf1eb]">{nameOf(p.uid)}</span>
+                                      {p.declined && <span className="flex-shrink-0 rounded-md border border-red-400/40 bg-red-500/10 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wider text-red-300">rechazado</span>}
                                       {p.pending && <span className="flex-shrink-0 rounded-md border border-sky-400/40 bg-sky-500/10 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wider text-sky-300">por confirmar</span>}
                                       <span className="flex-shrink-0 font-mono tabular-nums text-[#c7ccd1]">{formatCOP(p.amount)}</span>
                                     </li>

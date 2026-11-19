@@ -31,6 +31,7 @@ import { usePayProjection } from '@/hooks/usePayProjection'
 import { useLayoutStore } from '@/store/layout'
 import { usePeriodStore } from '@/store/period'
 import { formatCOP, monthBounds, monthKey, shiftMonth, PERSONAL_CATEGORIES } from '@/shared'
+import { ObservationField } from '@/components/ui/ObservationField'
 import { AppIcon, EmptyMark } from '@/components/ui/AppIcon'
 
 const schema = z.object({
@@ -57,6 +58,7 @@ export default function ExpensesPage() {
 
   const [open, setOpen]     = useState(false)
   const [accountId, setAccountId] = useState('')
+  const [notes, setNotes] = useState('')
   const { user } = useAuth()
   const [file, setFile] = useState<File | null>(null)
   // The spend being edited (null = a new one)
@@ -104,6 +106,7 @@ export default function ExpensesPage() {
   function openCreate() {
     setEditing(null)
     setFile(null)
+    setNotes('')
     reset({ date: format(new Date(), 'yyyy-MM-dd'), category: 'otro', description: '', amount: undefined as any })
     setOpen(true)
   }
@@ -112,6 +115,7 @@ export default function ExpensesPage() {
     setEditing(r)
     reset({ description: r.description, amount: r.amount, category: r.category || 'otro', date: format(r.date, 'yyyy-MM-dd') })
     setAccountId(r.accountId ?? '')
+    setNotes(r.notes ?? '')
     setOpen(true)
   }
 
@@ -124,6 +128,7 @@ export default function ExpensesPage() {
         category:    data.category,
         date:        new Date(data.date + 'T12:00:00'),
         accountId,
+        notes,
       }
       if (editing) {
         await salary.editPersonalExpense(editing.id, values, { amount: editing.amount, accountId: editing.accountId })
@@ -339,6 +344,7 @@ export default function ExpensesPage() {
           <Select label="Categoría" options={CATEGORY_OPTIONS} {...register('category')} />
           <Input label="Fecha" type="date" {...register('date')} error={errors.date?.message} />
           <AccountSelect label="¿De qué cuenta sale el dinero?" accounts={salary.accounts} value={accountId} onChange={setAccountId} outflow={Number(watch('amount')) || 0} />
+          <ObservationField value={notes} onChange={setNotes} />
           {!editing && <AttachmentPicker file={file} onChange={setFile} />}
 
           <div className="flex gap-2 pt-2">

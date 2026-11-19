@@ -17,6 +17,8 @@ export interface PaymentReceipt {
   date: string;
   /** Set once the receiver confirmed it. */
   confirmed?: boolean;
+  /** Set when the person who registered the payment deleted it: there is nothing left to confirm. */
+  cancelled?: boolean;
 }
 
 /** A notification stored in Firestore: something another person did that concerns the recipient. */

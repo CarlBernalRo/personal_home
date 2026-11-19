@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { getPendingMovements } from '@/lib/firestore'
 import { useOnReturn } from '@/hooks/useOnReturn'
+import { usePendingReceipts } from '@/hooks/usePendingReceipts'
+import { usePendingContributions } from '@/hooks/usePendingContributions'
 import type { PendingMovement } from '@/shared'
 
 /** Fired when pending movements were confirmed or discarded, so every screen that shows them refreshes. */
@@ -12,6 +14,10 @@ export function usePendingMovements() {
   const { user } = useAuth()
   const [items, setItems] = useState<PendingMovement[]>([])
   const [loading, setLoading] = useState(true)
+  // payments other household members made to me: they are income once I confirm them, so they wait here too
+  const { receipts } = usePendingReceipts()
+  // shared-expense contributions someone else declared on my behalf, waiting for my yes or no
+  const { contributions } = usePendingContributions()
 
   const load = useCallback(async () => {
     if (!user) return
@@ -32,8 +38,10 @@ export function usePendingMovements() {
     fixed: items.filter((p) => p.kind === 'fixed').length,
     occasional: items.filter((p) => p.kind === 'occasional').length,
     abono: items.filter((p) => p.kind === 'abono').length,
-    total: items.length,
-  }), [items])
+    receipt: receipts.length,
+    contribution: contributions.length,
+    total: items.length + receipts.length + contributions.length,
+  }), [items, receipts, contributions])
 
-  return { items, counts, loading, refresh: load }
+  return { items, receipts, contributions, counts, loading, refresh: load }
 }

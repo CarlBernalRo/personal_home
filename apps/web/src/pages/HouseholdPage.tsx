@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { ArrowLeft, ChevronLeft, ChevronRight, Coins, HandCoins, Home, ShoppingBag } from 'lucide-react'
+import { ArrowLeft, ClipboardList, ChevronLeft, ChevronRight, Coins, HandCoins, Home, Network, ShoppingBag } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
@@ -23,11 +23,13 @@ import { saveAttachment } from '@/lib/attachments'
 import { useDisplayName } from '@/hooks/useDisplayName'
 import {
   createHousehold, joinHousehold, getHouseholds, syncMemberPhotos, deleteHouseholdLoan,
-  addHouseholdDebt, getHouseholdDebts, deleteHouseholdDebt, deleteHouseholdExpense,
-  calcNetBalance, renameHousehold, deleteHousehold, getHouseholdIds,
+  setSettlementPlan, uncrossHousehold, addHouseholdDebt, getHouseholdDebts, deleteHouseholdDebt, deleteHouseholdPayment, deleteHouseholdExpense,
+  calcNetBalance, renameHousehold, deleteHousehold, getHouseholdIds, setHouseholdArchived,
   addHouseholdCrossing, getHouseholdCrossings, notifyHouseholdMembers, getAccounts,
-  addGuestMember, removeGuestMember, getHouseholdExpenses, confirmExpenseContribution, declineExpenseContribution,
+  addGuestMember, removeGuestMember, addHouseholdDebtsBatch, getHouseholdExpenses, confirmExpenseContribution, declineExpenseContribution,
+  subscribeHouseholdDebts, subscribeHouseholdCrossings, subscribeHouseholdExpenses, subscribeHouseholdDocs,
 } from '@/lib/firestore'
+import { householdDebtsWithCredit } from '@/shared'
 import { formatCOP, remainingOf, allocateAbono, inPaymentOrder, isPendingDebt, creditorOf, owedByCreditor, othersOf, planAbono } from '@/shared'
 import { ConfirmReceiptModal } from '@/components/household/ConfirmReceiptModal'
 import { HouseholdExpenseModal } from '@/components/household/HouseholdExpenseModal'
@@ -38,12 +40,16 @@ import { HouseholdTimeline } from '@/components/household/HouseholdTimeline'
 import { HouseholdDebtDetail } from '@/components/household/HouseholdDebtDetail'
 import { HouseholdMenu } from '@/components/household/HouseholdMenu'
 import { HouseholdSettingsModal } from '@/components/household/HouseholdSettingsModal'
+import { HouseholdReportModal } from '@/components/household/HouseholdReportModal'
+import { PaymentMap } from '@/components/household/PaymentMap'
+import { buildHouseholdReport, type FrozenPlan } from '@/components/household/report'
 import { InviteModal } from '@/components/household/InviteModal'
 import { AddGuestModal } from '@/components/household/AddGuestModal'
 import { PendingContributionsCard } from '@/components/household/PendingContributionsCard'
 import { CrossingModal } from '@/components/household/CrossingModal'
 import { AbonoModal, debtSchema, type DebtForm, type ExtraAbonoLine } from '@/components/household/AbonoModal'
-import { buildLedger, balanceBreakdown, nestByDebt, groupByExpense, statusOf } from '@/components/household/ledger'
+import { buildLedger, balanceBreakdown, nestByDebt, groupByExpense, statusOf, toDate, type LedgerRow } from '@/components/household/ledger'
+import { MovementTimeline, type Movement } from '@/components/finance/MovementTimeline'
 import { AppIcon, EmptyMark } from '@/components/ui/AppIcon'
 
 const householdSchema = z.object({ name: z.string().min(1, 'Ingresa un nombre') })
@@ -72,8 +78,11 @@ export default function HouseholdPage() {
 
   const [households, setHouseholds]   = useState<any[]>([])
   const [activeId, setActiveId]       = useState<string | null>(null)
-  const [debts, setDebts]             = useState<any[]>([])
+  // the stored rows, each debt with what its abonos paid; `debts` below adds the balances in favor on top
+  const [storedDebts, setDebts]       = useState<any[]>([])
   const [expenses, setExpenses]       = useState<any[]>([])
+  /** The saved shared expense being corrected in the form, if any. */
+  const [editingExpense, setEditingExpense] = useState<any | null>(null)
   const [loading, setLoading]         = useState(true)
   const [debtsLoading, setDebtsLoading] = useState(false)
 
@@ -87,8 +96,13 @@ export default function HouseholdPage() {
   const [openInvite, setOpenInvite]   = useState(false)
   const [openAddGuest, setOpenAddGuest] = useState(false)
   const [openSettings, setOpenSettings] = useState(false)
+  const [openReport, setOpenReport] = useState(false)
   const [crossTarget, setCrossTarget]     = useState<any | null>(null)
   const [saldaTargetId, setSaldaTargetId] = useState<string | null>(null)
+  /** Debts the step-by-step abono is about (one debt, or every creditor of one shared expense); null = a general abono. */
+  const [scopeIds, setScopeIds] = useState<string[] | null>(null)
+  /** The payments the report says a person has to make; the abono form opens with them filled in. */
+  const [planPays, setPlanPays] = useState<{ to: string; name: string; amount: number }[] | null>(null)
   const [selectedTargetDebtId, setSelectedTargetDebtId] = useState<string | null>(null)
   const [saving, setSaving]               = useState(false)
   const [copied, setCopied]               = useState(false)
@@ -96,6 +110,8 @@ export default function HouseholdPage() {
   const [expandedPeople, setExpandedPeople] = useState<Record<string, boolean>>({})
   const [selectedDebt, setSelectedDebt]   = useState<any | null>(null)
   const [showPast, setShowPast] = useState(false)
+  /** The history has two views: the shared expenses created, and the payments made. */
+  const [historyTab, setHistoryTab] = useState<'gastos' | 'pagos' | 'mapa'>('gastos')
   // a payment I received and still have to confirm
   const [receiptToConfirm, setReceiptToConfirm] = useState<any | null>(null)
   // my accounts: an abono is paid from one of them
@@ -125,6 +141,8 @@ export default function HouseholdPage() {
     setParams({}, { replace: true })
   }, [requestedId, households])
   const household = households.find((h) => h.id === activeId) ?? null
+  // a balance in favor (paid over) is applied to the open debts between the same two people, so "owed" already counts it
+  const debts = useMemo(() => householdDebtsWithCredit(storedDebts, (household?.members as string[] | undefined) ?? []), [storedDebts, household])
 
   /** Lets the other members of the active household know about something that changes their accounts. */
   function tellHousehold(title: string, body: string) {
@@ -146,7 +164,7 @@ export default function HouseholdPage() {
       fromUid: user.uid, zone: 'hogar', severity: 'info',
       title: `${myName} te pagó ${formatCOP(amount)}`,
       body: `${lines.map((l) => `${l.concept} (${formatCOP(l.amount)})`).join(' · ')}. Confirma que lo recibiste y en qué cuenta.`,
-      link: `/hogar?id=${activeId}`,
+      link: '/pendientes',
       receipt: { householdId: activeId, paymentId, amount, fromName: myName, lines, date: date.toISOString() },
     }).catch(() => { /* a failed notice must never undo what was saved */ })
   }
@@ -177,53 +195,41 @@ export default function HouseholdPage() {
     loadHouseholds()
   }, [user, JSON.stringify(hhIds)])
 
-  // Abonos created via "Saldar" link back to the debt they settle via saldaId
-  // (a field the schema already had but never wired up). We compute each debt's
-  // paidAbono client-side from that link so a settled debt actually stops
-  // showing as pending instead of lingering forever, re-saldable indefinitely.
-  function withPaidAbono(rawDebts: any[]) {
-    const paidByTarget = new Map<string, number>()
-    for (const x of rawDebts) {
-      if (x.tipo === 'Abono' && x.saldaId) {
-        paidByTarget.set(x.saldaId, (paidByTarget.get(x.saldaId) || 0) + (x.amount as number))
-      }
-    }
-    return rawDebts.map((d) => d.tipo === 'Deuda' ? { ...d, paidAbono: paidByTarget.get(d.id) || 0 } : d)
-  }
-
-  // Load debts + crossings when active household changes
+  // Live data for the active household: debts, crossings and expenses are listened to, so what any member does
+  // (an abono, a new shared expense, a confirmation) shows on every other open screen by itself. Each stream is
+  // independent, so a missing index on one never blocks the others.
   useEffect(() => {
     if (!activeId) return
     setDebtsLoading(true)
-    // Load debts first — always show them even if crossings fail
-    getHouseholdDebts(activeId)
-      .then((d) => {
-        setDebts(withPaidAbono(d as any[]))
-        setDebtsLoading(false)
-        // Load crossings independently so a missing index doesn't block debts
-        getHouseholdCrossings(activeId)
-          .then((c) => setCrossings(c as any[]))
-          .catch(() => setCrossings([]))
-      })
-      .catch(() => setDebtsLoading(false))
-    getHouseholdExpenses(activeId).then((e) => setExpenses(e as any[])).catch(() => setExpenses([]))
+    const stops = [
+      subscribeHouseholdDebts(activeId, (rows) => { setDebts(rows as any[]); setDebtsLoading(false) }, () => setDebtsLoading(false)),
+      subscribeHouseholdCrossings(activeId, (rows) => setCrossings(rows as any[]), () => setCrossings([])),
+      subscribeHouseholdExpenses(activeId, (rows) => setExpenses(rows as any[]), () => setExpenses([])),
+    ]
+    return () => stops.forEach((stop) => stop())
   }, [activeId])
+
+  // The household documents too: someone joining, a guest added, a rename — no reload needed
+  useEffect(() => {
+    if (hhIds.length === 0) return
+    return subscribeHouseholdDocs(hhIds, (id, data) => {
+      setHouseholds((prev) => {
+        if (!data) return prev.filter((h) => h.id !== id)
+        return prev.some((h) => h.id === id) ? prev.map((h) => (h.id === id ? data : h)) : [...prev, data]
+      })
+    })
+  }, [JSON.stringify(hhIds)])
 
   useEffect(() => { if (user) debtForm.setValue('debtor', user.uid) }, [user])
 
-  async function reloadDebts() {
-    if (!activeId) return
-    const d = await getHouseholdDebts(activeId)
-    setDebts(withPaidAbono(d as any[]))
-    getHouseholdCrossings(activeId).then(c => setCrossings(c as any[])).catch(() => {})
-    getHouseholdExpenses(activeId).then((e) => setExpenses(e as any[])).catch(() => {})
-  }
+  // Nothing to reload by hand: the live listeners above hand over every change (also my own writes) as it happens.
+  async function reloadDebts() { /* live */ }
 
-  async function onAddDebt(data: DebtForm, extraLines: ExtraAbonoLine[] = []) {
+  async function onAddDebt(data: DebtForm, extraLines: ExtraAbonoLine[] = [], mainTargetId?: string | null) {
     if (!user || !activeId) return
     setSaving(true)
     try {
-      const effectiveTargetId = saldaTargetId || selectedTargetDebtId
+      const effectiveTargetId = mainTargetId !== undefined ? mainTargetId : (saldaTargetId || selectedTargetDebtId)
       // everything this submit writes is ONE payment, even when it is split across several debts — or several
       // debtors, when this payment also covers someone else's share to the same creditor
       const paymentId = crypto.randomUUID()
@@ -238,9 +244,12 @@ export default function HouseholdPage() {
 
       // one picture for the whole payment, also readable by the other members (the person who receives it can check it)
       const attachmentId = abonoFile ? await saveAttachment(user.uid, abonoFile, members.filter((m) => m !== user.uid)) : undefined
-      async function writeRows(rows: typeof plan.rows, debtor: string) {
+      // every row of this payment (primary + extra lines) is collected first and written in ONE batch:
+      // a failure halfway must never leave the payment half recorded
+      const toWrite: Parameters<typeof addHouseholdDebtsBatch>[0] = []
+      function queueRows(rows: typeof plan.rows, debtor: string) {
         for (const r of rows) {
-          await addHouseholdDebt({
+          toWrite.push({
             householdId: activeId!,
             concept: r.concept,
             tipo: 'Abono',
@@ -261,7 +270,7 @@ export default function HouseholdPage() {
           })
         }
       }
-      await writeRows(plan.rows, data.debtor)
+      queueRows(plan.rows, data.debtor)
 
       // each extra line is someone else's debt — to any creditor, not just this payment's own — settled right
       // away, no confirmation step; just tell them it happened
@@ -269,11 +278,14 @@ export default function HouseholdPage() {
       const extraPlans: { line: ExtraAbonoLine; plan: ReturnType<typeof planAbono> }[] = []
       for (const line of validExtras) {
         const linePlan = planAbono({
-          debts, members, debtor: line.debtor, creditor: line.creditor, targetDebtId: null,
+          debts, members, debtor: line.debtor, creditor: line.creditor, targetDebtId: line.targetDebtId ?? null,
           amount: line.amount, concept: data.concept, category: data.category,
         })
-        await writeRows(linePlan.rows, line.debtor)
+        queueRows(linePlan.rows, line.debtor)
         extraPlans.push({ line, plan: linePlan })
+      }
+      await addHouseholdDebtsBatch(toWrite)
+      for (const { line } of extraPlans.filter((x) => x.line.debtor !== user.uid)) {
         notifyHouseholdMembers([line.debtor], {
           fromUid: user.uid, zone: 'hogar', severity: 'info',
           title: `${myName} pagó tu deuda con ${nameOf(line.creditor)}`,
@@ -301,14 +313,17 @@ export default function HouseholdPage() {
       } else {
         showToast(`Abono de ${formatCOP(data.amount)} registrado`, 'success')
       }
-      if (validExtras.length > 0) {
-        showToast(`También cubriste la deuda de ${validExtras.map((l) => nameOf(l.debtor)).join(', ')}`, 'success')
+      const coveredOthers = validExtras.filter((l) => l.debtor !== user.uid)
+      if (coveredOthers.length > 0) {
+        showToast(`También cubriste la deuda de ${coveredOthers.map((l) => nameOf(l.debtor)).join(', ')}`, 'success')
       }
 
       setAbonoFile(null)
       debtForm.reset({ date: format(new Date(), 'yyyy-MM-dd'), tipo: 'Abono', category: 'otros_hogar', debtor: user.uid, creditor: '', accountId: defaultAccountId })
       loadAccounts()
       setSaldaTargetId(null)
+      setScopeIds(null)
+      setPlanPays(null)
       setSelectedTargetDebtId(null)
       setOpenDebt(false)
       await reloadDebts()
@@ -404,6 +419,32 @@ export default function HouseholdPage() {
     }
   }
 
+  /** Opens a saved shared expense in the form to fix wrong values; only whoever registered it can (the old one is replaced). */
+  function handleEditExpense(expenseId: string) {
+    const exp = expenses.find((e) => e.id === expenseId)
+    if (!exp) return
+    if (exp.registeredBy !== user?.uid) {
+      showToast(`Solo ${nameOf(exp.registeredBy as string)} puede corregir este gasto`, 'info')
+      return
+    }
+    setEditingExpense(exp)
+    setOpenExpense(true)
+  }
+
+  /** A shared expense with no debt yet can be removed whole: nothing has been registered against anyone. */
+  async function handleDeleteExpense(expenseId: string, concept: string) {
+    if (!activeId) return
+    if (!(await ask(`¿Eliminar el gasto "${concept}"? Todavía no tiene movimientos: no se ha creado ninguna deuda.`, { title: 'Eliminar gasto compartido' }))) return
+    try {
+      await deleteHouseholdExpense(expenseId, activeId)
+      await reloadDebts()
+      showToast('Gasto eliminado', 'delete')
+    } catch (err) {
+      console.error('No se pudo eliminar el gasto:', err)
+      showToast('Error al eliminar', 'error')
+    }
+  }
+
   async function handleCreateCrossing(
     allocations: { debtId: string; amount: number }[],
     counterPersonId: string,
@@ -427,6 +468,25 @@ export default function HouseholdPage() {
     } catch (e: any) {
       showToast(e.message ?? 'Error al cruzar', 'error')
     } finally { setSaving(false) }
+  }
+
+  // Putting a household away hides it from the main list and the dashboard for everyone; nothing is deleted.
+  async function handleToggleArchive(id: string, archive: boolean) {
+    if (!user) return
+    const name = (households.find((h) => h.id === id)?.name as string) || 'este hogar'
+    const ok = await ask(
+      archive
+        ? `¿Inactivar "${name}"? Sale de la lista principal y del inicio para todos sus integrantes. No se borra nada y se puede reactivar cuando quieras.`
+        : `¿Reactivar "${name}"? Vuelve a la lista principal para todos sus integrantes.`,
+      { title: archive ? 'Inactivar hogar' : 'Reactivar hogar', confirmLabel: archive ? 'Inactivar' : 'Reactivar' },
+    )
+    if (!ok) return
+    try {
+      await setHouseholdArchived(id, archive, user.uid)
+      showToast(archive ? `"${name}" quedó inactivo` : `"${name}" está activo otra vez`, 'success')
+    } catch {
+      showToast('No se pudo cambiar el estado del hogar', 'error')
+    }
   }
 
   async function handleRename() {
@@ -455,6 +515,10 @@ export default function HouseholdPage() {
 
   async function handleRemoveGuest(guestId: string) {
     if (!activeId) return
+    // someone out of the member list vanishes from the cards — so one with money still open can't leave
+    const open = debts.some((d: any) => d.tipo === 'Deuda' && isPendingDebt(d) && (d.debtor === guestId || creditorOf(d, members) === guestId))
+    if (open) throw new Error(`${nameOf(guestId)} todavía tiene deudas abiertas: salden o cruces primero y luego lo quitas`)
+    if (calcNetBalance(storedDebts, guestId, crossings) < 0) throw new Error(`${nameOf(guestId)} tiene saldo a favor: aplícalo a sus deudas o devuélvelo antes de quitarlo`)
     await removeGuestMember(activeId, guestId)
     setHouseholds((prev) => prev.map((h) => h.id === activeId ? {
       ...h,
@@ -477,7 +541,7 @@ export default function HouseholdPage() {
       setDebts([])
       setOpenSettings(false)
       showToast('Hogar eliminado', 'delete')
-    } catch { showToast('Error al eliminar hogar', 'error') }
+    } catch (e: any) { showToast(e?.message ?? 'Error al eliminar hogar', 'error') }
     finally { setSaving(false) }
   }
 
@@ -495,6 +559,7 @@ export default function HouseholdPage() {
       return
     }
     setSaldaTargetId(d.id)
+    setScopeIds([d.id])
     setSelectedTargetDebtId(null)
     const rem = remainingOf(d)
     debtForm.reset({
@@ -511,8 +576,61 @@ export default function HouseholdPage() {
     setOpenDebt(true)
   }
 
+  /** A shared expense with several creditors: straight to the step-by-step payment, who gets paid is chosen there. */
+  function handleAbonarGroup(edges: any[]) {
+    const first = edges[0]
+    if (!first) return
+    if (first.debtor !== user?.uid && !isGuest(first.debtor)) {
+      showToast(`Solo ${nameOf(first.debtor)} puede registrar sus abonos`, 'info')
+      return
+    }
+    setSaldaTargetId(null)
+    setScopeIds(edges.map((e) => e.id))
+    setSelectedTargetDebtId(null)
+    debtForm.reset({
+      date: format(new Date(), 'yyyy-MM-dd'),
+      tipo: 'Abono',
+      concept: '',
+      amount: 0,
+      debtor: first.debtor,
+      creditor: '',
+      accountId: defaultAccountId,
+      category: first.category || 'otros_hogar',
+      notas: '',
+    })
+    setOpenDebt(true)
+  }
+
+  /** Registers what the report says a person has to pay: the form opens with every payment already filled in. */
+  function handleRegisterPlan(uid: string) {
+    const p = settlement.people.find((x) => x.uid === uid)
+    if (!p || p.pays.length === 0) return
+    if (uid !== user?.uid && !isGuest(uid)) {
+      showToast(`Solo ${nameOf(uid)} puede registrar sus pagos`, 'info')
+      return
+    }
+    setSaldaTargetId(null)
+    setScopeIds(null)
+    setSelectedTargetDebtId(null)
+    setPlanPays(p.pays)
+    debtForm.reset({
+      date: format(new Date(), 'yyyy-MM-dd'),
+      tipo: 'Abono',
+      concept: 'Pago según el reporte',
+      amount: 0,
+      debtor: uid,
+      creditor: '',
+      accountId: defaultAccountId,
+      category: 'otros_hogar',
+      notas: '',
+    })
+    setOpenDebt(true)
+  }
+
   function handleOpenAbonoGeneral(debtorUid?: string) {
     setSaldaTargetId(null)
+    setScopeIds(null)
+    setPlanPays(null)
     setSelectedTargetDebtId(null)
     const targetUid = debtorUid || user?.uid || ''
     // each real member is responsible for their own abonos, from their own account — a guest has neither,
@@ -598,6 +716,21 @@ export default function HouseholdPage() {
     return debts.filter((d: any) => d.tipo === 'Deuda' && isPendingDebt(d) && creditorOf(d, members) === uid)
   }
 
+  /** Debts of a shared expense that exist on paper but not yet: they wait for someone's confirmation of what they put in. Not counted in any balance. */
+  function awaitingFor(uid: string) {
+    const out: { id: string; concept: string; creditor: string; amount: number; waitingFor: string }[] = []
+    for (const e of expenses as any[]) {
+      for (const c of (e.contributions ?? []) as any[]) {
+        if (c.status !== 'pending') continue
+        for (const [i, edge] of ((c.edges ?? []) as any[]).entries()) {
+          if (edge.created || edge.debtor !== uid) continue
+          out.push({ id: `${e.id}-${c.memberId}-${i}`, concept: e.description, creditor: edge.creditor ?? c.memberId, amount: edge.amount, waitingFor: c.memberId })
+        }
+      }
+    }
+    return out
+  }
+
   // "This cycle" reporting — new activity generated within the selected month only.
   const totalGen     = monthDebts.filter(d => d.tipo === 'Deuda').reduce((s: number, d: any) => s + d.amount, 0)
   const totalCruzado = monthDebts.filter(d => d.tipo === 'Deuda').reduce((s: number, d: any) => s + ((d.crossedAmount as number) || 0), 0)
@@ -618,10 +751,49 @@ export default function HouseholdPage() {
     }
   }
 
+  /** Removes a whole payment (every abono it was split into): the money goes back to the account and the debts are owed again. */
+  async function handleDeletePayment(pay: any) {
+    const kids = (pay.children ?? []) as any[]
+    const ids = kids.map((k) => k.debt?.id as string | undefined).filter((x): x is string => !!x)
+    if (ids.length === 0 || !activeId) return
+    const registrant = kids[0]?.debt?.registeredBy as string | undefined
+    const mine = registrant === user?.uid
+    const touchesAccount = kids.some((k) => k.debt?.accountId)
+    const received = kids.some((k) => k.debt?.receiptStatus === 'confirmed')
+    const note = mine
+      ? ' El dinero regresa a tu cuenta.'
+      : touchesAccount && registrant ? ` Lo registró ${nameOf(registrant)}: se le avisará para que revise su cuenta.` : ''
+    if (!(await ask(
+      `¿Eliminar este pago de ${formatCOP(Math.abs(pay.delta))}? Las deudas que pagaba vuelven a quedar pendientes.${note}${received ? ' Quien lo recibió ya lo había confirmado: su ingreso no se revierte solo.' : ''}`,
+      { title: 'Eliminar pago' },
+    ))) return
+    try {
+      await deleteHouseholdPayment(ids, activeId)
+      await reloadDebts()
+      loadAccounts()
+      showToast('Pago eliminado', 'delete')
+    } catch (err) {
+      console.error('No se pudo eliminar el pago:', err)
+      showToast('Error al eliminar el pago', 'error')
+    }
+  }
+
+  /** Opens the confirmation of a payment I received. */
+  function openReceipt(pay: LedgerRow) {
+    const kids = pay.children ?? []
+    setReceiptToConfirm({
+      householdId: activeId, paymentId: kids[0]?.debt?.paymentId, amount: Math.abs(pay.delta), fromName: nameOf(pay.debtor),
+      lines: kids.map((k) => ({ concept: (k.target?.concept as string) ?? (k.debt?.concept as string), amount: Math.abs(k.delta) })),
+      date: pay.date.toISOString(),
+    })
+  }
+
   function closeAbono() {
     setOpenDebt(false)
     setAbonoFile(null)
     setSaldaTargetId(null)
+    setScopeIds(null)
+    setPlanPays(null)
     setSelectedTargetDebtId(null)
   }
 
@@ -633,12 +805,84 @@ export default function HouseholdPage() {
     .filter((r) => r.kind === 'deuda' && ['overdue', 'due-soon', 'pending'].includes(statusOf(r)))
     .reduce((min, r) => Math.min(min, r.date.getTime()), Infinity)
   const startMs = Number.isFinite(openFrom) ? openFrom : Date.now() - 30 * 86_400_000
-  const olderCount = allRows.filter((r) => r.date.getTime() < startMs).length
-  const monthRows = showPast ? allRows : allRows.filter((r) => r.date.getTime() >= startMs)
+  // two views of the same history: what was created (shared expenses, loans, debts) and what was paid (payments, crossings)
+  const isPaid = (r: { kind: string }) => r.kind === 'abono' || r.kind === 'cruce'
+  const tabRows = allRows.filter((r) => (historyTab === 'pagos' ? isPaid(r) : !isPaid(r)))
+  const gastosCount = allRows.filter((r) => !isPaid(r)).length
+  const pagosCount = allRows.length - gastosCount
+  const olderCount = tabRows.filter((r) => r.date.getTime() < startMs).length
+  const monthRows = showPast ? tabRows : tabRows.filter((r) => r.date.getTime() >= startMs)
+
+  // The payments tab is the same vertical timeline the Fijos history uses: one bordered row per payment, newest first
+  const payRowById = new Map<string, LedgerRow>()
+  const paymentMovements: Movement[] = historyTab !== 'pagos' ? [] : monthRows.map((r, i) => {
+    const kids = r.children ?? []
+    const id = r.key ?? (r.debt?.id as string | undefined) ?? `row-${i}`
+    payRowById.set(id, r)
+    if (r.kind === 'cruce') {
+      return { id, zone: 'crossing' as const, date: r.date, concept: r.concept, sub: 'Compensación entre deudas', amount: Math.abs(r.delta), canDelete: false }
+    }
+    const creditor = kids[0]?.debt?.creditor as string | undefined
+    const receipt = kids.every((k) => k.debt?.receiptStatus === 'confirmed') ? 'recibido ✓' : kids.some((k) => k.debt?.receiptStatus === 'pending') ? `por confirmar${creditor ? ` por ${creditor === user?.uid ? 'ti' : nameOf(creditor)}` : ''}` : ''
+    const iReceive = kids.some((k) => k.debt?.receiptStatus === 'pending') && creditor === user?.uid
+    return {
+      id,
+      zone: 'payment' as const,
+      date: r.date,
+      concept: r.concept,
+      sub: `${nameOf(r.debtor)}${creditor ? ` → ${nameOf(creditor)}` : ''}${receipt ? ` · ${receipt}` : ''}${kids.filter((k) => !k.debt?.saldaId).reduce((t, k) => t + Math.abs(k.delta), 0) > 0 ? ` · incluye ${formatCOP(kids.filter((k) => !k.debt?.saldaId).reduce((t, k) => t + Math.abs(k.delta), 0))} a favor` : ''}`,
+      // money that comes to me is "+", money that leaves is "−"
+      amount: creditor === user?.uid ? Math.abs(r.delta) : -Math.abs(r.delta),
+      accountId: kids[0]?.debt?.accountId as string | undefined,
+      attachmentId: (r.debt?.attachmentId ?? kids.find((k) => k.debt?.attachmentId)?.debt?.attachmentId) as string | undefined,
+      action: iReceive ? (
+        <button type="button" onClick={() => openReceipt(r)} className="whitespace-nowrap rounded-md border border-emerald-400/50 bg-emerald-500/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-300 hover:bg-emerald-500/25 transition">Confirmar recibido</button>
+      ) : undefined,
+    }
+  })
   const carryIn: number | null = null
   const carryOwed = 0
 
   const myBreakdown      = balanceBreakdown(debts, crossings, user?.uid)
+  // the same settlement the report shows (what really has to move once debts and credits are set against each other)
+  const settlement = useMemo(
+    () => buildHouseholdReport({ name: (household?.name as string) ?? '', members, guestIds, nameOf, expenses, debts, frozenPlan: (household?.settlementPlan as FrozenPlan | undefined) ?? null }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [household, expenses, debts],
+  )
+
+  // Once the household crosses its accounts, debts stop being paid one by one: only the plan is paid
+  const frozenPlan = (household?.settlementPlan as FrozenPlan | undefined) ?? null
+  const crossed = !!frozenPlan || household?.payMode === 'plan'
+  // the crossing can be undone only while nobody has paid since: after that the two ways would mix
+  const canUncross = crossed && !!frozenPlan && !debts.some((d: any) => d.tipo === 'Abono' && toDate(d.createdAt ?? d.date).getTime() >= frozenPlan.atMs)
+  const myPlanPays = (settlement.people.find((p) => p.uid === user?.uid)?.pays.length ?? 0) > 0
+
+  async function handleCrossAccounts() {
+    if (!activeId || settlement.plan.length === 0) return
+    const ok = await ask(
+      `Se compensa todo entre todos y quedan ${settlement.plan.length} pagos por ${formatCOP(settlement.toMove)}. Desde ahora ya no se pagan deudas sueltas: cada quien paga solo lo que dice el plan. Si alguien agrega o corrige un gasto, el plan se ajusta solo.`,
+      { title: 'Cruzar cuentas' },
+    )
+    if (!ok) return
+    try {
+      await setSettlementPlan(activeId, { atMs: Date.now(), payments: settlement.plan.map((p) => ({ from: p.from, to: p.to, amount: p.amount })) })
+      showToast('Cuentas cruzadas: ahora se paga según el plan', 'success')
+    } catch {
+      showToast('No se pudieron cruzar las cuentas', 'error')
+    }
+  }
+
+  async function handleUncross() {
+    if (!activeId) return
+    if (!(await ask('Las deudas vuelven a pagarse una por una, a quien se le deba cada una.', { title: 'Deshacer cruce' }))) return
+    try {
+      await uncrossHousehold(activeId)
+      showToast('Cruce deshecho', 'success')
+    } catch {
+      showToast('No se pudo deshacer el cruce', 'error')
+    }
+  }
 
   // an abono is paid by the person who registers it, or — since they can't log in and do it themselves —
   // by any guest of the household, registered on their behalf
@@ -684,6 +928,7 @@ export default function HouseholdPage() {
             onSelect={setActiveId}
             onCreateNew={() => setOpenCreate(true)}
             onJoin={() => setOpenJoin(true)}
+            onToggleArchive={handleToggleArchive}
           />
         </CurvedScrollContainer>
       )}
@@ -702,6 +947,12 @@ export default function HouseholdPage() {
               >
                 <ArrowLeft size={13} /> Hogares
               </button>
+              {household.archivedAt && (
+                <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-[#c7ccd1]">
+                  <span>Este hogar está inactivo: no aparece en la lista principal ni en el inicio.</span>
+                  <button type="button" onClick={() => handleToggleArchive(activeId as string, false)} className="font-semibold text-brand-300 hover:text-brand-200 whitespace-nowrap">Reactivar</button>
+                </div>
+              )}
               <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1 notch-sm bg-white/[0.04] border border-white/[0.08]">
                 <Home size={11} className="text-brand-400" />
                 <span className="font-pixel text-[8px] text-brand-400 uppercase tracking-widest">Hogar</span>
@@ -720,12 +971,14 @@ export default function HouseholdPage() {
                 </Button>
               )}
               <Button
-                onClick={() => handleOpenAbonoGeneral(user?.uid)}
-                disabled={myNet <= 0}
+                onClick={() => (crossed ? handleRegisterPlan(user?.uid ?? '') : handleOpenAbonoGeneral(user?.uid))}
+                disabled={crossed ? !myPlanPays : myNet <= 0}
                 variant="secondary"
                 notched
                 className="flex-1 min-w-[150px]"
-                title={myNet > 0 ? 'Abonar a tus deudas del hogar' : 'Cuentas al día: no tienes nada que abonar'}
+                title={crossed
+                  ? (myPlanPays ? 'Registrar tus pagos según el plan' : 'Según el plan no tienes pagos pendientes')
+                  : (myNet > 0 ? 'Abonar a tus deudas del hogar' : 'Cuentas al día: no tienes nada que abonar')}
               >
                 <Coins size={15} className="text-brand-400" /> Abonar
               </Button>
@@ -744,7 +997,7 @@ export default function HouseholdPage() {
                   </div>
                 )}
 
-                <div className="notch bg-[#0a1f2f] border border-white/10 shadow-xl divide-y divide-white/10 overflow-hidden">
+                <div className="notch bg-[#0a1f2f] border border-white/10 shadow-xl divide-y divide-white/10 overflow-clip">
                   <PersonCard
                     bare
                     name={myName}
@@ -752,6 +1005,9 @@ export default function HouseholdPage() {
                     photoURL={myPhoto}
                     color={colorOf(user?.uid ?? '')}
                     net={myNet}
+                    settle={settlement.people.find((p) => p.uid === user?.uid)}
+                    onRegisterPlan={() => handleRegisterPlan(user?.uid ?? '')}
+                    planMode={crossed}
                     breakdown={myBreakdown}
                     debts={myDebts}
                     canCross={(d) => counterpartPendingDebts(d).length > 0}
@@ -760,13 +1016,15 @@ export default function HouseholdPage() {
                     colorOf={colorOf}
                     photoOf={photoOf}
                     expanded={Boolean(expandedPeople[user?.uid ?? ''])}
-                    onToggle={() => setExpandedPeople((prev) => ({ ...prev, [user?.uid ?? '']: !prev[user?.uid ?? ''] }))}
+                    onToggle={() => setExpandedPeople((prev) => ({ [user?.uid ?? '']: !prev[user?.uid ?? ''] }))}
                     canAbonar
                     onAbonarAll={() => handleOpenAbonoGeneral(user?.uid)}
                     onCross={(d) => setCrossTarget(d)}
                     onAbonar={handleAbonar}
+                    onAbonarGroup={handleAbonarGroup}
                     onSelect={(d) => withTransition(() => setSelectedDebt(d))}
                     owedToMe={owedTo(user?.uid ?? '')}
+                    awaiting={awaitingFor(user?.uid ?? '')}
                     nameOf={nameOf}
                   />
                   {otherUids.map((uid) => (
@@ -779,6 +1037,9 @@ export default function HouseholdPage() {
                       photoURL={photoOf(uid)}
                       color={colorOf(uid)}
                       net={people.find((p) => p.uid === uid)?.net ?? 0}
+                      settle={settlement.people.find((p) => p.uid === uid)}
+                      onRegisterPlan={() => handleRegisterPlan(uid)}
+                      planMode={crossed}
                       breakdown={balanceBreakdown(debts, crossings, uid)}
                       debts={debts.filter((d: any) => d.debtor === uid)}
                       canCross={(d) => counterpartPendingDebts(d).length > 0}
@@ -787,13 +1048,15 @@ export default function HouseholdPage() {
                       colorOf={colorOf}
                       photoOf={photoOf}
                       expanded={Boolean(expandedPeople[uid])}
-                      onToggle={() => setExpandedPeople((prev) => ({ ...prev, [uid]: !prev[uid] }))}
+                      onToggle={() => setExpandedPeople((prev) => ({ [uid]: !prev[uid] }))}
                       canAbonar={isGuest(uid)}
                       onAbonarAll={() => handleOpenAbonoGeneral(uid)}
                       onCross={(d) => setCrossTarget(d)}
                       onAbonar={handleAbonar}
+                    onAbonarGroup={handleAbonarGroup}
                       onSelect={(d) => withTransition(() => setSelectedDebt(d))}
                       owedToMe={owedTo(uid)}
+                      awaiting={awaitingFor(uid)}
                       nameOf={nameOf}
                     />
                   ))}
@@ -816,10 +1079,19 @@ export default function HouseholdPage() {
               )}
 
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOpenReport(true)}
+                  className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#0d263a] px-3 py-2 text-xs font-semibold text-[#c7ccd1] transition hover:bg-white/10 hover:text-white"
+                  title="Cuánto debe cada persona"
+                >
+                  <ClipboardList size={15} /> Reporte
+                </button>
                 <HouseholdMenu
                   inviteCode={household.inviteCode as string}
                   copied={copied}
                   onSettings={() => { setRenameVal(household.name as string); setOpenSettings(true) }}
+                  onReport={() => setOpenReport(true)}
                   onInvite={() => setOpenInvite(true)}
                   onAddGuest={() => setOpenAddGuest(true)}
                   onCopyCode={copyCode}
@@ -841,6 +1113,7 @@ export default function HouseholdPage() {
                     creditorId={creditorOf(selectedDebt, members)}
                     canAbonar={selectedDebt.debtor === user?.uid || isGuest(selectedDebt.debtor as string)}
                     canCross={counterpartPendingDebts(selectedDebt).length > 0}
+                    planMode={crossed}
                     onBack={() => withTransition(() => setSelectedDebt(null))}
                     onCross={() => { setCrossTarget(selectedDebt); setSelectedDebt(null) }}
                     onAbonar={() => { handleAbonar(selectedDebt); setSelectedDebt(null) }}
@@ -868,22 +1141,63 @@ export default function HouseholdPage() {
                             {formatCOP(totalAbono + totalCruzado)} cubierto ({progress}%)
                             <Tip text="De todo lo generado: lo ya abonado o compensado." />
                           </span>
-                          <span className="font-mono font-bold text-amber-300">{formatCOP(Math.max(0, pendiente))} por cubrir</span>
+                          <span className="text-right">
+                            <button type="button" onClick={() => setOpenReport(true)} className="inline-flex items-center gap-1 font-mono font-bold text-amber-300 hover:underline" title="Ver el reporte de cuentas">
+                              {formatCOP(settlement.toMove)} por pagar entre todos
+                            </button>
+                            <Tip text="Es lo que realmente tiene que cambiar de manos para que todos queden a mano. Ya descuenta lo que unos se deben con otros. El detalle de cada deuda está en la tarjeta de cada persona." />
+                          </span>
                         </div>
                         <ProgressBar value={progress} size="sm" />
                       </div>
                     )}
                   </div>
 
+                  <div className="flex-shrink-0 flex items-center gap-1.5 border-b border-white/10 px-5 py-2" role="tablist" aria-label="Vista del historial">
+                    {([['gastos', 'Gastos compartidos', gastosCount], ['pagos', 'Pagos', pagosCount], ['mapa', 'Mapa de pagos', null]] as const).map(([id, label, n]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        role="tab"
+                        aria-selected={historyTab === id}
+                        onClick={() => setHistoryTab(id)}
+                        className={clsx(
+                          'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition',
+                          historyTab === id ? 'bg-brand-500/20 text-brand-300 border border-brand-500/40' : 'text-[#9aa4ac] border border-transparent hover:bg-white/5 hover:text-[#f3f5f6]',
+                        )}
+                      >
+                        {label}
+                        {id === 'mapa' ? <Network size={12} className="opacity-70" /> : <span className="font-mono text-[10px] opacity-70">{n}</span>}
+                      </button>
+                    ))}
+                  </div>
+
                   <CurvedScrollContainer className="lg:flex-1 lg:min-h-0" {...scrollProps} corners="bottom-right">
-                    {debtsLoading ? (
+                    {historyTab === 'mapa' ? (
+                      debtsLoading ? <SkeletonList count={4} /> : <PaymentMap report={settlement} debts={debts}nameOf={nameOf} photoOf={photoOf} colorOf={colorOf} />
+                    ) : debtsLoading ? (
                       <SkeletonList count={4} />
                     ) : monthRows.length === 0 && !carryIn ? (
                       <div className="text-center py-12 px-6">
                         <EmptyMark name="housing" />
-                        <p className="text-sm font-bold text-[#f0fae8]">Aún no hay movimientos</p>
-                        <p className="text-xs text-[#8a929a] mt-1">Presiona "Gasto compartido" para registrar uno.</p>
+                        <p className="text-sm font-bold text-[#f0fae8]">{historyTab === 'pagos' ? 'Aún no hay pagos' : 'Aún no hay gastos compartidos'}</p>
+                        <p className="text-xs text-[#8a929a] mt-1">{historyTab === 'pagos' ? 'Los abonos y cruces aparecerán aquí.' : 'Presiona "Gasto compartido" para registrar uno.'}</p>
                       </div>
+                    ) : historyTab === 'pagos' ? (
+                      <>
+                        <MovementTimeline
+                          items={paymentMovements}
+                          accounts={accounts}
+                          onDelete={(m) => { const row = payRowById.get(m.id); if (row && row.kind === 'abono') handleDeletePayment(row) }}
+                        />
+                        {olderCount > 0 && (
+                          <div className="flex justify-center pt-3">
+                            <Button type="button" variant="secondary" size="sm" notched onClick={() => setShowPast((v) => !v)}>
+                              {showPast ? 'Ocultar los anteriores' : `Cargar anteriores (${olderCount})`}
+                            </Button>
+                          </div>
+                        )}
+                      </>
                     ) : (
                       <HouseholdTimeline
                         rows={monthRows}
@@ -892,6 +1206,9 @@ export default function HouseholdPage() {
                         olderCount={olderCount}
                         showingOlder={showPast}
                         onToggleOlder={() => setShowPast((v) => !v)}
+                        onDeleteExpense={handleDeleteExpense}
+                        onEditExpense={handleEditExpense}
+                        onDeletePayment={handleDeletePayment}
                         multi={multi}
                         myName={myName}
                         partnerName={partnerName}
@@ -950,6 +1267,7 @@ export default function HouseholdPage() {
           saving={saving}
           onRename={handleRename}
           onDelete={handleDeleteHousehold}
+          canDelete={household?.createdBy === user?.uid}
         />
       )}
 
@@ -960,10 +1278,6 @@ export default function HouseholdPage() {
           householdId={household.id as string}
           householdName={household.name as string}
           inviteCode={household.inviteCode as string}
-          members={members}
-          myUid={user?.uid ?? ''}
-          myEmail={user?.email ?? ''}
-          myName={myName}
         />
       )}
 
@@ -974,6 +1288,25 @@ export default function HouseholdPage() {
           guests={guestIds.map((uid) => ({ id: uid, name: nameOf(uid) }))}
           onAdd={handleAddGuest}
           onRemove={handleRemoveGuest}
+        />
+      )}
+
+      {household && (
+        <HouseholdReportModal
+          open={openReport}
+          onClose={() => setOpenReport(false)}
+          name={household.name as string}
+          members={members}
+          guestIds={guestIds}
+          nameOf={nameOf}
+          photoOf={photoOf}
+          colorOf={colorOf}
+          expenses={expenses}
+          debts={debts}
+          frozenPlan={(household.settlementPlan as FrozenPlan | undefined) ?? null}
+          crossed={crossed}
+          onCross={crossed ? undefined : handleCrossAccounts}
+          onUncross={canUncross ? handleUncross : undefined}
         />
       )}
 
@@ -997,12 +1330,15 @@ export default function HouseholdPage() {
       />
 
       <AbonoModal
+        currentUserId={user?.uid ?? ''}
         open={openDebt}
         onClose={closeAbono}
         form={debtForm}
         onSubmit={onAddDebt}
         debts={debts}
-        saldaTargetId={saldaTargetId}
+        scopeIds={scopeIds}
+        planPays={planPays}
+        planActive={crossed}
         selectedTargetDebtId={selectedTargetDebtId}
         onPickTarget={setSelectedTargetDebtId}
         members={members}
@@ -1032,7 +1368,8 @@ export default function HouseholdPage() {
       {activeId && (
         <HouseholdExpenseModal
           open={openExpense}
-          onClose={() => setOpenExpense(false)}
+          editing={editingExpense}
+          onClose={() => { setOpenExpense(false); setEditingExpense(null) }}
           householdId={activeId}
           members={expenseMembers}
           guestIds={guestIds}

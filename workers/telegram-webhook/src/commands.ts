@@ -4,7 +4,7 @@
  */
 import {
   indexPayments, monthEntries, monthKey, relativeDay, shiftMonth, withAutoPayments,
-  owedByCreditor,
+  owedByCreditor, householdDebtsWithCredit, withPockets, topAccounts,
 } from '../../../apps/web/src/shared/index'
 import type { Db } from './db'
 
@@ -37,10 +37,16 @@ export const HELP =
 
 // ── /saldo ───────────────────────────────────────────────────────────────────────────────────────────────────────
 async function saldo(db: Db, uid: string) {
-  const accounts = (await db.query('accounts', [{ field: 'userId', op: 'EQUAL', value: uid }])).sort((a, b) => b.balance - a.balance)
-  if (accounts.length === 0) return 'Aún no tienes cuentas. Se crean en Finanzas, dentro de la app.'
-  const total = accounts.reduce((s, a) => s + (a.balance || 0), 0)
-  return `<b>💰 Tus cuentas</b>\n${accounts.map((a) => `• ${esc(a.name)}: <b>${spoiler(cop(a.balance || 0))}</b>`).join('\n')}\n\n<b>Total: ${spoiler(cop(total))}</b>`
+  // a parent account shows what the bank really holds; its cuentas hijas are listed under it and left out of the total
+  const all = withPockets((await db.query('accounts', [{ field: 'userId', op: 'EQUAL', value: uid }])) as any[])
+  if (all.length === 0) return 'Aún no tienes cuentas. Se crean en Finanzas, dentro de la app.'
+  const main = topAccounts(all).sort((a, b) => b.balance - a.balance)
+  const total = main.reduce((s, a) => s + (a.balance || 0), 0)
+  const lines = main.flatMap((a) => [
+    `• ${esc(a.name)}: <b>${spoiler(cop(a.balance || 0))}</b>`,
+    ...all.filter((k) => k.parentId === a.id).map((k) => `    ↳ ${esc(k.name)}: ${k.balance < 0 ? `te deben <b>${spoiler(cop(-k.balance))}</b>` : `<b>${spoiler(cop(k.balance || 0))}</b>`}`),
+  ])
+  return `<b>💰 Tus cuentas</b>\n${lines.join('\n')}\n\n<b>Total: ${spoiler(cop(total))}</b>`
 }
 
 // ── fixed expenses (shared by /proximos and /resumen) ───────────────────────────────────────────────────────────
@@ -74,11 +80,9 @@ export async function households(db: Db, uid: string) {
   const list = await db.query('households', [{ field: 'members', op: 'ARRAY_CONTAINS', value: uid }])
   return Promise.all(list.map(async (h) => {
     const raw = await db.query('householdDebts', [{ field: 'householdId', op: 'EQUAL', value: h.id }])
-    // an abono is linked to its debt through saldaId: the debt's paid part is worked out from them (same as the app)
-    const paid = new Map<string, number>()
-    for (const d of raw) if (d.tipo === 'Abono' && d.saldaId) paid.set(d.saldaId, (paid.get(d.saldaId) || 0) + d.amount)
-    const debts = raw.map((d) => (d.tipo === 'Deuda' ? { ...d, paidAbono: paid.get(d.id) || 0 } : d))
     const members: string[] = h.members ?? []
+    // what each debt's abonos paid, and the balances in favor on top: the very same function the app uses
+    const debts = householdDebtsWithCredit(raw as any[], members)
     const names: Record<string, string> = h.memberNames ?? {}
     return { h, debts, members, name: (u: string | null) => (u ? (u === uid ? 'ti' : names[u] || 'alguien') : 'alguien sin definir') }
   }))
@@ -119,7 +123,7 @@ async function resumen(db: Db, uid: string, today: Date) {
     fixedFor(db, uid, today),
     households(db, uid),
   ])
-  const total = accounts.reduce((s, a) => s + (a.balance || 0), 0)
+  const total = topAccounts(withPockets(accounts as any[])).reduce((s, a) => s + (a.balance || 0), 0)
   const paid = fixed.entries.filter((e) => e.payment)
   const pending = fixed.entries.filter((e) => e.owed.length > 0)
   const overdue = pending.filter((e) => e.status === 'overdue')

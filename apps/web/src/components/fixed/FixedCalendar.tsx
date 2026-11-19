@@ -294,7 +294,7 @@ export function FixedCalendar({ month, expenses, paymentIndex, onSelect, onMove,
           <NoteChip
             key={item.key}
             icon={Receipt}
-            title={`${item.x.concept} · gasto adicional registrado`}
+            title={`${item.x.concept} · gasto adicional registrado${item.x.notes ? ` · ${item.x.notes}` : ''}`}
             label={item.x.concept}
             sub={`−${formatCOP(item.x.amount)}`}
             tone="solid"

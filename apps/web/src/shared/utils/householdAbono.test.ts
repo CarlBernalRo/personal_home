@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { planAbono } from './householdAbono';
+import { planAbono, applyCreditToDebts, householdDebtsWithCredit } from './householdAbono';
 
 const members = ['carlos', 'ale', 'sofi'];
 const debt = (id: string, over: any = {}) => ({
@@ -64,5 +64,43 @@ describe('planAbono', () => {
     ]);
     expect(p.remainingAfter).toBe(0);
     expect(p.paidLines).toEqual([{ concept: 'd1', amount: 30000 }, { concept: 'Abono al hogar', amount: 20000 }]);
+  });
+});
+
+describe('applyCreditToDebts', () => {
+  const members = ['carlos', 'ale'];
+  const d = (id: string, amount: number, date: number, extra: object = {}) => ({ id, tipo: 'Deuda', debtor: 'carlos', creditor: 'ale', amount, crossedAmount: 0, paidAbono: 0, date: new Date(date), ...extra });
+  const over = { id: 'over', tipo: 'Abono', debtor: 'carlos', creditor: 'ale', amount: 70, saldaId: null };
+
+  it('puts a balance in favor on the next open debts with the same creditor, oldest first', () => {
+    const out = applyCreditToDebts([d('a', 50, 1), d('b', 100, 2), over], members);
+    expect(out.find((x) => x.id === 'a')).toMatchObject({ creditApplied: 50, paidAbono: 50 });
+    expect(out.find((x) => x.id === 'b')).toMatchObject({ creditApplied: 20, paidAbono: 20 });
+  });
+
+  it('covers debts owed to anyone, the ones owed to who was paid first', () => {
+    const other = d('c', 40, 0, { creditor: 'sofi' });
+    // 70 of credit paid to ale: a (50, ale) first, then the rest on sofi's older debt
+    const out = applyCreditToDebts([other, d('a', 50, 1), over], ['carlos', 'ale', 'sofi']);
+    expect(out.find((x) => x.id === 'a')).toMatchObject({ creditApplied: 50 });
+    expect(out.find((x) => x.id === 'c')).toMatchObject({ creditApplied: 20 });
+  });
+
+  it('does nothing without credit', () => {
+    const debts = [d('a', 50, 1)];
+    expect(applyCreditToDebts(debts, members)).toBe(debts);
+  });
+});
+
+describe('householdDebtsWithCredit', () => {
+  it('sets each debt\'s paid part from its abonos and then puts the balance in favor on top', () => {
+    const debt = { id: 'a', tipo: 'Deuda', debtor: 'carlos', creditor: 'ale', amount: 100, crossedAmount: 0, date: new Date(2026, 9, 1) };
+    const rows = [
+      debt,
+      { id: 'p1', tipo: 'Abono', debtor: 'carlos', creditor: 'ale', amount: 60, saldaId: 'a' },
+      { id: 'p2', tipo: 'Abono', debtor: 'carlos', creditor: 'ale', amount: 25, saldaId: null },
+    ] as any[];
+    const out = householdDebtsWithCredit(rows, ['carlos', 'ale']);
+    expect(out.find((x) => x.id === 'a')).toMatchObject({ paidAbono: 85, creditApplied: 25 });
   });
 });

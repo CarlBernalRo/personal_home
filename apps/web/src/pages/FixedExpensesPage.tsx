@@ -22,7 +22,7 @@ import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/hooks/useAuth'
 import { AttachmentPicker } from '@/components/pending/AttachmentPicker'
-import { withAttachment } from '@/lib/attachments'
+import { removeAttachment, saveAttachment, withAttachment } from '@/lib/attachments'
 import {
   getFixedExpenses, getAllFixedExpensePayments, updateFixedExpense,
   addFixedExpensePayments, deleteFixedExpensePayment, deleteFixedExpense, materializeAutoPayments, updateFixedExpensePayment,
@@ -104,6 +104,9 @@ export default function FixedExpensesPage() {
   // Comment left on the payment being registered (the expense's annotations are configured elsewhere)
   const [comment, setComment] = useState('')
   const [payFile, setPayFile] = useState<File | null>(null)
+  // while correcting a payment: a new file to attach, or the current one marked to be removed
+  const [editFile, setEditFile] = useState<File | null>(null)
+  const [dropAttachment, setDropAttachment] = useState(false)
 
   const today        = new Date()
   const currentMonth = monthKey(today)
@@ -307,6 +310,8 @@ export default function FixedExpensesPage() {
 
   function startEditPayment() {
     if (!selectedPayment) return
+    setEditFile(null)
+    setDropAttachment(false)
     const when = selectedPayment.paymentDate instanceof Date ? selectedPayment.paymentDate : new Date(selectedPayment.paymentDate)
     setEditPay({ amount: String(selectedPayment.paidAmount), date: format(when, 'yyyy-MM-dd'), accountId: ((selectedPayment as any).accountId as string | undefined) ?? '', comment: (selectedPayment as any).notes ?? '' })
   }
@@ -318,17 +323,22 @@ export default function FixedExpensesPage() {
     if (!editPay.date) { showToast('Elige la fecha de pago', 'error'); return }
     const [y, m, d] = editPay.date.split('-').map(Number)
     setSavingPay(true)
+    const oldAttachment = (selectedPayment as any).attachmentId as string | undefined
+    let newAttachment: string | undefined
     try {
+      if (editFile) newAttachment = await saveAttachment(user!.uid, editFile)
       await updateFixedExpensePayment(
         (selectedPayment as any).id,
-        { paidAmount: amount, paymentDate: new Date(y, m - 1, d), accountId: editPay.accountId || undefined, notes: editPay.comment.trim() },
+        { paidAmount: amount, paymentDate: new Date(y, m - 1, d), accountId: editPay.accountId || undefined, notes: editPay.comment.trim(), attachmentId: newAttachment ?? (dropAttachment ? null : undefined) },
         { paidAmount: selectedPayment.paidAmount, accountId: (selectedPayment as any).accountId },
       )
+      if (oldAttachment && (newAttachment || dropAttachment)) await removeAttachment(oldAttachment)
       setEditPay(null)
       setSelected(null)
       await load()
       showToast('Pago corregido', 'edit')
     } catch {
+      await removeAttachment(newAttachment)
       showToast('No se pudo corregir el pago', 'error')
     } finally {
       setSavingPay(false)
@@ -630,6 +640,24 @@ export default function FixedExpensesPage() {
                     className="w-full bg-[#0d263a] border border-white/10 rounded-xl px-3 py-2 text-sm text-[#f3f5f6] placeholder-[#5f6a72] outline-none focus:border-brand-400 transition resize-y"
                   />
                 </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-[#9aa4ac] block">Comprobante</label>
+                  {(selectedPayment as any).attachmentId && !editFile && (
+                    dropAttachment ? (
+                      <p className="flex items-center gap-2 text-xs text-amber-300">
+                        Se quitará el comprobante actual.
+                        <button type="button" onClick={() => setDropAttachment(false)} className="font-semibold underline">Deshacer</button>
+                      </p>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <AttachmentButton attachmentId={(selectedPayment as any).attachmentId} label="Ver comprobante actual" />
+                        <button type="button" onClick={() => setDropAttachment(true)} className="text-xs font-semibold text-rose-300 hover:text-rose-200">Quitar</button>
+                      </div>
+                    )
+                  )}
+                  <AttachmentPicker file={editFile} onChange={setEditFile} />
+                  {(selectedPayment as any).attachmentId && editFile && <p className="text-[10px] text-[#8a929a]">Reemplazará al comprobante actual.</p>}
+                </div>
                 <p className="text-[10px] text-[#8a929a]">El saldo de las cuentas se ajusta solo: si cambias el monto o la cuenta, la anterior recupera lo que corresponde y la nueva lo paga.</p>
                 <div className="flex items-center justify-end gap-2">
                   <IconActionButton icon={X} tone="warning" label="Cancelar: no cambiar el pago" onClick={() => setEditPay(null)} disabled={savingPay} />
@@ -730,6 +758,11 @@ export default function FixedExpensesPage() {
                   const acc = accounts.find((a) => a.id === accountId)
                   const total = lines.filter((l) => checked.includes(l.occMonth)).reduce((sum, l) => sum + l.amount, 0)
                   if (!acc) return null
+                  // a cuenta hija spends the money of its parent account
+                  const parent = acc.parentId ? accounts.find((x: any) => x.id === acc.parentId) : undefined
+                  if (parent) return parent.balance < total
+                    ? <p className="text-[11px] text-red-300">{parent.name} tiene {formatCOP(parent.balance)} y el pago es de {formatCOP(total)}: quedaría en negativo.</p>
+                    : <p className="text-[11px] text-[#8a929a]">Sale del dinero de {parent.name} (le quedarán {formatCOP(parent.balance - total)}) y queda anotado aparte en {acc.name}.</p>
                   return acc.balance < total
                     ? <p className="text-[11px] text-red-300">Esta cuenta tiene {formatCOP(acc.balance)} y el pago es de {formatCOP(total)}: quedaría en negativo.</p>
                     : <p className="text-[11px] text-[#8a929a]">Le quedarán {formatCOP(acc.balance - total)}.</p>

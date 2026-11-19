@@ -1,17 +1,20 @@
 import { Landmark } from 'lucide-react'
 import { useMoneyMask } from '@/hooks/useMoneyMask'
 import { shareLabel } from '@/components/ui/SegmentedBar'
+import { topAccounts } from '@/shared'
 import { DashCard, EmptyNote } from './shared'
 
 interface Props {
-  accounts: { id: string; name: string; balance: number; color?: string; type?: string }[]
+  accounts: { id: string; name: string; balance: number; color?: string; type?: string; parentId?: string }[]
 }
 
 const TYPE_LABEL: Record<string, string> = { checking: 'Cuenta corriente', savings: 'Ahorros', cash: 'Efectivo', investment: 'Inversión' }
 
 /** Where the money is: the total and how it is spread across the accounts (the movements live in Finanzas). */
-export function AccountsZone({ accounts }: Props) {
+export function AccountsZone({ accounts: all }: Props) {
   const formatCOP = useMoneyMask()
+  // pockets are already inside their parent's balance
+  const accounts = topAccounts(all as { id: string; name: string; balance: number; color?: string; type?: string; parentId?: string }[])
   const total = accounts.reduce((sum, a) => sum + a.balance, 0)
   const positive = accounts.reduce((sum, a) => sum + Math.max(a.balance, 0), 0)
   const sorted = [...accounts].sort((a, b) => b.balance - a.balance)
