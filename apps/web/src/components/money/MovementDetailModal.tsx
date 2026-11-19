@@ -10,6 +10,9 @@ import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import type { AccountLite } from '@/components/ui/AccountChip'
 import { formatCOP } from '@/shared'
 import { flowKind, type FlowItem } from './MoneyTimeline'
+import { TagChip } from '@/components/ui/TagPicker'
+import { useTags } from '@/hooks/useTags'
+import { tagsOf } from '@/shared'
 
 interface Props {
   item: FlowItem | null
@@ -22,6 +25,7 @@ interface Props {
  * its edit/delete actions on top, the amount and date, the details in grey, the observation, the receipt, Cerrar.
  */
 export function MovementDetailModal({ item, onClose, accounts }: Props) {
+  const { tags } = useTags()
   if (!item) return <Modal open={false} onClose={onClose} title="">{null}</Modal>
   const kind = flowKind(item.kind)
   const Icon = kind.icon
@@ -77,6 +81,12 @@ export function MovementDetailModal({ item, onClose, accounts }: Props) {
           <p className="text-xs text-[#9aa4ac]">Registro de antes de que los gastos se contaran en tu dinero: se muestra como historial.</p>
         )}
 
+        {tagsOf(item.tagIds, tags).length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-[#9aa4ac]">Etiquetas:</span>
+            {tagsOf(item.tagIds, tags).map((t) => <TagChip key={t.id} tag={t} size="sm" />)}
+          </div>
+        )}
         {item.notes?.trim() && <NoteSheet title="Observación" tone="sky" icon={<MessageSquare size={12} />}>{item.notes.trim()}</NoteSheet>}
         {item.attachmentId && <AttachmentButton attachmentId={item.attachmentId} />}
 

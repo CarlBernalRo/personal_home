@@ -4,6 +4,8 @@ export interface FixedExpense {
   id: string;
   userId: string;
   concept: string;
+  /** The user's tags it carries (its payments carry them too). */
+  tagIds?: string[];
   estimatedAmount: number;
   paymentDay: number | null;
   category: string;

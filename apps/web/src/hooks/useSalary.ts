@@ -249,7 +249,7 @@ export function useSalary() {
   }
 
   /** A spend from the Gastos screen: not tied to a budget, but it counts toward the balance. */
-  async function addPersonalExpense(data: { description: string; amount: number; category: string; date: Date; accountId?: string; attachmentId?: string; notes?: string }) {
+  async function addPersonalExpense(data: { description: string; amount: number; category: string; date: Date; accountId?: string; attachmentId?: string; notes?: string; tagIds?: string[] }) {
     if (!user) return
     const account = validAccount(data.accountId)
     await addExpense({
@@ -264,6 +264,7 @@ export function useSalary() {
       tracked: true,
       ...(data.notes?.trim() ? { notes: data.notes.trim() } : {}),
       ...(data.attachmentId ? { attachmentId: data.attachmentId } : {}),
+      ...(data.tagIds?.length ? { tagIds: data.tagIds } : {}),
     })
     await load()
   }
@@ -271,7 +272,7 @@ export function useSalary() {
   /** Edits a registered spend; its account's balance follows the change. */
   async function editPersonalExpense(
     id: string,
-    data: { description: string; amount: number; category: string; date: Date; accountId?: string; notes?: string },
+    data: { description: string; amount: number; category: string; date: Date; accountId?: string; notes?: string; tagIds?: string[] },
     prev: { amount: number; accountId?: string },
   ) {
     const account = validAccount(data.accountId)

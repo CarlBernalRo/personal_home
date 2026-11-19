@@ -17,6 +17,8 @@ export interface ExpenseRow {
   attachmentId?: string
   /** Observation left on the spend. */
   notes?: string
+  /** The user's tags it carries. */
+  tagIds?: string[]
 }
 
 const toDate = (d: unknown) => (d instanceof Date ? d : new Date(d as string))
@@ -41,6 +43,7 @@ export function buildExpenseRows(personal: any[], bounds: { start: Date; end: Da
       accountId: e.accountId as string | undefined,
       attachmentId: e.attachmentId as string | undefined,
       notes: (e.notes as string | undefined) || undefined,
+      tagIds: (e.tagIds as string[] | undefined) ?? undefined,
     }))
     .filter((r) => r.date >= bounds.start && r.date < bounds.end)
     .sort((a, b) => b.date.getTime() - a.date.getTime())

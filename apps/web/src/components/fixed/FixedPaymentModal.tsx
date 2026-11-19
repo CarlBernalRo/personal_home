@@ -23,6 +23,22 @@ import { removeAttachment, saveAttachment, withAttachment } from '@/lib/attachme
 import { addFixedExpensePayments, deleteFixedExpensePayment, deleteFixedExpense, updateFixedExpensePayment } from '@/lib/firestore'
 import { formatCOP, paymentKey, amountFor, effectiveDue, monthKey, type MonthEntry, type OwedLine } from '@/shared'
 import type { SalaryState } from '@/hooks/useSalary'
+import { TagChip } from '@/components/ui/TagPicker'
+import { useTags } from '@/hooks/useTags'
+import { tagsOf } from '@/shared'
+
+/** The tags of a fixed expense, under its amount (its payments carry them). */
+function FixedTags({ fe }: { fe: any }) {
+  const { tags } = useTags()
+  const mine = tagsOf(fe.tagIds, tags)
+  if (mine.length === 0) return null
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-[#9aa4ac]">Etiquetas:</span>
+      {mine.map((t) => <TagChip key={t.id} tag={t} size="sm" />)}
+    </div>
+  )
+}
 
 const paySchema = z.object({
   paymentDate: z.string().min(1, 'Fecha requerida'),
@@ -304,6 +320,7 @@ export function FixedPaymentModal({ entry, onClose, expenses, paymentIndex, sala
                 Pagado desde: <span className="font-semibold text-[#f3f5f6]">{accounts.find((a) => a.id === (selectedPayment as any).accountId)?.name ?? 'una cuenta que ya no existe'}</span>
               </p>
             )}
+            <FixedTags fe={expenses.find((e) => e.id === selected.fe.id) ?? selected.fe} />
             <NotesCard notes={(expenses.find((e) => e.id === selected.fe.id) ?? selected.fe).notes} />
             {!editPay && <PaymentComment comment={(selectedPayment as any).notes} />}
             {!editPay && (selectedPayment as any).attachmentId && <AttachmentButton attachmentId={(selectedPayment as any).attachmentId} />}
@@ -403,6 +420,7 @@ export function FixedPaymentModal({ entry, onClose, expenses, paymentIndex, sala
               {...payForm.register('paymentDate')}
               error={payForm.formState.errors.paymentDate?.message}
             />
+            <FixedTags fe={expenses.find((e) => e.id === selected.fe.id) ?? selected.fe} />
             <NotesCard notes={(expenses.find((e) => e.id === selected.fe.id) ?? selected.fe).notes} />
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-[#9aa4ac] block">Comentario del pago <span className="font-normal text-[#5f6a72]">(opcional)</span></label>

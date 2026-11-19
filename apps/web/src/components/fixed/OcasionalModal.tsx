@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { TagPicker } from '@/components/ui/TagPicker'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
@@ -30,15 +31,15 @@ export function OcasionalModal({ open, editing, onClose, salary }: Props) {
   const { showToast } = useToast()
   const ask = useConfirm()
 
-  const [form, setForm] = useState({ concept: '', category: 'transporte', amount: '', day: '', notes: '', accountId: '', linked: false, scope: 'all' as 'all' | 'specific', householdIds: [] as string[] })
+  const [form, setForm] = useState({ concept: '', category: 'transporte', amount: '', day: '', notes: '', accountId: '', linked: false, scope: 'all' as 'all' | 'specific', householdIds: [] as string[], tagIds: [] as string[] })
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!open) return
     setForm(editing
-      ? { concept: editing.concept, category: editing.category, amount: editing.amount ? String(editing.amount) : '', day: editing.paymentDay ? String(editing.paymentDay) : '', notes: editing.notes ?? '', accountId: editing.accountId ?? '', linked: editing.source === 'household-debt', scope: editing.householdIds?.length ? 'specific' : 'all', householdIds: editing.householdIds ?? [] }
-      : { concept: '', category: 'transporte', amount: '', day: '', notes: '', accountId: '', linked: false, scope: 'all', householdIds: [] })
+      ? { concept: editing.concept, category: editing.category, amount: editing.amount ? String(editing.amount) : '', day: editing.paymentDay ? String(editing.paymentDay) : '', notes: editing.notes ?? '', accountId: editing.accountId ?? '', linked: editing.source === 'household-debt', scope: editing.householdIds?.length ? 'specific' : 'all', householdIds: editing.householdIds ?? [], tagIds: editing.tagIds ?? [] }
+      : { concept: '', category: 'transporte', amount: '', day: '', notes: '', accountId: '', linked: false, scope: 'all', householdIds: [], tagIds: [] })
     setError(null)
   }, [open, editing])
 
@@ -53,7 +54,7 @@ export function OcasionalModal({ open, editing, onClose, salary }: Props) {
     setSaving(true)
     try {
       const patch: Omit<VariableBudget, 'id' | 'active'> = {
-        concept: form.concept.trim(), category: form.category, amount: form.linked ? 0 : amount, paymentDay: day, notes: form.notes.trim(), accountId: form.accountId,
+        concept: form.concept.trim(), category: form.category, amount: form.linked ? 0 : amount, paymentDay: day, notes: form.notes.trim(), accountId: form.accountId, tagIds: form.tagIds,
         // null (not undefined) so Firestore accepts it and an edit can clear the choice
         householdIds: form.linked && form.scope === 'specific' ? form.householdIds : null,
         ...(form.linked ? { source: 'household-debt' as const } : {}),
@@ -148,6 +149,7 @@ export function OcasionalModal({ open, editing, onClose, salary }: Props) {
         <div className="space-y-2 pt-1 border-t border-white/10">
           <div className="pt-3">
             <Input label="Notas" placeholder="Opcional" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+            <TagPicker value={form.tagIds} onChange={(tagIds) => setForm({ ...form, tagIds })} />
           </div>
           <p className="text-[11px] text-[#8a929a]">
             El valor se renueva con cada sueldo confirmado y lo que no gastes queda reservado en "Te queda". Si tiene un día habitual de pago, se muestra como recordatorio en la línea de tiempo; el monto real lo registras tú cuando ocurre.

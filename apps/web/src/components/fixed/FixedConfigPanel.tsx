@@ -15,6 +15,9 @@ import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import type { SalaryState } from '@/hooks/useSalary'
 import { OcasionalModal } from './OcasionalModal'
+import { TagChip, TagPicker } from '@/components/ui/TagPicker'
+import { useTags } from '@/hooks/useTags'
+import { tagsOf } from '@/shared'
 import { ActiveToggleModal } from './ActiveToggleModal'
 import { useMyHouseholds } from '@/hooks/useMyHouseholds'
 import { addFixedExpense, updateFixedExpense, deleteFixedExpense } from '@/lib/firestore'
@@ -100,6 +103,9 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
   const [ocasionalSort, setOcasionalSort] = useState<SortKey>('day')
 
   const currentMonth = monthKey(new Date())
+  // tags are picked apart from the form fields
+  const [tagIds, setTagIds] = useState<string[]>([])
+  const { tags: allTags } = useTags()
 
   const form = useForm<FormData>({
     resolver: zodResolver(schema) as any,
@@ -110,6 +116,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
 
   function openCreate() {
     setEditing(null)
+    setTagIds([])
     form.reset({ concept: '', estimatedAmount: undefined as any, paymentDay: null, category: 'servicios', frequency: 'fijo', isVariable: false, autoDebit: false, accountId: '', everyMonths: 1, cycleStart: '', startMonth: currentMonth, notes: '' })
     setModalOpen(true)
   }
@@ -118,6 +125,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
     // a scheduled payment has its own, simpler dialog
     if (fe.oneTime) { onProgram(fe); return }
     setEditing(fe)
+    setTagIds(fe.tagIds ?? [])
     form.reset({
       concept: fe.concept,
       estimatedAmount: fe.estimatedAmount,
@@ -141,7 +149,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
       const { autoDebit, cycleStart, ...rest } = data
       // Paid every N months: bills fall every N months counted from one month (the first bill when creating)
       const cadence = { everyMonths: data.everyMonths, cycleStart: null as string | null }
-      const payload = { ...rest, ...cadence, notes: data.notes ?? '' }
+      const payload = { ...rest, ...cadence, notes: data.notes ?? '', tagIds }
       if (editing) {
         // A new day, amount or frequency only applies from the current month on (or the next one if this
         // month is already paid/overdue); closed months keep the values they had.
@@ -425,6 +433,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
                             <span>Desde {startMonthOf(fe, currentMonth)}</span>
                           </div>
                           {fe.notes && <p className="mt-1 text-[10px] text-[#8a929a] break-words">{fe.notes}</p>}
+                          {tagsOf(fe.tagIds, allTags).length > 0 && <div className="mt-1 flex flex-wrap gap-1">{tagsOf(fe.tagIds, allTags).map((t) => <TagChip key={t.id} tag={t} />)}</div>}
                         </div>
                         <div className="flex flex-shrink-0 flex-col items-end gap-1.5">
                           {statusSwitch('fixed', fe)}
@@ -519,6 +528,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
                             {accountChip(fe)}
                           </div>
                           {fe.notes && <p className="mt-1 text-[10px] text-[#8a929a] break-words">{fe.notes}</p>}
+                          {tagsOf(fe.tagIds, allTags).length > 0 && <div className="mt-1 flex flex-wrap gap-1">{tagsOf(fe.tagIds, allTags).map((t) => <TagChip key={t.id} tag={t} />)}</div>}
                         </div>
                         <div className="flex flex-shrink-0 flex-col items-end gap-1.5">
                           <div className="flex gap-1">
@@ -615,6 +625,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
                             {accountChip(b)}
                           </div>
                           {b.notes && <p className="mt-1 text-[10px] text-[#8a929a] break-words">{b.notes}</p>}
+                          {tagsOf(b.tagIds, allTags).length > 0 && <div className="mt-1 flex flex-wrap gap-1">{tagsOf(b.tagIds, allTags).map((t) => <TagChip key={t.id} tag={t} />)}</div>}
                         </div>
                         <div className="flex flex-shrink-0 flex-col items-end gap-1.5">
                           {statusSwitch('ocasional', b)}
@@ -731,6 +742,9 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
           <div className="pt-1 border-t border-white/10">
             <div className="pt-3">
               <Input label="Notas" placeholder="Opcional (ej. número de cuenta)" {...form.register('notes')} />
+            </div>
+            <div className="pt-3">
+              <TagPicker value={tagIds} onChange={setTagIds} />
             </div>
           </div>
 

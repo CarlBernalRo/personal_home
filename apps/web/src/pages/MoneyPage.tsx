@@ -5,7 +5,7 @@ import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
 import {
-  ArrowLeftRight, Banknote, Bell, CalendarDays, Heart, CalendarPlus, ChevronLeft, ChevronRight, List, Plus, RotateCcw, Settings, ShoppingBag, Wallet, X,
+  ArrowLeftRight, Banknote, BarChart3, Bell, CalendarDays, Heart, CalendarPlus, ChevronLeft, ChevronRight, List, Plus, RotateCcw, Settings, ShoppingBag, Wallet, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { SkeletonList } from '@/components/ui/Skeleton'
@@ -49,6 +49,7 @@ import { ExpenseFormModal, type EditableSpend } from '@/components/money/Expense
 import { IncomeFormModal } from '@/components/money/IncomeFormModal'
 import { MovementDetailModal } from '@/components/money/MovementDetailModal'
 import { SharedFixedModal } from '@/components/money/SharedFixedModal'
+import { MoneyReport } from '@/components/money/MoneyReport'
 import { ReminderDetailModal, ReminderFormModal } from '@/components/money/ReminderModals'
 import { subscribeReminders } from '@/lib/reminders'
 import { Avatar } from '@/components/ui/Avatar'
@@ -57,7 +58,7 @@ import { FamilyTransferModal } from '@/components/money/FamilyTransferModal'
 import { getSharedWithMe, withdrawFamilyTransfer } from '@/lib/family'
 import { FLOW_KINDS, MoneyTimeline, flowKind, type FlowItem, type FlowKind, type TimelineEntry } from '@/components/money/MoneyTimeline'
 
-type View = 'list' | 'calendar' | 'config'
+type View = 'list' | 'calendar' | 'report' | 'config'
 
 const asDate = (d: unknown) => (d instanceof Date ? d : new Date(d as any))
 const categoryOf = (id?: string) => PERSONAL_CATEGORIES.find((c) => c.id === id)
@@ -153,10 +154,10 @@ export default function MoneyPage() {
   const monthLabel = format(new Date(my, mm - 1, 1), 'MMMM yyyy', { locale: es })
 
   // ── View and filters (the URL can open a view or a filter: the old screens and Finanzas link here) ──
-  const view: View = params.get('vista') === 'config' ? 'config' : params.get('vista') === 'calendario' ? 'calendar' : 'list'
+  const view: View = params.get('vista') === 'config' ? 'config' : params.get('vista') === 'calendario' ? 'calendar' : params.get('vista') === 'reporte' ? 'report' : 'list'
   const setView = (v: View) => {
     const next = new URLSearchParams(params)
-    if (v === 'list') next.delete('vista'); else next.set('vista', v === 'config' ? 'config' : 'calendario')
+    if (v === 'list') next.delete('vista'); else next.set('vista', v === 'config' ? 'config' : v === 'report' ? 'reporte' : 'calendario')
     setParams(next, { replace: true })
   }
   const [kinds, setKinds] = useState<FlowKind[]>(() => {
@@ -264,6 +265,7 @@ export default function MoneyPage() {
       out.push({
         id: `oc|${e.id}`, kind: 'occasional', date, concept: e.description ?? 'Gasto ocasional', category: e.category,
         sub: budgetName(e.variableBudgetId) ? `Ocasional · ${budgetName(e.variableBudgetId)}` : 'Gasto ocasional',
+        tagIds: salary.budgets.find((b) => b.id === e.variableBudgetId)?.tagIds,
         amount: -e.amount, accountId: e.accountId, attachmentId: e.attachmentId, notes: e.notes || undefined, cash: !salary.movesMoney(date, e.accountId),
         onEdit: () => setSpendForm({ editing: spend }), onDelete: () => deleteSpend(e.id, true),
       })
@@ -271,11 +273,11 @@ export default function MoneyPage() {
     const transferOf = new Map(salary.personal.filter((e) => e.familyTransfer).map((e) => [e.id as string, e.familyTransfer as { to: string; toName?: string; pendingId?: string }]))
     for (const r of buildExpenseRows(salary.personal, bounds)) {
       const ft = transferOf.get(r.id)
-      const spend: EditableSpend = { id: r.id, description: r.description, amount: r.amount, category: r.category, date: r.date, accountId: r.accountId, notes: r.notes }
+      const spend: EditableSpend = { id: r.id, description: r.description, amount: r.amount, category: r.category, date: r.date, accountId: r.accountId, notes: r.notes, tagIds: r.tagIds }
       out.push({
         id: `ad|${r.id}`, kind: 'additional', date: r.date, concept: r.description, category: r.category,
         sub: ft ? `Transferencia a ${ft.toName ?? 'un familiar'} · familia` : categoryOf(r.category)?.label ?? 'Gasto adicional', amount: -r.amount, accountId: r.accountId, attachmentId: r.attachmentId, notes: r.notes,
-        history: !r.counted, cash: r.counted && !salary.movesMoney(r.date, r.accountId), onEdit: ft ? undefined : () => setSpendForm({ editing: spend }), onDelete: () => deleteSpend(r.id, false, ft),
+        history: !r.counted, tagIds: r.tagIds, cash: r.counted && !salary.movesMoney(r.date, r.accountId), onEdit: ft ? undefined : () => setSpendForm({ editing: spend }), onDelete: () => deleteSpend(r.id, false, ft),
       })
     }
     for (const a of household.abonos) {
@@ -590,7 +592,7 @@ export default function MoneyPage() {
       <div className="min-w-0 flex flex-col gap-4 lg:flex-1 lg:min-h-0">
         <div className="flex flex-wrap items-center justify-center gap-3 flex-shrink-0 sm:grid sm:grid-cols-[1fr_auto_1fr]">
           <div className="flex gap-1 p-1 basis-full justify-center sm:basis-auto sm:justify-self-start bg-[#0d263a] border border-white/[0.06] rounded-xl text-xs" role="group" aria-label="Vista">
-            {([['list', 'Lista', List], ['calendar', 'Calendario', CalendarDays]] as const).map(([id, label, Icon]) => (
+            {([['list', 'Lista', List], ['calendar', 'Calendario', CalendarDays], ['report', 'Reporte', BarChart3]] as const).map(([id, label, Icon]) => (
               <button
                 key={id}
                 type="button"
@@ -610,7 +612,7 @@ export default function MoneyPage() {
               </button>
               <span className="min-w-[150px] text-center">
                 <span className="block text-sm font-semibold capitalize">{monthLabel}</span>
-                {view === 'list' && bounds.period && (
+                {(view === 'list' || view === 'report') && bounds.period && (
                   <span className="block text-[10px] text-[#8a929a]">
                     {format(bounds.start, 'd MMM', { locale: es })} al {format(new Date(bounds.end.getTime() - 86_400_000), 'd MMM', { locale: es })}
                   </span>
@@ -668,7 +670,7 @@ export default function MoneyPage() {
         </div>
 
         <div className={clsx('flex flex-col lg:flex-1 lg:min-h-0', framed)}>
-          {view !== 'config' && (
+          {view !== 'config' && view !== 'report' && (
             <div className="flex-shrink-0 border-b border-white/10 p-4 space-y-2.5">
               <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filtros">
                 {family && user && others.length > 0 && (
@@ -717,7 +719,7 @@ export default function MoneyPage() {
             </div>
           )}
 
-          <CurvedScrollContainer className="lg:flex-1 lg:min-h-0" {...scrollProps} corners={view !== 'config' ? 'bottom-right' : 'both'}>
+          <CurvedScrollContainer className="lg:flex-1 lg:min-h-0" {...scrollProps} corners={view !== 'config' && view !== 'report' ? 'bottom-right' : 'both'}>
             {loading ? (
               <SkeletonList count={5} />
             ) : view === 'list' ? (
@@ -743,6 +745,8 @@ export default function MoneyPage() {
                 onClearFilter={clearFilters}
                 accounts={salary.accounts}
               />
+            ) : view === 'report' ? (
+              <MoneyReport salary={salary} expenses={expenses} paymentIndex={paymentIndex} abonos={household.abonos} month={month} />
             ) : view === 'calendar' ? (
               <FixedCalendar month={month} expenses={wantPerson('me') ? expenses : []} paymentIndex={paymentIndex} onSelect={setPayEntry} onMove={handleMove} variable={wantPerson('me') ? salary.variable : undefined} shared={sharedGroups} onSelectShared={setSharedSel} reminders={calendarReminders} />
             ) : user ? (

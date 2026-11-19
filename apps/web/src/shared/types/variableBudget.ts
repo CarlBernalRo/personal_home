@@ -21,6 +21,8 @@ export interface VariableBudget {
   householdIds?: string[] | null;
   /** Months in which it is switched off (same meaning as for fixed expenses). */
   pauses?: { from: string; until?: string }[];
+  /** The user's tags it carries (its spends carry them too). */
+  tagIds?: string[];
 }
 
 /** One real spend registered against a budget. */

@@ -87,7 +87,7 @@ export async function getExpenses(userId: string) {
  */
 export async function updateExpense(
   id: string,
-  next: { description: string; amount: number; category: string; date: Date; accountId?: string; notes?: string },
+  next: { description: string; amount: number; category: string; date: Date; accountId?: string; notes?: string; tagIds?: string[] },
   prev: { amount: number; accountId?: string },
 ) {
   const batch = writeBatch(db)
@@ -98,6 +98,7 @@ export async function updateExpense(
     category: next.category,
     date: Timestamp.fromDate(next.date),
     accountId: next.accountId ? next.accountId : deleteField(),
+    ...(next.tagIds !== undefined ? { tagIds: next.tagIds.length ? next.tagIds : deleteField() } : {}),
   })
   // the previous account may have been deleted since: then there is nothing to give back
   const prevAccount = prev.accountId && (await getDoc(doc(db, 'accounts', prev.accountId))).exists() ? prev.accountId : undefined

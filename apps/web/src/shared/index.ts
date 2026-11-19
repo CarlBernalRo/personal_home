@@ -30,3 +30,4 @@ export * from './utils/householdAbono';
 export * from './utils/householdExpenseSettlement';
 export * from './types/family';
 export * from './types/reminder';
+export * from './types/tag';

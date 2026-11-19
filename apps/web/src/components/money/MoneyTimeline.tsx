@@ -13,6 +13,9 @@ import { AttachmentButton } from '@/components/pending/AttachmentButton'
 import { AccountChip, type AccountLite } from '@/components/ui/AccountChip'
 import { AppIcon } from '@/components/ui/AppIcon'
 import { Avatar } from '@/components/ui/Avatar'
+import { TagChip } from '@/components/ui/TagPicker'
+import { useTags } from '@/hooks/useTags'
+import { tagsOf, type Tag } from '@/shared'
 import { SERIES } from '@/components/dashboard/shared'
 
 /** Every kind of money movement the personal view mixes. */
@@ -57,6 +60,8 @@ export interface FlowItem {
   owner?: SharedOwner
   /** For a reminder: this date is already done. */
   done?: boolean
+  /** The user's tags it carries (an occasional spend carries its occasional's). */
+  tagIds?: string[]
   onEdit?: () => void
   onDelete?: () => void
 }
@@ -100,6 +105,7 @@ const ORDER: FlowItem['kind'][] = ['reminder', 'income', 'occasional', 'addition
  * state and the balance left after each), occasional and additional spends, household abonos and transfers.
  */
 export function MoneyTimeline({ bounds, expenses, paymentIndex, entries, items, showBudgets, onSelect, onOpenItem, periods = [], extras = [], variable, top, filtering, onClearFilter, accounts = [] }: Props) {
+  const { tags } = useTags()
   const today = new Date()
   const inRange = (d: Date) => d.getTime() >= bounds.start.getTime() && d.getTime() < bounds.end.getTime()
   const key = (d: Date) => startOfDay(d).getTime()
@@ -227,8 +233,8 @@ export function MoneyTimeline({ bounds, expenses, paymentIndex, entries, items, 
                     </div>
                   ))}
 
-                  {flows.filter((f) => f.kind === 'reminder').map((f) => <FlowRow key={f.id} item={f} accounts={accounts} onOpen={() => onOpenItem(f)} />)}
-                  {flows.filter((f) => f.kind === 'income').map((f) => <FlowRow key={f.id} item={f} accounts={accounts} onOpen={() => onOpenItem(f)} />)}
+                  {flows.filter((f) => f.kind === 'reminder').map((f) => <FlowRow key={f.id} item={f} accounts={accounts} onOpen={() => onOpenItem(f)} tags={tags} />)}
+                  {flows.filter((f) => f.kind === 'income').map((f) => <FlowRow key={f.id} item={f} accounts={accounts} onOpen={() => onOpenItem(f)} tags={tags} />)}
 
                   {fixed.map((entry) => {
                     const { fe, payment, arrears } = entry
@@ -263,6 +269,7 @@ export function MoneyTimeline({ bounds, expenses, paymentIndex, entries, items, 
                               <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider rounded px-1 py-0.5 border" style={{ color: SERIES.fixed, borderColor: SERIES.fixed + '66' }}>{fe.oneTime ? 'programado' : 'fijo'}</span>
                               {owner && <span className="family-tag ml-1.5 align-middle text-[9px] font-bold uppercase tracking-wider rounded px-1.5 py-0.5">de {owner.name}</span>}
                             </span>
+                            {!owner && <TagRow tags={tagsOf(fe.tagIds, tags)} />}
                             {paidOn && <span className="block text-[10px] font-mono text-brand-400">{payment?.auto ? 'debitado' : 'pagado'} el {paidOn}{paidOffDue(entry) && entry.due ? ` · vencía el ${format(entry.due, 'd MMM', { locale: es })}` : ''}</span>}
                             {!owner && <AccountChip account={accounts.find((a) => a.id === entryAccountId(entry))} planned={!payment} />}
                             {hasArrears && (
@@ -296,7 +303,7 @@ export function MoneyTimeline({ bounds, expenses, paymentIndex, entries, items, 
                     )
                   })}
 
-                  {flows.filter((f) => f.kind !== 'income' && f.kind !== 'reminder').map((f) => <FlowRow key={f.id} item={f} accounts={accounts} onOpen={() => onOpenItem(f)} />)}
+                  {flows.filter((f) => f.kind !== 'income' && f.kind !== 'reminder').map((f) => <FlowRow key={f.id} item={f} accounts={accounts} onOpen={() => onOpenItem(f)} tags={tags} />)}
                 </div>
 
                 {moved > 1 && (
@@ -316,7 +323,13 @@ export function MoneyTimeline({ bounds, expenses, paymentIndex, entries, items, 
 }
 
 /** One movement that isn't a fixed expense, coloured by its kind, with its own edit/delete when it has them. */
-function FlowRow({ item, accounts, onOpen }: { item: FlowItem; accounts: AccountLite[]; onOpen: () => void }) {
+/** The tags of a row, as small chips under its name. */
+function TagRow({ tags }: { tags: Tag[] }) {
+  if (tags.length === 0) return null
+  return <span className="mt-0.5 mb-0.5 flex flex-wrap gap-1">{tags.map((t) => <TagChip key={t.id} tag={t} />)}</span>
+}
+
+function FlowRow({ item, accounts, onOpen, tags }: { item: FlowItem; accounts: AccountLite[]; onOpen: () => void; tags: Tag[] }) {
   const kind = flowKind(item.kind)
   const Icon = kind.icon
   const color = item.history ? '#6b7280' : kind.color
@@ -352,6 +365,7 @@ function FlowRow({ item, accounts, onOpen }: { item: FlowItem; accounts: Account
             {owner && <span className="family-tag ml-1.5 align-middle text-[9px] font-bold uppercase tracking-wider rounded px-1.5 py-0.5 no-underline inline-block">de {owner.name}</span>}
           </span>
           {item.sub && <span className="block text-[10px] font-mono text-[#8a929a] sm:truncate">{item.sub}</span>}
+          {!item.owner && <TagRow tags={tagsOf(item.tagIds, tags)} />}
           {item.notes && <span className="block break-words text-[11px] italic text-[#9aa4ac]">{item.notes}</span>}
           {isTransfer
             ? <span className="block text-[10px] font-mono text-[#9aa4ac]">{acc?.name ?? 'Cuenta'} → {to?.name ?? 'Cuenta'}</span>

@@ -15,6 +15,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { withAttachment } from '@/lib/attachments'
 import { PERSONAL_CATEGORIES } from '@/shared'
 import type { SalaryState } from '@/hooks/useSalary'
+import { TagPicker } from '@/components/ui/TagPicker'
 
 const schema = z.object({
   description: z.string().min(1, 'Descripción requerida'),
@@ -35,6 +36,7 @@ export interface EditableSpend {
   date: Date
   accountId?: string
   notes?: string
+  tagIds?: string[]
   /** Registered against an occasional expense: the title says so. */
   occasional?: boolean
 }
@@ -54,6 +56,7 @@ export function ExpenseFormModal({ open, onClose, editing, salary }: Props) {
   const [accountId, setAccountId] = useState('')
   const [notes, setNotes] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  const [tagIds, setTagIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
 
   const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<FormData>({
@@ -68,10 +71,12 @@ export function ExpenseFormModal({ open, onClose, editing, salary }: Props) {
       reset({ description: editing.description, amount: editing.amount, category: editing.category || 'otro', date: format(editing.date, 'yyyy-MM-dd') })
       setAccountId(editing.accountId ?? '')
       setNotes(editing.notes ?? '')
+      setTagIds(editing.tagIds ?? [])
     } else {
       reset({ date: format(new Date(), 'yyyy-MM-dd'), category: 'otro', description: '', amount: undefined as any })
       setAccountId(salary.pickAccount())
       setNotes('')
+      setTagIds([])
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editing])
@@ -86,6 +91,7 @@ export function ExpenseFormModal({ open, onClose, editing, salary }: Props) {
         date:        new Date(data.date + 'T12:00:00'),
         accountId,
         notes,
+        tagIds,
       }
       if (editing) {
         await salary.editPersonalExpense(editing.id, values, { amount: editing.amount, accountId: editing.accountId })
@@ -116,6 +122,8 @@ export function ExpenseFormModal({ open, onClose, editing, salary }: Props) {
         <Input label="Fecha" type="date" {...register('date')} error={errors.date?.message} />
         <AccountSelect label="¿De qué cuenta sale el dinero?" accounts={salary.accounts} value={accountId} onChange={setAccountId} outflow={Number(watch('amount')) || 0} />
         <ObservationField value={notes} onChange={setNotes} />
+        {!editing?.occasional && <TagPicker value={tagIds} onChange={setTagIds} />}
+        {editing?.occasional && <p className="text-[10px] text-[#8a929a]">Las etiquetas de un gasto ocasional vienen del ocasional al que pertenece (se cambian en su configuración).</p>}
         {!editing && <AttachmentPicker file={file} onChange={setFile} />}
         <div className="flex gap-2 pt-2">
           <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>Cancelar</Button>

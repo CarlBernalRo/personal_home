@@ -20,6 +20,7 @@ import { PayAccountForm } from '@/components/profile/PayAccountForm'
 import { UserPhoto } from '@/components/ui/UserPhoto'
 import { TelegramForm } from '@/components/profile/TelegramForm'
 import { FamilyForm } from '@/components/profile/FamilyForm'
+import { TagsForm } from '@/components/profile/TagsForm'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { MobileCollapse } from '@/components/ui/MobileCollapse'
 import { useLayoutStore } from '@/store/layout'
@@ -31,12 +32,13 @@ const schema = z.object({
 })
 type FormData = z.infer<typeof schema>
 
-type Tab = 'datos' | 'sueldo' | 'pagos' | 'familia' | 'avisos'
+type Tab = 'datos' | 'sueldo' | 'pagos' | 'etiquetas' | 'familia' | 'avisos'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'datos',  label: 'Datos personales' },
   { id: 'sueldo', label: 'Sueldo y períodos' },
   { id: 'pagos',  label: 'Cuenta para pagos' },
+  { id: 'etiquetas', label: 'Etiquetas' },
   { id: 'familia', label: 'Familia' },
   { id: 'avisos', label: 'Avisos' },
 ]
@@ -51,7 +53,7 @@ export default function ProfilePage() {
   const salary             = useSalary()
   const [params]           = useSearchParams()
   const [saving, setSaving] = useState(false)
-  const [tab, setTab]      = useState<Tab>((['datos', 'sueldo', 'pagos', 'familia', 'avisos'] as const).find((t) => t === params.get('tab')) ?? 'datos')
+  const [tab, setTab]      = useState<Tab>((['datos', 'sueldo', 'pagos', 'etiquetas', 'familia', 'avisos'] as const).find((t) => t === params.get('tab')) ?? 'datos')
 
   const householdId = (profile as any)?.householdId as string | undefined
 
@@ -269,6 +271,7 @@ export default function ProfilePage() {
 
           {tab === 'sueldo' && <PayScheduleForm />}
           {tab === 'pagos' && <PayAccountForm />}
+          {tab === 'etiquetas' && <TagsForm />}
           {tab === 'familia' && <FamilyForm />}
           {tab === 'avisos' && <TelegramForm />}
         </CurvedScrollContainer>
