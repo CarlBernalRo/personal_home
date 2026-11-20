@@ -15,7 +15,7 @@ import type { Keyboard, Telegram } from './telegram'
 import { EMPTY_EXTRACTED, b64, type Extracted } from './vision'
 
 export type Kind = 'income' | 'fixed' | 'occasional' | 'abono'
-type Step = 'amount' | 'date' | 'kind' | 'concept' | 'fixed' | 'budget' | 'category' | 'household' | 'creditor' | 'target' | 'account' | 'comment' | 'confirm'
+type Step = 'amount' | 'date' | 'kind' | 'family' | 'concept' | 'fixed' | 'budget' | 'category' | 'household' | 'creditor' | 'target' | 'account' | 'comment' | 'confirm'
 
 export interface FlowData {
   amount?: number
@@ -36,6 +36,9 @@ export interface FlowData {
   creditorLabel?: string
   targetDebtId?: string
   targetLabel?: string
+  /** Money sent to / received from a family member: who (null = the person said it wasn't family). */
+  familyWith?: string | null
+  familyName?: string
   /** null = the person chose "sin cuenta" */
   accountId?: string | null
   accountLabel?: string
@@ -56,6 +59,8 @@ export interface Flow {
   messageId?: number
   /** The (small) copy of the screenshot kept in `attachments`; it follows the movement or is deleted with the flow. */
   attachmentId?: string
+  /** The person's family (the other members), read when the flow starts: a transfer with one of them reaches them too. */
+  family?: { id: string; myName: string; members: { uid: string; name: string }[] } | null
   updatedAt: Date
 }
 
@@ -140,11 +145,13 @@ export async function clearFlow(d: FlowDeps, chatId: number) {
 // ── the steps ────────────────────────────────────────────────────────────────────────────────────────────────────
 function stepsOf(f: Flow): Step[] {
   const head: Step[] = ['amount', 'date', 'kind']
+  // with a family, money that comes in or goes out may be a transfer with one of them
+  const fam: Step[] = f.family?.members.length ? ['family'] : []
   switch (f.data.kind) {
-    case 'income': return [...head, 'concept', 'account', 'comment', 'confirm']
+    case 'income': return [...head, ...fam, ...(f.data.familyWith ? [] : (['concept'] as Step[])), 'account', 'comment', 'confirm']
     case 'fixed': return [...head, 'fixed', 'account', 'comment', 'confirm']
     case 'abono': return [...head, 'household', 'creditor', 'target', 'account', 'comment', 'confirm']
-    case 'occasional': return [...head, 'budget', ...(f.data.budgetId === 'other' ? (['concept', 'category'] as Step[]) : []), 'account', 'comment', 'confirm']
+    case 'occasional': return [...head, ...fam, ...(f.data.familyWith ? [] : (['budget', ...(f.data.budgetId === 'other' ? (['concept', 'category'] as Step[]) : [])] as Step[])), 'account', 'comment', 'confirm']
     default: return head
   }
 }
@@ -184,6 +191,7 @@ function recap(f: Flow): string {
   if (d.amount) lines.push(`💵 Valor: <b>${cop(d.amount)}</b>`)
   if (d.date) lines.push(`📅 Fecha: <b>${dateLabel(d.date)}</b>`)
   if (d.kind) lines.push(`🏷 Tipo: <b>${KIND_LABEL[d.kind]}</b>`)
+  if (d.familyWith && d.familyName) lines.push(`💞 ${d.kind === 'income' ? 'Te lo envió' : 'Se lo enviaste a'}: <b>${esc(d.familyName)}</b> (familia)`)
   if (d.fixedLabel) lines.push(`📌 Gasto fijo: <b>${esc(d.fixedLabel)}</b>`)
   if (d.budgetLabel) lines.push(`🛒 Presupuesto: <b>${esc(d.budgetLabel)}</b>`)
   if (d.householdLabel) lines.push(`🏠 Hogar: <b>${esc(d.householdLabel)}</b>`)
@@ -231,6 +239,16 @@ async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboar
       return {
         text: `${head}${body}¿Qué tipo de movimiento es?${hint}`,
         kb: [[{ text: '💰 Ingreso', data: 'f:k:income' }], [{ text: '📌 Gasto fijo', data: 'f:k:fixed' }], [{ text: '🛒 Gasto ocasional', data: 'f:k:occasional' }], [{ text: '🏠 Abono al hogar', data: 'f:k:abono' }], NAV[0]],
+      }
+    }
+    case 'family': {
+      const income = f.data.kind === 'income'
+      // the screenshot names one of them: only a hint, the person decides
+      const text = plain(`${f.extracted.counterparty ?? ''} ${f.extracted.concept ?? ''}`)
+      const named = (f.family?.members ?? []).find((m) => { const first = plain(m.name).split(/\s+/)[0]; return first.length >= 3 && text.includes(first) })
+      return {
+        text: `${head}${body}${income ? '¿Te lo envió alguien de tu <b>familia</b>?' : '¿Es una transferencia a alguien de tu <b>familia</b>?'}\n<i>Si es así, a esa persona le llega en su app para confirmarlo, con esta misma captura: no tiene que registrarlo.</i>${named ? `\n<i>La captura menciona a <b>${esc(named.name)}</b>.</i>` : ''}`,
+        kb: [...(f.family?.members ?? []).map((m) => [{ text: `💞 ${clip(m.name, 30)}`, data: `f:fam:${m.uid}` }]), [{ text: income ? 'No, de otra persona' : 'No, es otro gasto', data: 'f:fam:none' }], NAV[0]],
       }
     }
     case 'concept': {
@@ -399,7 +417,17 @@ export async function startFromImage(d: FlowDeps, userId: string, chatId: number
   } else if (kept.status === 'fulfilled' && !kept.value) {
     note += '📎 No guardé la imagen porque pesa mucho. Envíala como <b>foto</b> (no como archivo) para guardarla.\n\n'
   }
-  const flow: Flow = { userId, chatId, step: 'amount', history: [], awaiting: null, editing: false, extracted, data: {}, messageId, attachmentId, updatedAt: new Date(clock(d)) }
+  // the person's family, if any: a transfer with one of them can reach them too
+  let family: Flow['family'] = null
+  try {
+    const fam = (await d.db.query('families', [{ field: 'members', op: 'ARRAY_CONTAINS', value: userId }]))[0]
+    if (fam) {
+      const names = (fam.memberNames ?? {}) as Record<string, string>
+      const members = ((fam.members ?? []) as string[]).filter((u) => u !== userId).map((u) => ({ uid: u, name: (names[u] ?? 'Familiar').split(' ')[0] }))
+      if (members.length) family = { id: fam.id, myName: (names[userId] ?? '').split(' ')[0], members }
+    }
+  } catch (e) { console.error('family:', (e as Error)?.message) }
+  const flow: Flow = { userId, chatId, step: 'amount', history: [], awaiting: null, editing: false, extracted, data: {}, messageId, attachmentId, family, updatedAt: new Date(clock(d)) }
   enter(flow)
   const { text, kb } = await render(d, flow)
   await d.tg.edit(chatId, messageId, note + text, kb)
@@ -446,8 +474,26 @@ export async function onCallback(d: FlowDeps, userId: string, cb: { id: string; 
         delete d0.concept; delete d0.category; delete d0.fixedExpenseId; delete d0.occMonth; delete d0.fixedLabel
         delete d0.budgetId; delete d0.budgetLabel; delete d0.accountId; delete d0.accountLabel
         delete d0.householdId; delete d0.householdLabel; delete d0.creditorId; delete d0.creditorLabel; delete d0.targetDebtId; delete d0.targetLabel
+        delete d0.familyWith; delete d0.familyName
       }
       d0.kind = a as Kind
+      advance(f)
+      break
+    }
+    case 'fam': {
+      if (f.step !== 'family') break
+      const wasFamily = !!d0.familyWith
+      if (a === 'none') {
+        d0.familyWith = null; delete d0.familyName
+        // what the family choice had filled in no longer applies
+        if (wasFamily) { delete d0.concept; delete d0.category; delete d0.budgetId; delete d0.budgetLabel }
+      } else {
+        const m = f.family?.members.find((x) => x.uid === a)
+        if (!m) { notice = 'Esa persona ya no está en tu familia'; break }
+        d0.familyWith = m.uid; d0.familyName = m.name
+        if (d0.kind === 'income') d0.concept = `Transferencia de ${m.name}`
+        else { d0.budgetId = 'other'; delete d0.budgetLabel; d0.concept = `Transferencia a ${m.name}`; d0.category = 'transferencias' }
+      }
       advance(f)
       break
     }
@@ -578,7 +624,7 @@ async function send(d: FlowDeps, f: Flow) {
   if (missing) { await d.tg.edit(f.chatId, f.messageId!, `Falta ${missing}. Usa ⬅️ Atrás para completarlo.`, NAV); return }
 
   const [y, m, dd] = x.date!.split('-').map(Number)
-  await d.db.add('pendingMovements', {
+  const ownId = await d.db.add('pendingMovements', {
     userId: f.userId,
     kind: x.kind,
     amount: x.amount,
@@ -598,13 +644,46 @@ async function send(d: FlowDeps, f: Flow) {
     status: 'pending',
     read: { amount: f.extracted.amount, date: f.extracted.date, concept: f.extracted.concept, counterparty: f.extracted.counterparty, reference: f.extracted.reference, app: f.extracted.app },
     attachmentId: f.attachmentId,
+    ...(x.familyWith && f.family ? { familyTransfer: { with: x.familyWith, name: x.familyName ?? '', direction: x.kind === 'income' ? 'in' : 'out', familyId: f.family.id } } : {}),
     createdAt: new Date(clock(d)),
   })
+  // a transfer with a family member: their side is created right away, with the same screenshot, so they only confirm it
+  let forwarded = ''
+  if (x.familyWith && f.family) {
+    try {
+      const me = f.family.myName || 'Un familiar'
+      const out = x.kind !== 'income' // I sent it: it is their income; they sent it: it is their spend
+      if (f.attachmentId) await d.db.patch(`attachments/${f.attachmentId}`, { sharedWith: [x.familyWith] }).catch(() => {})
+      // fixed id (the app uses the same): their side of this movement can only exist once
+      await d.db.set(`pendingMovements/fam_${ownId}_${x.familyWith}`, {
+        userId: x.familyWith,
+        kind: out ? 'income' : 'occasional',
+        amount: x.amount,
+        date: new Date(Date.UTC(y, m - 1, dd, 5, 0, 0)),
+        concept: out ? `Transferencia de ${me}` : `Transferencia a ${me}`,
+        ...(out ? {} : { category: 'transferencias' }),
+        ...(x.comment ? { comment: x.comment } : {}),
+        ...(f.attachmentId ? { attachmentId: f.attachmentId } : {}),
+        source: 'family', fromUid: f.userId, fromName: me, familyId: f.family.id,
+        status: 'pending', createdAt: new Date(clock(d)),
+      })
+      await d.db.add('notifications', {
+        userId: x.familyWith, fromUid: f.userId, zone: 'familia', severity: 'info',
+        title: out ? `${me} te transfirió dinero` : `${me} registró que le transferiste dinero`,
+        body: `${cop(x.amount!)}. ${out ? 'Confirma en qué cuenta te llegó' : 'Confirma de qué cuenta salió'} y queda registrado: no tienes que subir la captura.`,
+        link: '/pendientes', read: false, createdAt: new Date(clock(d)),
+      })
+      forwarded = `\n\n💞 A <b>${esc(x.familyName ?? '')}</b> le llegó a su app para confirmarlo${out ? ' como ingreso' : ' como gasto'}, con esta misma captura.`
+    } catch (e: any) {
+      console.error('family transfer:', e?.message)
+      forwarded = `\n\n⚠️ No se pudo avisar a ${esc(x.familyName ?? 'tu familiar')}: puede registrarlo desde su app.`
+    }
+  }
   await d.db.remove(path(f.chatId)).catch(() => {})
   const pending = (await d.db.query('pendingMovements', [{ field: 'userId', op: 'EQUAL', value: f.userId }])).filter((p) => p.status === 'pending').length
   await d.tg.edit(
     f.chatId, f.messageId!,
-    `✅ <b>Enviado a la app.</b>\n\n${recap(f)}Queda <b>pendiente por confirmar</b>: ábrela y confírmalo para que se registre. Tienes ${pending} movimiento${pending === 1 ? '' : 's'} pendiente${pending === 1 ? '' : 's'}.`,
+    `✅ <b>Enviado a la app.</b>\n\n${recap(f)}Queda <b>pendiente por confirmar</b>: ábrela y confírmalo para que se registre. Tienes ${pending} movimiento${pending === 1 ? '' : 's'} pendiente${pending === 1 ? '' : 's'}.${forwarded}`,
     [],
   )
 }

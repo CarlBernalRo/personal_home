@@ -326,11 +326,21 @@ const tellRecipient = (t: TransferInput) => createNotification({
  * A movement that came from Telegram turned into a transfer to a family member: the sender's side is registered as a
  * spend from it (by the caller), and here the receipt is shared and the recipient gets their pending income.
  */
-export async function forwardToFamily(t: TransferInput) {
+export async function forwardToFamily(t: TransferInput, sourceId: string): Promise<boolean> {
   if (t.attachmentId) await updateDoc(doc(db, 'attachments', t.attachmentId), { sharedWith: arrayUnion(t.to) }).catch(() => {})
-  await setDoc(doc(collection(db, 'pendingMovements')), recipientPending(t))
+  // one fixed id per original movement and recipient (the bot uses the same one): if their side already exists, the
+  // rules refuse to create it again, so nobody gets the same transfer twice
+  try {
+    await setDoc(doc(db, 'pendingMovements', familyPendingId(sourceId, t.to)), recipientPending(t))
+  } catch {
+    return false
+  }
   await tellRecipient(t)
+  return true
 }
+
+/** The id of a family member's side of a transfer that came from one of the sender's movements. */
+export const familyPendingId = (sourceId: string, to: string) => `fam_${sourceId}_${to}`
 
 /** The sender deleted the spend: the recipient's income that was still waiting goes away too. */
 export async function withdrawFamilyTransfer(pendingId: string) {

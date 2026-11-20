@@ -72,7 +72,7 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
   const { user } = useAuth()
   const myName = useDisplayName() || 'Un familiar'
   const relatives = family ? family.members.filter((u) => u !== user?.uid) : []
-  const canForward = pm.kind === 'occasional' && pm.source !== 'family' && relatives.length > 0
+  const canForward = pm.kind === 'occasional' && pm.source !== 'family' && !pm.familyTransfer && relatives.length > 0
   const [forwardTo, setForwardTo] = useState<string | null>(null)
   const k = KIND[pm.kind]
   const Icon = k.icon
@@ -81,10 +81,11 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
   async function confirm() {
     setBusy('confirm')
     try {
-      if (forwardTo && family && user) {
+      // a movement whose family side was already sent (from Telegram) is only confirmed, never forwarded again
+      if (forwardTo && family && user && !pm.familyTransfer) {
         await confirmPendingMovement({ ...pm, category: 'transferencias', concept: pm.concept || `Transferencia a ${family.memberNames[forwardTo] ?? ''}` }, accountId)
-        await forwardToFamily({ family, from: user.uid, fromName: myName, to: forwardTo, amount: pm.amount, date: dateOf(pm.date), notes: pm.comment, attachmentId: pm.attachmentId })
-        showToast(`Transferencia registrada: a ${family.memberNames[forwardTo] ?? 'tu familiar'} le llegó para confirmarla`, 'success')
+        const sent = await forwardToFamily({ family, from: user.uid, fromName: myName, to: forwardTo, amount: pm.amount, date: dateOf(pm.date), notes: pm.comment, attachmentId: pm.attachmentId }, pm.id)
+        showToast(sent ? `Transferencia registrada: a ${family.memberNames[forwardTo] ?? 'tu familiar'} le llegó para confirmarla` : 'Transferencia registrada (ya le había llegado a tu familiar)', 'success')
       } else {
         await confirmPendingMovement(pm, accountId)
         showToast(`${k.label} registrado`, 'success')
@@ -126,7 +127,18 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
             {pm.kind === 'abono' && (<><span aria-hidden="true">·</span><span>{pm.targetDebtId ? 'a una deuda elegida' : 'se reparte entre sus deudas, la más antigua primero'}</span></>)}
             {pm.source === 'family' && (<><span aria-hidden="true">·</span><span className="inline-flex items-center gap-1 text-rose-300"><Heart size={10} aria-hidden="true" /> De {pm.fromName ?? 'tu familia'} · familia</span></>)}
           </p>
-          {pm.source === 'family' && <p className="mt-1.5 text-[11px] text-[#9aa4ac]">{pm.fromName ?? 'Un familiar'} registró que te transfirió este dinero. Elige en qué cuenta te llegó y confírmalo: no tienes que registrarlo tú.</p>}
+          {pm.source === 'family' && (
+            <p className="mt-1.5 text-[11px] text-[#9aa4ac]">
+              {pm.kind === 'income'
+                ? `${pm.fromName ?? 'Un familiar'} registró que te transfirió este dinero. Elige en qué cuenta te llegó y confírmalo: no tienes que registrarlo tú.`
+                : `${pm.fromName ?? 'Un familiar'} registró que le transferiste este dinero. Elige de qué cuenta salió y confírmalo: no tienes que registrarlo tú.`}
+            </p>
+          )}
+          {pm.familyTransfer && (
+            <p className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-rose-200">
+              <Heart size={11} aria-hidden="true" /> A {pm.familyTransfer.name} ya le llegó su parte para confirmarla{pm.familyTransfer.direction === 'out' ? ' como ingreso' : ' como gasto'}.
+            </p>
+          )}
           {pm.comment && <p className="mt-2 rounded-lg border border-white/10 bg-[#0a1f2f] px-2.5 py-1.5 text-xs text-[#c7ccd1]">💬 {pm.comment}</p>}
         </div>
       </div>

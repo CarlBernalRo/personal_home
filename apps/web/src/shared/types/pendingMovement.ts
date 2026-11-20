@@ -37,6 +37,8 @@ export interface PendingMovement {
   fromUid?: string;
   fromName?: string;
   familyId?: string;
+  /** A movement from Telegram marked as a transfer with a family member: their side was already sent to them. */
+  familyTransfer?: { with: string; name: string; direction: 'in' | 'out'; familyId: string };
   status: 'pending' | 'confirmed' | 'discarded';
   /** What the screenshot said, kept for reference (the person may have corrected it). */
   read?: { amount?: number | null; date?: string | null; concept?: string | null; counterparty?: string | null; reference?: string | null; app?: string | null };
