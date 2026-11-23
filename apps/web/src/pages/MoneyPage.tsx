@@ -5,13 +5,13 @@ import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
 import {
-  ArrowLeftRight, Banknote, BarChart3, Bell, CalendarDays, Heart, CalendarPlus, ChevronLeft, ChevronRight, List, Plus, RotateCcw, Settings, ShoppingBag, Wallet, X,
+  ArrowLeftRight, Banknote, BarChart3, Bell, CalendarDays, Heart, CalendarPlus, ChevronLeft, ChevronRight, LayoutGrid, List, PieChart, Plus, RotateCcw, Settings, ShoppingBag, Wallet, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { SkeletonList } from '@/components/ui/Skeleton'
 import { SegmentedBar } from '@/components/ui/SegmentedBar'
 import { ProgressBar } from '@/components/ui/ProgressBar'
-import { MobileCollapse } from '@/components/ui/MobileCollapse'
+import { MobileBlockTitle, MobileSectionBar, useMobileSections } from '@/components/ui/MobileSections'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { MultiSelect } from '@/components/ui/MultiSelect'
 import { AppIcon } from '@/components/ui/AppIcon'
@@ -78,6 +78,8 @@ export default function MoneyPage() {
   const householdList = useMyHouseholds(true)
   const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
   const [params, setParams] = useSearchParams()
+  // on phones one section at a time; arriving with a filter in the URL (an account, a kind) goes straight to the movements
+  const sections = useMobileSections<'resumen' | 'movimientos' | 'analisis'>(params.get('tipo') || params.get('cuenta') ? 'movimientos' : 'resumen')
   const { family } = useFamily()
   // what family members share with me: their fixed expenses join my timeline, with their face, read only
   const [shared, setShared] = useState<{ expenses: any[]; payments: any[] }>({ expenses: [], payments: [] })
@@ -455,13 +457,25 @@ export default function MoneyPage() {
 
   return (
     <div className="flex flex-col gap-5 fade-in text-[#f3f5f6] lg:flex-row lg:h-full lg:min-h-0">
+      <MobileSectionBar
+        label="Secciones de Mi dinero"
+        anchor={sections.anchor}
+        active={sections.active}
+        onOpen={sections.open}
+        sections={[
+          { id: 'resumen', label: 'Resumen', Icon: LayoutGrid },
+          { id: 'movimientos', label: 'Movimientos', Icon: List },
+          { id: 'analisis', label: 'Análisis', Icon: PieChart },
+        ]}
+      />
+
       {/* Left pane: the salary, what the period added up to, the fixed expenses' progress and where the spends went */}
       <CurvedScrollContainer
-        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, leftCollapsed && 'lg:hidden')}
+        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, leftCollapsed && 'lg:hidden', sections.only('resumen', 'analisis'))}
         corners="both"
         {...scrollProps}
       >
-        <div>
+        <div className={sections.only('resumen')}>
           <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1 notch-sm bg-white/[0.04] border border-white/[0.08]">
             <Wallet size={11} className="text-brand-400" />
             <span className="font-pixel text-[8px] text-brand-400 uppercase tracking-widest">Personal</span>
@@ -470,13 +484,13 @@ export default function MoneyPage() {
           <p className="hidden lg:block text-xs text-[#9aa4ac] mt-1">Ingresos, gastos fijos, ocasionales y adicionales del período, en un solo lugar.</p>
         </div>
 
-        <MobileCollapse title="Sueldo y dinero en cuenta" openWhen={!!salary.pending}>
+        <div className={clsx('space-y-5', sections.only('resumen'))}>
           <SalaryPanel salary={salary} expenses={expenses} paymentIndex={paymentIndex} />
           {outlook && <FixedOutlook cash={outlook.cash} projection={outlook.projection} />}
-        </MobileCollapse>
+        </div>
 
-        {/* On phones the period's summary and the fixed expenses' progress fold behind one header, like the other cards */}
-        <MobileCollapse title="Resumen del período">
+        {/* The period in numbers and the fixed expenses' progress: tapping a line filters the movements (and, on phones, goes there) */}
+        <div className={clsx('space-y-5', sections.only('resumen'))}>
           {/* The period in numbers: each line filters the timeline to that kind */}
           <div className="rounded-2xl border border-white/10 bg-[#0a1f2f] p-4 sm:p-5 space-y-2 shadow-xl">
             <div className="flex items-center justify-between">
@@ -491,7 +505,7 @@ export default function MoneyPage() {
                   <li key={r.kind}>
                     <button
                       type="button"
-                      onClick={() => setKinds(on ? [] : [r.kind])}
+                      onClick={() => { setKinds(on ? [] : [r.kind]); if (!on) sections.open('movimientos') }}
                       aria-pressed={on}
                       title={on ? 'Ver todos los movimientos' : `Ver solo ${r.label.toLowerCase()}`}
                       className={clsx('w-full flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-xs transition', on ? 'bg-white/10' : 'hover:bg-white/5')}
@@ -534,13 +548,13 @@ export default function MoneyPage() {
                 Pagado <span className="font-mono font-bold text-brand-300">{formatCOP(fixedPaid)}</span>
                 {fixedOwed > 0 && <> · falta <span className="font-mono font-bold text-[#f0fae8]">{formatCOP(fixedOwed)}</span></>}
               </p>
-              <SegmentedBar label="Estado de los gastos fijos del período" parts={progressParts} total={progressTotal} activeKey={statusFilter} onSelect={(k) => setStatusFilter((cur) => (cur === k ? null : (k as StatusKey)))} />
+              <SegmentedBar label="Estado de los gastos fijos del período" parts={progressParts} total={progressTotal} activeKey={statusFilter} onSelect={(k) => { if (statusFilter !== k) sections.open('movimientos'); setStatusFilter((cur) => (cur === k ? null : (k as StatusKey))) }} />
               <ul className="flex flex-wrap gap-x-2 gap-y-1.5">
                 {progressParts.map((p) => (
                   <li key={p.key}>
                     <button
                       type="button"
-                      onClick={() => setStatusFilter((cur) => (cur === p.key ? null : p.key))}
+                      onClick={() => { if (statusFilter !== p.key) sections.open('movimientos'); setStatusFilter((cur) => (cur === p.key ? null : p.key)) }}
                       aria-pressed={statusFilter === p.key}
                       className={clsx('flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition', statusFilter === p.key ? 'border-white/40 bg-white/10' : 'border-transparent hover:bg-white/5', p.count === 0 && statusFilter !== p.key && 'opacity-40')}
                     >
@@ -553,10 +567,10 @@ export default function MoneyPage() {
               </ul>
             </div>
           )}
-        </MobileCollapse>
+        </div>
 
         {catSummary.length > 0 && (
-          <MobileCollapse title="Gastos por categoría">
+          <div className={sections.only('analisis')}>
             <div className="rounded-2xl border border-white/10 bg-[#0a1f2f] p-4 sm:p-5 space-y-3 shadow-xl">
               <p className="font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold">Gastos por categoría</p>
               <p className="text-[10px] text-[#5f6a72] -mt-2">Adicionales y ocasionales. Toca una para ver solo esos gastos.</p>
@@ -565,7 +579,7 @@ export default function MoneyPage() {
                   const pct = catBase > 0 ? Math.round((c.total / catBase) * 100) : 0
                   const on = categories.includes(c.id)
                   return (
-                    <button key={c.id} type="button" onClick={() => toggleCategory(c.id)} aria-pressed={on} className={clsx('w-full space-y-1.5 rounded-lg px-2 py-1.5 text-left transition', on ? 'bg-white/10' : 'hover:bg-white/5')}>
+                    <button key={c.id} type="button" onClick={() => { toggleCategory(c.id); if (!on) sections.open('movimientos') }} aria-pressed={on} className={clsx('w-full space-y-1.5 rounded-lg px-2 py-1.5 text-left transition', on ? 'bg-white/10' : 'hover:bg-white/5')}>
                       <span className="flex items-center justify-between text-xs">
                         <span className="text-[#f0fae8] font-semibold flex items-center gap-2"><AppIcon name={c.icon} size={15} className="text-brand-300" />{c.label}</span>
                         <span className="flex items-center gap-2">
@@ -579,17 +593,18 @@ export default function MoneyPage() {
                 })}
               </div>
             </div>
-          </MobileCollapse>
+          </div>
         )}
 
-        <MobileCollapse title="Proyección, débitos y pausados">
+        <div className={clsx('space-y-5', sections.only('analisis'))}>
+          <MobileBlockTitle>Proyección, débitos y pausados</MobileBlockTitle>
           {outlook && <AutoManualCard projection={outlook.projection} />}
-          <PausedNotesCard expenses={expenses} onManage={() => setView('config')} />
-        </MobileCollapse>
+          <PausedNotesCard expenses={expenses} onManage={() => { setView('config'); sections.open('movimientos') }} />
+        </div>
       </CurvedScrollContainer>
 
       {/* Right pane: view, period and actions on top; filters; then the timeline, the calendar or the configuration */}
-      <div className="min-w-0 flex flex-col gap-4 lg:flex-1 lg:min-h-0">
+      <div className={clsx('min-w-0 flex flex-col gap-4 lg:flex-1 lg:min-h-0', sections.only('movimientos'))}>
         <div className="flex flex-wrap items-center justify-center gap-3 flex-shrink-0 sm:grid sm:grid-cols-[1fr_auto_1fr]">
           <div className="flex gap-1 p-1 basis-full justify-center sm:basis-auto sm:justify-self-start bg-[#0d263a] border border-white/[0.06] rounded-xl text-xs" role="group" aria-label="Vista">
             {([['list', 'Lista', List], ['calendar', 'Calendario', CalendarDays], ['report', 'Reporte', BarChart3]] as const).map(([id, label, Icon]) => (

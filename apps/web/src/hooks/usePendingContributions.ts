@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
-import { getHouseholdIds, getHouseholds, subscribeHouseholdExpenses } from '@/lib/firestore'
+import { getHouseholdIds, getHouseholds, subscribePendingContributionExpenses, ensurePendingContributorsBackfilled } from '@/lib/firestore'
 
 /** What someone else declared I put into a shared household expense: nothing is real until I confirm or reject it. */
 export interface PendingContributionItem {
@@ -25,7 +25,8 @@ export function usePendingContributions() {
 
   useEffect(() => {
     if (!user || ids.length === 0) { setExpenses({}); return }
-    const stops = ids.map((id) => subscribeHouseholdExpenses(id, (rows) => setExpenses((prev) => ({ ...prev, [id]: rows })), () => setExpenses((prev) => ({ ...prev, [id]: [] }))))
+    ids.forEach(ensurePendingContributorsBackfilled)
+    const stops = ids.map((id) => subscribePendingContributionExpenses(id, user.uid, (rows) => setExpenses((prev) => ({ ...prev, [id]: rows })), () => setExpenses((prev) => ({ ...prev, [id]: [] }))))
     return () => stops.forEach((stop) => stop())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.uid, idsKey])

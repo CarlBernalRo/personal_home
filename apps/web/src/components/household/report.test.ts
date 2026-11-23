@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import { settleExpenseContributions } from '@/shared'
 import { buildHouseholdReport, groupMessage, personMessage } from './report'
+
+/** The debts the app writes for an expense once every contribution is confirmed (like createHouseholdExpense does). */
+const edgesFor = (exps: any[]) => exps.flatMap((e) => {
+  const cs = (e.contributions ?? []) as any[]
+  if (cs.some((c) => c.status !== 'confirmed')) return []
+  return settleExpenseContributions(e.shares.map((s: any) => ({ memberId: s.memberId, amount: s.amount })), cs.map((c) => ({ memberId: c.memberId, amount: c.amount })))
+    .map((x, i) => ({ id: `${e.id}-${i}`, tipo: 'Deuda', debtor: x.debtor, creditor: x.creditor, amount: x.amount, expenseId: e.id, date: e.date }))
+})
 
 const members = ['ale', 'lenin', 'isabel']
 const names: Record<string, string> = { ale: 'Ale', lenin: 'Lenin', isabel: 'Isabel' }
@@ -14,7 +23,7 @@ const expense = {
 const abono = (id: string, debtor: string, creditor: string | null, amount: number) => ({ id, tipo: 'Abono', debtor, creditor, amount })
 
 function report(debts: any[], expenses: any[] = [expense], guests = ['lenin', 'isabel']) {
-  return buildHouseholdReport({ name: 'Viaje', members, guestIds: guests, nameOf, expenses, debts, generatedAt: d(10) })
+  return buildHouseholdReport({ name: 'Viaje', members, guestIds: guests, nameOf, expenses, debts: [...edgesFor(expenses), ...debts], generatedAt: d(10) })
 }
 
 describe('buildHouseholdReport', () => {
@@ -47,7 +56,7 @@ describe('buildHouseholdReport', () => {
     // three people, Ale fronted 300: Lenin and Isabel each pay her 100. Shared at t=1000.
     const frozen = { atMs: 1000, payments: [{ from: 'lenin', to: 'ale', amount: 100 }, { from: 'isabel', to: 'ale', amount: 100 }] }
     const build = (debts: any[], expenses: any[] = [expense]) =>
-      buildHouseholdReport({ name: 'Viaje', members, guestIds: [], nameOf, expenses, debts, frozenPlan: frozen })
+      buildHouseholdReport({ name: 'Viaje', members, guestIds: [], nameOf, expenses, debts: [...edgesFor(expenses), ...debts], frozenPlan: frozen })
     const plan = (r: ReturnType<typeof build>) => r.plan.map((x) => [x.fromName, x.toName, x.amount])
     const at = (ms: number, a: any) => ({ ...a, createdAt: new Date(ms) })
 
@@ -101,11 +110,43 @@ describe('buildHouseholdReport', () => {
     })
   })
 
-  it('does not count a contribution nobody confirmed yet, and flags it', () => {
+  it('does not count a contribution nobody confirmed yet — nobody owes anything for it until then — and flags it', () => {
     const unconfirmed = { ...expense, contributions: [{ memberId: 'ale', amount: 300, status: 'pending', edges: [] }] }
     const r = report([], [unconfirmed], [])
-    expect(r.people.find((p) => p.uid === 'ale')).toMatchObject({ put: 0, putPending: 300 })
+    expect(r.people.find((p) => p.uid === 'ale')).toMatchObject({ put: 0, putPending: 300, position: 0 })
+    expect(r.people.find((p) => p.uid === 'lenin')).toMatchObject({ share: 100, position: 0 })
+    expect(r.plan).toEqual([])
+    expect(r.balanced).toBe(true)
     expect(r.unconfirmed).toBe(1)
+    expect(r.checks).toMatchObject([{ expenseId: 'e1', reason: 'pending' }])
+    // the account still adds up: the part waiting for confirmation is its own line
+    const lenin = r.people.find((p) => p.uid === 'lenin')!
+    expect(lenin.summary).toContain('Gastos con aportes por confirmar')
+  })
+
+  it('counts loans, which have no expense behind them', () => {
+    const loan = { id: 'l1', tipo: 'Deuda', debtor: 'lenin', creditor: 'ale', lender: 'ale', loanId: 'L', amount: 500, date: d(9) }
+    const r = report([loan])
+    expect(r.people.find((p) => p.uid === 'lenin')).toMatchObject({ borrowed: 500, position: -600 })
+    expect(r.people.find((p) => p.uid === 'ale')).toMatchObject({ lent: 500, position: 700 })
+    expect(r.people.find((p) => p.uid === 'lenin')!.summary).toContain('− Le prestaron: $500')
+  })
+
+  it('flags an expense whose registered debts do not match it, without changing what was really registered', () => {
+    // the debts say Lenin owes Ale 90, but the expense says 100
+    const drifted = [{ id: 'x', tipo: 'Deuda', debtor: 'lenin', creditor: 'ale', amount: 90, expenseId: 'e1', date: d(8) }, { id: 'y', tipo: 'Deuda', debtor: 'isabel', creditor: 'ale', amount: 100, expenseId: 'e1', date: d(8) }]
+    const r = buildHouseholdReport({ name: 'Viaje', members, guestIds: [], nameOf, expenses: [expense], debts: drifted })
+    expect(r.checks).toMatchObject([{ expenseId: 'e1', reason: 'drift', people: [{ uid: 'ale', expected: 200, recorded: 190 }, { uid: 'lenin', expected: -100, recorded: -90 }] }])
+    expect(r.people.find((p) => p.uid === 'lenin')!.position).toBe(-90)
+  })
+
+  it('every person\'s account lines add up exactly to their saldo', () => {
+    const loan = { id: 'l1', tipo: 'Deuda', debtor: 'isabel', creditor: 'lenin', loanId: 'L', amount: 40, date: d(9) }
+    const r = report([loan, abono('p1', 'lenin', 'ale', 70), abono('p2', 'isabel', 'lenin', 15)])
+    for (const p of r.people) {
+      const total = p.ledger.reduce((s, l) => s + (l.sign === '+' ? l.amount : -l.amount), 0)
+      expect(total).toBe(p.position)
+    }
   })
 
   it('nets someone who owes some people and is owed by others into ONE amount', () => {
@@ -114,7 +155,7 @@ describe('buildHouseholdReport', () => {
     const nm: Record<string, string> = { jhon: 'Jhon', ana: 'Ana', ben: 'Ben', cris: 'Cris' }
     const mine = { id: 'm', description: 'Mio', amount: 300, date: d(1), shares: [{ memberId: 'jhon', amount: 100, paid: 300 }, { memberId: 'ana', amount: 100, paid: 0 }, { memberId: 'ben', amount: 100, paid: 0 }], contributions: [{ memberId: 'jhon', amount: 300, status: 'confirmed', edges: [] }] }
     const crisPaid = { id: 'c', description: 'De Cris', amount: 120, date: d(2), shares: [{ memberId: 'jhon', amount: 60, paid: 0 }, { memberId: 'cris', amount: 60, paid: 120 }], contributions: [{ memberId: 'cris', amount: 120, status: 'confirmed', edges: [] }] }
-    const r = buildHouseholdReport({ name: 'X', members: members3, guestIds: [], nameOf: (u) => nm[u as string], expenses: [mine, crisPaid], debts: [] })
+    const r = buildHouseholdReport({ name: 'X', members: members3, guestIds: [], nameOf: (u) => nm[u as string], expenses: [mine, crisPaid], debts: edgesFor([mine, crisPaid]) })
     const jhon = r.people.find((p) => p.uid === 'jhon')!
     // he is owed 200 by Ana and Ben, and owes 60 to Cris: net +140
     expect(jhon.position).toBe(140)

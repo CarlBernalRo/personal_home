@@ -50,9 +50,11 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
   const [open, setOpen] = useState<Set<string>>(new Set())
   const toggle = (id: string) => setOpen((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
-  const owesRow = (r: LedgerRow) => multi
-    ? (r.totals[r.debtor] > 0 ? `${nameOf(r.debtor)} debe ${formatCOP(r.totals[r.debtor])}` : `${nameOf(r.debtor)} al día`)
-    : owes(r.diffAfter)
+  const owesRow = (r: LedgerRow) => {
+    if (!multi) return owes(r.diffAfter)
+    const t = Math.round(r.totals[r.debtor] ?? 0)
+    return t > 0 ? `${nameOf(r.debtor)} debe ${formatCOP(t)}` : t < 0 ? `a ${nameOf(r.debtor)} le deben ${formatCOP(-t)}` : `${nameOf(r.debtor)} al día`
+  }
   const owes = (diff: number) => (diff > 0 ? `${myName} debe ${formatCOP(diff)}` : diff < 0 ? `${partnerName} debe ${formatCOP(-diff)}` : 'cuentas al día')
 
   const byDay = new Map<number, LedgerRow[]>()
@@ -134,6 +136,7 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                     // the screenshot of a payment (or a shared expense's receipt) is kept on its rows, all sharing it
                     const attachmentId = (isPayment || isGroup) ? ((r.debt?.attachmentId as string | undefined) ?? (kids.find((k) => k.debt?.attachmentId)?.debt?.attachmentId as string | undefined)) : undefined
                     const left = isGroup ? kids.reduce((s, k) => s + (k.debt ? remainingOf(k.debt) : 0), 0) : (r.debt ? remainingOf(r.debt) : 0)
+                    const waitingFor = (r.expensePayers ?? []).filter((p) => p.pending).map((p) => nameOf(p.uid))
                     const content = (
                       <>
                         <span className="flex items-center gap-2.5 min-w-0">
@@ -141,12 +144,12 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                           <span className="min-w-0">
                             <span className="block text-sm font-semibold text-[#f0fae8] break-words sm:truncate">
                               {r.concept}
-                              {r.debt?.loanId && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-amber-300 border border-amber-400/40 rounded px-1 py-0.5">préstamo</span>}
-                              {(r.debt?.expenseId || isGroup) && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">gasto compartido</span>}
+                              {r.debt?.loanId && <span className="ml-2 inline-block whitespace-nowrap align-middle text-[9px] font-bold uppercase tracking-wider text-amber-300 border border-amber-400/40 rounded px-1 py-0.5">préstamo</span>}
+                              {(r.debt?.expenseId || isGroup) && <span className="ml-2 inline-block whitespace-nowrap align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">gasto compartido</span>}
                             </span>
                             <span className="block text-[10px] font-mono text-[#8a929a]">
                               {isGroup && kids.length === 0
-                                ? `esperando que confirme ${(r.expensePayers ?? []).filter((p) => p.pending).map((p) => nameOf(p.uid)).join(', ') || 'quien pagó'}`
+                                ? (waitingFor.length > 0 ? `esperando que confirme ${waitingFor.join(', ')}` : 'nadie quedó debiendo')
                                 : isGroup
                                 ? `repartido entre ${kids.length} ${kids.length === 1 ? 'persona' : 'personas'}`
                                 : r.kind === 'deuda' && r.debt?.loanId && r.debt?.lender
@@ -170,7 +173,7 @@ export function HouseholdTimeline({ rows, carryIn, carryOwed = 0, multi = false,
                           <span className="flex items-center gap-2">
                             {attachmentId ? <AttachmentButton compact attachmentId={attachmentId} /> : <span className="hidden sm:block w-7 flex-shrink-0" aria-hidden="true" />}
                             <span className={clsx('sm:w-24 text-center whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider border', STATUS_META[status].chip)}>
-                              {isGroup && kids.length === 0 ? 'Por confirmar' : STATUS_META[status].label}
+                              {isGroup && kids.length === 0 && waitingFor.length > 0 ? 'Por confirmar' : STATUS_META[status].label}
                             </span>
                             {isPayment && onDeletePayment && kids.length > 0 && kids.every((k) => k.debt?.registeredBy === myUid) && (
                               <button

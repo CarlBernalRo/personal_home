@@ -3,7 +3,8 @@ import { TransferModal } from '@/components/fixed/TransferModal'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Edit2, Trash2, Wallet, PiggyBank, Sparkles, ArrowLeftRight } from 'lucide-react'
+import { Plus, Edit2, Trash2, Wallet, PiggyBank, Sparkles, ArrowLeftRight, Landmark } from 'lucide-react'
+import { MobileSectionBar, useMobileSections } from '@/components/ui/MobileSections'
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
@@ -66,6 +67,7 @@ export default function FinancesPage() {
   const ask = useConfirm()
   const cop = useMoneyMask()
   const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
+  const sections = useMobileSections<'cuentas' | 'ahorros'>('cuentas')
   const [activeTab, setActiveTab] = useState<Tab>('ahorros')
   const navigate = useNavigate()
 
@@ -240,9 +242,20 @@ export default function FinancesPage() {
 
   return (
     <div className="flex flex-col gap-5 fade-in text-[#f3f5f6] lg:flex-row lg:h-full lg:min-h-0">
+      <MobileSectionBar
+        label="Secciones de Finanzas"
+        anchor={sections.anchor}
+        active={sections.active}
+        onOpen={sections.open}
+        sections={[
+          { id: 'cuentas', label: 'Cuentas', Icon: Landmark, badge: accounts.length },
+          { id: 'ahorros', label: 'Ahorros', Icon: PiggyBank, badge: goals.length },
+        ]}
+      />
+
       {/* Left pane: the accounts and what each one holds. Picking one narrows the movements on the right. */}
       <CurvedScrollContainer
-        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50', leftCollapsed && 'lg:hidden')}
+        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50', leftCollapsed && 'lg:hidden', sections.only('cuentas'))}
         corners="both"
         {...paneProps}
       >
@@ -348,8 +361,9 @@ export default function FinancesPage() {
       </CurvedScrollContainer>
 
       {/* Right pane: the view tabs stay on top and only the content below scrolls (the same frame as Gastos Fijos) */}
-      <div className="min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0">
-        <div className="flex justify-center sm:justify-start flex-shrink-0">
+      <div className={clsx('min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0', sections.only('ahorros'))}>
+        {/* a single tab: on phones the section bar already names it */}
+        <div className={clsx('flex justify-center sm:justify-start flex-shrink-0', TABS.length === 1 && 'max-lg:hidden')}>
           <div className="flex gap-1 p-1 bg-[#0d263a] border border-white/[0.06] rounded-xl text-xs overflow-x-auto scrollbar-none max-w-full">
             {TABS.map(({ key, label }) => (
               <button

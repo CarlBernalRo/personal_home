@@ -102,9 +102,9 @@ const APP_URL = 'https://personalhome-3ee06.web.app'
 
 /**
  * The Cron Triggers declared in wrangler.toml, UTC (Colombia is UTC-5: 12:07 UTC = 7:07 a.m.; 13:00 UTC = 8:00 a.m.;
- * Monday 00:00 UTC = Sunday 7 p.m.).
+ * Monday 02:00 UTC = Sunday 9 p.m.).
  */
-const CRON_JOBS: Record<string, JobName> = { '*/10 * * * *': 'telegram', '7 12 * * *': 'debits', '0 13 * * *': 'daily', '0 0 * * 1': 'weekly' }
+const CRON_JOBS: Record<string, JobName> = { '*/10 * * * *': 'telegram', '7 12 * * *': 'debits', '0 13 * * *': 'daily', '0 2 * * MON': 'weekly' }
 
 /**
  * Runs one scheduled job and leaves its trace in `system/jobs` (when it ran, how long it took, what it did, or the error),

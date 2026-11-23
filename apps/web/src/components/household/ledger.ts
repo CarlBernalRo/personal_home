@@ -1,13 +1,6 @@
-import { remainingOf } from '@/shared'
+import { creditorOf, isLegacyClosed, remainingOf, toDate, type Rec } from '@/shared'
 
-/** Debts and crossings come from Firestore as loose records (dates may be Date, Timestamp or string). */
-export type Rec = any
-
-export const toDate = (d: unknown): Date => {
-  if (d instanceof Date) return d
-  const ts = d as { toDate?: () => Date } | null
-  return ts?.toDate ? ts.toDate() : new Date(d as string)
-}
+export { toDate, type Rec }
 
 export type LedgerKind = 'deuda' | 'abono' | 'cruce'
 
@@ -19,12 +12,12 @@ export interface LedgerRow {
   kind: LedgerKind
   debt?: Rec
   isMe: boolean
-  /** each person's own running total after this movement */
+  /** what I owe / what my partner owes after this movement (below zero: what they are owed) */
   myTotal: number
   partnerTotal: number
-  /** what every person of the household owes after this movement, by uid */
+  /** what every person of the household owes after this movement, by uid — below zero, what they are owed */
   totals: Record<string, number>
-  /** how much the household owes in total after this movement (people ahead don't offset people behind) */
+  /** how much is still to be paid in the household after this movement (what those who owe, owe) */
   totalOwed: number
   /** the debt this abono / crossing belongs to, when it is tied to one */
   linkId?: string | null
@@ -35,7 +28,7 @@ export interface LedgerRow {
   /** on an abono inside a debt: the debt it pays, and the total of the payment it came from */
   target?: Rec
   payTotal?: number
-  /** myTotal - partnerTotal: positive means "me" owes more */
+  /** what I owe after this movement (below zero: what I am owed); between two people, the whole balance */
   diffAfter: number
   /** this row stands for a shared expense, not one debt: `children` holds every debtor→creditor edge it generated */
   isExpenseGroup?: boolean
@@ -46,10 +39,12 @@ export interface LedgerRow {
 }
 
 /**
- * Event-sourced ledger of every movement since day one, oldest first. Each person's running
- * total is tracked separately so the balance never depends on the mutable crossedAmount snapshot.
+ * Event-sourced ledger of every movement since day one, oldest first, with what each person owes after each one — the
+ * same balance as the household engine: a debt weighs on its debtor and in favor of its creditor, a payment the other
+ * way round, and a crossing (no money moved) changes nobody's balance.
  */
-export function buildLedger(debts: Rec[], crossings: Rec[], userUid: string | undefined, partnerUid: string | null) {
+export function buildLedger(debts: Rec[], crossings: Rec[], userUid: string | undefined, partnerUid: string | null, members?: string[]) {
+  const people = members ?? [...new Set([userUid, partnerUid].filter((x): x is string => !!x))]
   type Ev = Omit<LedgerRow, 'isMe' | 'myTotal' | 'partnerTotal' | 'diffAfter' | 'totals' | 'totalOwed' | 'children'>
   const events: Ev[] = []
   for (const d of debts) {
@@ -85,19 +80,26 @@ export function buildLedger(debts: Rec[], crossings: Rec[], userUid: string | un
     || made(a) - made(b)
     || ((a.debt?.installment as number) || 0) - ((b.debt?.installment as number) || 0))
 
-  let runningMe = 0
-  let runningPartner = 0
   const byPerson: Record<string, number> = {}
+  const move = (uid: string | null | undefined, by: number) => { if (uid) byPerson[uid] = (byPerson[uid] ?? 0) + by }
   const rows: LedgerRow[] = events.map((ev) => {
-    const isMe = ev.debtor === userUid
-    if (isMe) runningMe += ev.delta
-    else runningPartner += ev.delta // in a household of several, "partner" stands for everyone else together
-    byPerson[ev.debtor] = (byPerson[ev.debtor] ?? 0) + ev.delta
+    const d = ev.debt
+    if (d && !isLegacyClosed(d) && (d.amount as number) > 0) {
+      const other = creditorOf(d, people)
+      if (other !== d.debtor) {
+        const amount = d.amount as number
+        // a debt: its debtor owes more and its creditor is owed more · a payment: the payer owes less, the receiver more
+        move(d.debtor as string, ev.kind === 'deuda' ? amount : -amount)
+        move(other, ev.kind === 'deuda' ? -amount : amount)
+      }
+    }
     const totals = { ...byPerson }
     const totalOwed = Object.values(totals).reduce((s, v) => s + Math.max(0, v), 0)
-    return { ...ev, isMe, myTotal: runningMe, partnerTotal: runningPartner, diffAfter: runningMe - runningPartner, totals, totalOwed }
+    const myTotal = userUid ? totals[userUid] ?? 0 : 0
+    const partnerTotal = partnerUid ? totals[partnerUid] ?? 0 : 0
+    return { ...ev, isMe: ev.debtor === userUid, myTotal, partnerTotal, diffAfter: myTotal, totals, totalOwed }
   })
-  return { rows, finalDiff: runningMe - runningPartner }
+  return { rows, finalDiff: rows.length > 0 ? rows[rows.length - 1].diffAfter : 0 }
 }
 
 /** The movements of one month, and the balance (me - partner) carried in from the months before it. */
@@ -111,23 +113,7 @@ export function splitByMonth(rows: LedgerRow[], monthStart: Date) {
   }
 }
 
-/** Step-by-step breakdown of a person's all-time balance: deudas - abonos - cruzado. */
-export function balanceBreakdown(debts: Rec[], crossings: Rec[], uid: string | undefined) {
-  if (!uid) return { deuda: 0, abono: 0, abonoDeudas: 0, aFavor: 0, cruzado: 0, saldo: 0 }
-  const own = debts.filter((d) => d.debtor === uid)
-  const sum = (list: Rec[], f: (d: Rec) => number) => list.reduce((s, d) => s + f(d), 0)
-  const deudas = own.filter((d) => d.tipo === 'Deuda')
-  const deuda = sum(deudas, (d) => d.amount as number)
-  const abono = sum(own.filter((d) => d.tipo === 'Abono'), (d) => d.amount as number)
-  const crossedOwn = sum(deudas, (d) => (d.crossedAmount as number) || 0)
-  const crossedInFavor = crossings.filter((c) => c.debt2PersonId === uid && !c.debt2Id).reduce((s, c) => s + (c.amount as number), 0)
-  const cruzado = crossedOwn + crossedInFavor
-  // what was paid over what was owed is a balance in this person's favor (an abono tied to no debt makes it)
-  const aFavor = Math.min(abono, Math.max(0, abono + cruzado - deuda))
-  return { deuda, abono, abonoDeudas: abono - aFavor, aFavor, cruzado, saldo: deuda - abono - cruzado }
-}
-
-export type StatusKey = 'overdue' | 'due-soon' | 'pending' | 'settled' | 'crossed' | 'abono'
+export type StatusKey = 'overdue' | 'due-soon' | 'pending' | 'settled' | 'netted' | 'crossed' | 'abono'
 
 /** Same states and colours as Gastos fijos: red only once it is overdue, amber when it is about to be, indigo while it just waits. */
 export const STATUS_META: Record<StatusKey, { label: string; chip: string; border: string; node: string; amount: string }> = {
@@ -135,6 +121,7 @@ export const STATUS_META: Record<StatusKey, { label: string; chip: string; borde
   'due-soon': { label: 'Por vencer', chip: 'bg-amber-500/20 text-amber-300 border-amber-500/40',     border: 'border-amber-500/40 hover:border-amber-400/80',     node: '#f59e0b', amount: 'text-amber-300' },
   pending:    { label: 'Pendiente',  chip: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/35',  border: 'border-indigo-500/35 hover:border-indigo-400/80',   node: '#818cf8', amount: 'text-indigo-300' },
   settled:    { label: 'Pagada',     chip: 'bg-brand-500/20 text-brand-300 border-brand-500/40',     border: 'border-brand-500/40 hover:border-brand-400/80',     node: '#52b69a', amount: 'text-brand-300' },
+  netted:     { label: 'Compensada', chip: 'bg-violet-500/15 text-violet-300 border-violet-500/35',  border: 'border-violet-500/35 hover:border-violet-400/80',   node: '#a78bfa', amount: 'text-violet-300' },
   crossed:    { label: 'Cruzada',    chip: 'bg-sky-500/15 text-sky-300 border-sky-500/30',           border: 'border-sky-500/30 hover:border-sky-400/80',         node: '#38bdf8', amount: 'text-sky-300' },
   abono:      { label: 'Pago',       chip: 'bg-brand-500/20 text-brand-300 border-brand-500/40',     border: 'border-brand-500/40 hover:border-brand-400/80',     node: '#52b69a', amount: 'text-brand-300' },
 }
@@ -145,16 +132,25 @@ const DUE_SOON_DAYS = 3
  * State of a row. A debt is red only when its date has passed with something still owed; within 3 days of it, amber;
  * otherwise (a later date, or no agreed date) it is just pending. Partly paid debts keep the state of what is left.
  */
-export function statusOf(row: Pick<LedgerRow, 'kind' | 'debt' | 'isExpenseGroup' | 'children'>, today: Date = new Date()): StatusKey {
+export function statusOf(row: Pick<LedgerRow, 'kind' | 'debt' | 'isExpenseGroup' | 'children' | 'expensePayers'>, today: Date = new Date()): StatusKey {
   if (row.isExpenseGroup) {
     const kids = row.children ?? []
-    return STATUS_SEVERITY.find((s) => kids.some((k) => statusOf(k, today) === s)) ?? 'pending'
+    // no debts yet: either they wait for someone's confirmation, or nobody ended up owing anybody
+    if (kids.length === 0) return (row.expensePayers ?? []).some((p) => p.pending) ? 'pending' : 'settled'
+    const states = kids.map((k) => statusOf(k, today))
+    // every share closed, however (paid, compensated or crossed): the expense is settled
+    if (states.every((s) => s === 'settled' || s === 'netted' || s === 'crossed')) return 'settled'
+    return STATUS_SEVERITY.find((s) => states.includes(s)) ?? 'pending'
   }
   if (row.kind === 'cruce') return 'crossed'
   if (row.kind === 'abono') return 'abono'
   const d = row.debt
   const rem = d ? remainingOf(d) : 0
-  if (rem <= 0) return d?.cruzado && (d?.crossedAmount || 0) >= (d?.amount || 0) ? 'crossed' : 'settled'
+  if (rem <= 0) {
+    if (d?.cruzado && (d?.crossedAmount || 0) >= (d?.amount || 0)) return 'crossed'
+    // covered only by what the debtor is owed / paid elsewhere, not by paying this debt: compensated, not paid
+    return d?.coverage && d.coverage.netted > 0 && d.coverage.abonado === 0 && d.coverage.crossed === 0 ? 'netted' : 'settled'
+  }
   if (!d?.dueDate) return 'pending'
   const due = toDate(d.dueDate)
   const start = new Date(today.getFullYear(), today.getMonth(), today.getDate())
@@ -164,7 +160,7 @@ export function statusOf(row: Pick<LedgerRow, 'kind' | 'debt' | 'isExpenseGroup'
 }
 
 /** Most urgent first: colours a day's node. */
-export const STATUS_SEVERITY: StatusKey[] = ['overdue', 'due-soon', 'pending', 'crossed', 'settled', 'abono']
+export const STATUS_SEVERITY: StatusKey[] = ['overdue', 'due-soon', 'pending', 'crossed', 'netted', 'settled', 'abono']
 
 /**
  * Abonos that belong to the same payment: they share a `paymentId`; older ones (before it existed) are the abonos of one

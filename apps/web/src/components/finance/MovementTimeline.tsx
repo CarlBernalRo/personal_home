@@ -18,6 +18,8 @@ export interface Movement {
   sub: string
   /** Positive when money came into the account, negative when it left. */
   amount: number
+  /** Money that moved between other people (or none moved, like a crossing): shown without a sign, out of the day's net. */
+  neutral?: boolean
   accountId?: string
   /** Screenshot of the movement (`attachments/{id}`), when it came from Telegram. */
   attachmentId?: string
@@ -85,7 +87,7 @@ export function MovementTimeline({ items, accounts, onDelete }: Props) {
         {days.map((day) => {
           const group = byDay.get(day)!
           const date = new Date(day)
-          const net = group.reduce((s, m) => s + m.amount, 0)
+          const net = group.reduce((s, m) => s + (m.neutral ? 0 : m.amount), 0)
           // node colour: the zone of the day's biggest movement
           const lead = [...group].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0]
           const nodeColor = zoneById(lead.zone).color
@@ -120,8 +122,8 @@ export function MovementTimeline({ items, accounts, onDelete }: Props) {
                           </span>
                         </span>
                         <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 sm:flex-nowrap sm:justify-end sm:flex-shrink-0">
-                          <span className={clsx('whitespace-nowrap sm:w-28 text-left sm:text-right text-base sm:text-sm font-mono tabular-nums font-semibold', m.amount >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
-                            {m.amount >= 0 ? '+' : '−'}{formatCOP(Math.abs(m.amount))}
+                          <span className={clsx('whitespace-nowrap sm:w-28 text-left sm:text-right text-base sm:text-sm font-mono tabular-nums font-semibold', m.neutral ? 'text-[#c7ccd1]' : m.amount >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
+                            {m.neutral ? '' : m.amount >= 0 ? '+' : '−'}{formatCOP(Math.abs(m.amount))}
                           </span>
                           {/* fixed-width chip so the amounts and kinds line up from row to row; the attachment sits just left of it */}
                           <span className="flex items-center gap-2">
@@ -151,7 +153,7 @@ export function MovementTimeline({ items, accounts, onDelete }: Props) {
                   })}
                 </div>
 
-                {group.length > 1 && (
+                {group.filter((m) => !m.neutral).length > 1 && (
                   <p className="max-lg:hidden text-[10px] font-mono text-[#5f6a72] mt-1">
                     neto del día {net >= 0 ? '+' : '−'}{formatCOP(Math.abs(net))}
                   </p>

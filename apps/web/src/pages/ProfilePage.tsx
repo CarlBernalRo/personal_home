@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { User, Mail, AtSign, LogOut, BadgeCheck, Shield, Wallet, Landmark, CalendarRange, CreditCard, Send } from 'lucide-react'
+import { User, Mail, AtSign, LogOut, BadgeCheck, Shield, Wallet, Landmark, CalendarRange, CreditCard, Send, Settings } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { FormActions } from '@/components/ui/FormActions'
@@ -22,7 +22,7 @@ import { TelegramForm } from '@/components/profile/TelegramForm'
 import { FamilyForm } from '@/components/profile/FamilyForm'
 import { TagsForm } from '@/components/profile/TagsForm'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
-import { MobileCollapse } from '@/components/ui/MobileCollapse'
+import { MobileSectionBar, useMobileSections } from '@/components/ui/MobileSections'
 import { useLayoutStore } from '@/store/layout'
 
 const schema = z.object({
@@ -54,6 +54,8 @@ export default function ProfilePage() {
   const [params]           = useSearchParams()
   const [saving, setSaving] = useState(false)
   const [tab, setTab]      = useState<Tab>((['datos', 'sueldo', 'pagos', 'etiquetas', 'familia', 'avisos'] as const).find((t) => t === params.get('tab')) ?? 'datos')
+  // on phones one section at a time; a link to a given tab (e.g. Avisos) opens the settings straight away
+  const sections           = useMobileSections<'perfil' | 'ajustes'>(params.get('tab') ? 'ajustes' : 'perfil')
 
   const householdId = (profile as any)?.householdId as string | undefined
 
@@ -107,9 +109,20 @@ export default function ProfilePage() {
 
   return (
     <div className="flex flex-col gap-5 fade-in text-[#f3f5f6] lg:flex-row lg:h-full lg:min-h-0">
+      <MobileSectionBar
+        label="Secciones del perfil"
+        anchor={sections.anchor}
+        active={sections.active}
+        onOpen={sections.open}
+        sections={[
+          { id: 'perfil', label: 'Perfil', Icon: User },
+          { id: 'ajustes', label: 'Ajustes', Icon: Settings },
+        ]}
+      />
+
       {/* Left pane: who you are, what you have set up and the session. Fixed on wide screens, stacked on phones. */}
       <CurvedScrollContainer
-        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50', leftCollapsed && 'lg:hidden')}
+        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0 rounded-3xl border border-white/10 bg-[#0a1f2f]/50', leftCollapsed && 'lg:hidden', sections.only('perfil'))}
         contentClassName="max-lg:!overflow-visible space-y-5 py-3 !pl-3 !pr-3 lg:py-4 lg:!pl-4 lg:!pr-6"
         corners="both"
         borderRadius={24}
@@ -139,7 +152,7 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        <MobileCollapse title="Mi configuración" hint="Sueldo, períodos y cuentas">
+        <div>
           <div className="rounded-2xl border border-white/10 bg-[#0a1f2f] p-4 sm:p-5 space-y-3 shadow-xl">
             <p className="font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold">Tu configuración</p>
             <div className="space-y-1">
@@ -147,7 +160,7 @@ export default function ProfilePage() {
                 <button
                   key={label}
                   type="button"
-                  onClick={() => setTab(to)}
+                  onClick={() => { setTab(to); sections.open('ajustes') }}
                   className="w-full flex items-center justify-between gap-3 rounded-lg px-2 py-2 text-left hover:bg-white/5 transition"
                 >
                   <span className="flex items-center gap-2 text-xs text-[#9aa4ac] flex-shrink-0">
@@ -158,7 +171,7 @@ export default function ProfilePage() {
               ))}
             </div>
           </div>
-        </MobileCollapse>
+        </div>
 
         {/* Session */}
         <div className="rounded-2xl bg-[#0a1f2f] border border-white/10 p-4 sm:p-5 space-y-3 shadow-xl">
@@ -173,7 +186,7 @@ export default function ProfilePage() {
       </CurvedScrollContainer>
 
       {/* Right pane: the view tabs stay on top and only the content below scrolls (the same frame as Gastos Fijos) */}
-      <div className="min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0">
+      <div className={clsx('min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0', sections.only('ajustes'))}>
         <div className="flex justify-center sm:justify-start flex-shrink-0">
           <div className="flex gap-1 p-1 bg-[#0d263a] border border-white/[0.06] rounded-xl text-xs overflow-x-auto scrollbar-none max-w-full">
             {TABS.map((t) => (

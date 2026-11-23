@@ -19,6 +19,8 @@ export interface PendingMovement {
   occMonth?: string;
   /** For an occasional expense that belongs to one of the person's budgets. */
   budgetId?: string;
+  /** Tags of an expense of its own (no budget): they go to the expense when it is confirmed. A budget's spend uses the budget's. */
+  tagIds?: string[];
   /** An `income` that is the person's salary (confirmed from the payday button in Telegram): becomes `kind: 'salary'`
    * in `incomes`, instead of `'extra'`, so it counts for the salary period and stops the "pending pay day" alert. */
   isSalary?: boolean;

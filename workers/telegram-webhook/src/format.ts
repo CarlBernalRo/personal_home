@@ -11,7 +11,7 @@
  * waited a few minutes still says what is true now. If anything fails, the plain version of the notice is sent.
  */
 import {
-  FIXED_EXPENSE_CATEGORIES, creditorOf, effectiveDue, isAutoDebit, isPendingDebt, isScheduleUsable, latestPayDate, owedByCreditor, relativeDay, remainingOf,
+  FIXED_EXPENSE_CATEGORIES, creditorOf, effectiveDue, isAutoDebit, isScheduleUsable, latestPayDate, relativeDay, remainingOf,
 } from '../../../apps/web/src/shared/index'
 import { bogotaToday, fixedFor, households } from './commands'
 import type { Db, Doc } from './db'
@@ -161,9 +161,7 @@ export async function pendingSummary(d: FormatDeps, user: Doc, ctx = new Ctx(d, 
   // what the person owes in their households
   const owes: string[] = []
   for (const hh of await c.households()) {
-    for (const l of owedByCreditor(hh.debts as any[], c.user.id, hh.members).filter((x) => x.owed > 0)) {
-      owes.push(`• <b>${esc(hh.h.name)}</b>: debes ${cop(l.owed)} a ${esc(hh.name(l.creditor))}`)
-    }
+    for (const l of hh.me?.pays ?? []) owes.push(`• <b>${esc(hh.h.name)}</b>: debes ${cop(l.amount)} a ${esc(l.name)}`)
   }
 
   // ── NOTIFICACIONES: unread ones that are not already said in another section
@@ -268,8 +266,10 @@ const firstAmount = (text: unknown) => { const m = String(text ?? '').match(/\$\
 
 async function payDay(c: Ctx, n: Doc, key: string): Promise<Msg> {
   const amount = firstAmount(n.body)
-  // the key holds the pay date as an instant of the person's clock (Colombia): move it into the calendar frame
-  const date = new Date(Number(key.split('|')[1]) - 5 * 3600_000)
+  // The key holds the pay date as an instant, written either by the app (Colombia midnight, 05:00Z) or by this Worker
+  // (UTC midnight, 00:00Z). Both fall on the right calendar day read in UTC — shifting back 5 h would turn the Worker's
+  // into the day before (a pay day of the 20th announced as the 19th).
+  const date = new Date(Number(key.split('|')[1]))
   const accounts = await c.accounts()
   const schedule = (c.user.paySchedule ?? null) as any
   const acc = accounts.find((a) => a.id === schedule?.accountId) ?? accounts.find((a) => a.isDefault) ?? accounts[0] ?? null
@@ -356,12 +356,9 @@ export const pendingReminder = (d: FormatDeps, user: Doc, ctx: Ctx): Promise<Msg
 async function householdStanding(c: Ctx, householdId: string): Promise<string | null> {
   const hh = (await c.households()).find((x) => x.h.id === householdId)
   if (!hh) return null
-  const iOwe = owedByCreditor(hh.debts as any[], c.user.id, hh.members).filter((l) => l.owed > 0)
-  const theyOwe = hh.members.filter((m) => m !== c.user.id)
-    .map((m) => ({ m, owed: owedByCreditor(hh.debts as any[], m, hh.members).filter((l) => l.creditor === c.user.id).reduce((s, l) => s + l.owed, 0) })).filter((x) => x.owed > 0)
   const parts = [
-    ...iOwe.map((l) => `debes <b>${cop(l.owed)}</b> a ${esc(hh.name(l.creditor))}`),
-    ...theyOwe.map((x) => `${esc(hh.name(x.m))} te debe <b>${cop(x.owed)}</b>`),
+    ...(hh.me?.pays ?? []).map((l) => `debes <b>${cop(l.amount)}</b> a ${esc(l.name)}`),
+    ...(hh.me?.receives ?? []).map((l) => `${esc(l.name)} te debe <b>${cop(l.amount)}</b>`),
   ]
   return `📊 <b>${esc(hh.h.name)}</b>: ${parts.length ? parts.join(' · ') : 'estás al día con todos ✅'}`
 }
@@ -375,14 +372,14 @@ async function householdDebt(c: Ctx, n: Doc, key: string): Promise<Msg> {
   const withPaid = (hh.debts as any[]).find((x) => x.id === debtId) ?? debt
   const left = remainingOf(withPaid)
   if (left <= 0) throw new Error('already settled')
-  const paid = (withPaid.paidAbono ?? 0) + (withPaid.crossedAmount ?? 0)
+  const paid = withPaid.amount - left
   const creditor = creditorOf(withPaid, hh.members)
   const due = debt.dueDate instanceof Date ? new Date(debt.dueDate.getTime() - 5 * 3600_000) : null
   const lines = [
     header(n), rule,
     `📝 <b>${esc(debt.concept || 'Deuda')}</b> · ${esc(hh.h.name)}`,
     `<code>${bar(withPaid.amount ? paid / withPaid.amount : 0)}</code> ${withPaid.amount ? Math.round((paid / withPaid.amount) * 100) : 0}% pagado`,
-    `💵 Falta <b>${cop(left)}</b> de ${cop(withPaid.amount)}${paid ? ` (abonado ${cop(paid)})` : ''}`,
+    `💵 Falta <b>${cop(left)}</b> de ${cop(withPaid.amount)}${paid ? ` (cubierto ${cop(paid)})` : ''}`,
   ]
   if (creditor) lines.push(`🙋 Se le debe a <b>${esc(hh.name(creditor))}</b>`)
   if (due) lines.push(`📅 Vence ${dayShort(due)} · ${relativeDay(due, c.today)}`)

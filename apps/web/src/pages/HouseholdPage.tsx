@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { ArrowLeft, ClipboardList, ChevronLeft, ChevronRight, Coins, HandCoins, Home, Network, ShoppingBag } from 'lucide-react'
+import { ArrowLeft, ClipboardList, ChevronLeft, ChevronRight, Coins, HandCoins, Home, Network, ShoppingBag, Users } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { clsx } from 'clsx'
@@ -12,7 +12,7 @@ import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
 import { SkeletonList } from '@/components/ui/Skeleton'
 import { ProgressBar } from '@/components/ui/ProgressBar'
-import { MobileCollapse } from '@/components/ui/MobileCollapse'
+import { MobileSectionBar, useMobileSections } from '@/components/ui/MobileSections'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
@@ -24,13 +24,12 @@ import { useDisplayName } from '@/hooks/useDisplayName'
 import {
   createHousehold, joinHousehold, getHouseholds, syncMemberPhotos, deleteHouseholdLoan,
   setSettlementPlan, uncrossHousehold, addHouseholdDebt, getHouseholdDebts, deleteHouseholdDebt, deleteHouseholdPayment, deleteHouseholdExpense,
-  calcNetBalance, renameHousehold, deleteHousehold, getHouseholdIds, setHouseholdArchived,
+  renameHousehold, deleteHousehold, getHouseholdIds, setHouseholdArchived,
   addHouseholdCrossing, getHouseholdCrossings, notifyHouseholdMembers, getAccounts,
   addGuestMember, removeGuestMember, addHouseholdDebtsBatch, getHouseholdExpenses, confirmExpenseContribution, declineExpenseContribution,
-  subscribeHouseholdDebts, subscribeHouseholdCrossings, subscribeHouseholdExpenses, subscribeHouseholdDocs,
+  subscribeHouseholdDebts, subscribeHouseholdCrossings, subscribeHouseholdExpenses, subscribeHouseholdDocs, backfillPendingContributors,
 } from '@/lib/firestore'
-import { householdDebtsWithCredit } from '@/shared'
-import { formatCOP, remainingOf, allocateAbono, inPaymentOrder, isPendingDebt, creditorOf, owedByCreditor, othersOf, planAbono } from '@/shared'
+import { formatCOP, remainingOf, isPendingDebt, creditorOf, owedByCreditor, othersOf, planAbono, householdBalances } from '@/shared'
 import { ConfirmReceiptModal } from '@/components/household/ConfirmReceiptModal'
 import { HouseholdExpenseModal } from '@/components/household/HouseholdExpenseModal'
 import { HouseholdLoanModal } from '@/components/household/HouseholdLoanModal'
@@ -48,9 +47,11 @@ import { AddGuestModal } from '@/components/household/AddGuestModal'
 import { PendingContributionsCard } from '@/components/household/PendingContributionsCard'
 import { CrossingModal } from '@/components/household/CrossingModal'
 import { AbonoModal, debtSchema, type DebtForm, type ExtraAbonoLine } from '@/components/household/AbonoModal'
-import { buildLedger, balanceBreakdown, nestByDebt, groupByExpense, statusOf, toDate, type LedgerRow } from '@/components/household/ledger'
+import { buildLedger, nestByDebt, groupByExpense, statusOf, toDate, type LedgerRow } from '@/components/household/ledger'
 import { MovementTimeline, type Movement } from '@/components/finance/MovementTimeline'
 import { AppIcon, EmptyMark } from '@/components/ui/AppIcon'
+
+type HogarSection = 'personas' | 'gastos' | 'pagos' | 'mapa'
 
 const householdSchema = z.object({ name: z.string().min(1, 'Ingresa un nombre') })
 const joinSchema      = z.object({ code: z.string().min(6).max(6) })
@@ -112,6 +113,14 @@ export default function HouseholdPage() {
   const [showPast, setShowPast] = useState(false)
   /** The history has two views: the shared expenses created, and the payments made. */
   const [historyTab, setHistoryTab] = useState<'gastos' | 'pagos' | 'mapa'>('gastos')
+  /** On phones only one section shows at a time (people, shared expenses, payments or the map). */
+  const sections = useMobileSections<HogarSection>('personas')
+  const mobileView = sections.active
+  function openSection(id: HogarSection) {
+    setSelectedDebt(null)
+    if (id !== 'personas') setHistoryTab(id)
+    sections.open(id)
+  }
   // a payment I received and still have to confirm
   const [receiptToConfirm, setReceiptToConfirm] = useState<any | null>(null)
   // my accounts: an abono is paid from one of them
@@ -141,8 +150,10 @@ export default function HouseholdPage() {
     setParams({}, { replace: true })
   }, [requestedId, households])
   const household = households.find((h) => h.id === activeId) ?? null
-  // a balance in favor (paid over) is applied to the open debts between the same two people, so "owed" already counts it
-  const debts = useMemo(() => householdDebtsWithCredit(storedDebts, (household?.members as string[] | undefined) ?? []), [storedDebts, household])
+  // the household engine: every person's balance and what is open on each debt, whatever way people paid
+  const balances = useMemo(() => householdBalances(storedDebts, (household?.members as string[] | undefined) ?? []), [storedDebts, household])
+  const debts = balances.rows as any[]
+  const positionOf = (uid: string | undefined) => (uid ? balances.people.get(uid)?.position ?? 0 : 0)
 
   /** Lets the other members of the active household know about something that changes their accounts. */
   function tellHousehold(title: string, body: string) {
@@ -214,7 +225,7 @@ export default function HouseholdPage() {
     const stops = [
       subscribeHouseholdDebts(activeId, (rows) => { setDebts(rows as any[]); setDebtsLoading(false) }, () => setDebtsLoading(false)),
       subscribeHouseholdCrossings(activeId, (rows) => setCrossings(rows as any[]), () => setCrossings([])),
-      subscribeHouseholdExpenses(activeId, (rows) => setExpenses(rows as any[]), () => setExpenses([])),
+      subscribeHouseholdExpenses(activeId, (rows) => { setExpenses(rows as any[]); backfillPendingContributors(rows) }, () => setExpenses([])),
     ]
     return () => stops.forEach((stop) => stop())
   }, [activeId])
@@ -528,10 +539,10 @@ export default function HouseholdPage() {
 
   async function handleRemoveGuest(guestId: string) {
     if (!activeId) return
-    // someone out of the member list vanishes from the cards — so one with money still open can't leave
-    const open = debts.some((d: any) => d.tipo === 'Deuda' && isPendingDebt(d) && (d.debtor === guestId || creditorOf(d, members) === guestId))
-    if (open) throw new Error(`${nameOf(guestId)} todavía tiene deudas abiertas: salden o cruces primero y luego lo quitas`)
-    if (calcNetBalance(storedDebts, guestId, crossings) < 0) throw new Error(`${nameOf(guestId)} tiene saldo a favor: aplícalo a sus deudas o devuélvelo antes de quitarlo`)
+    // someone out of the member list vanishes from the cards — so one with money still open, either way, can't leave
+    const pos = positionOf(guestId)
+    if (pos < 0) throw new Error(`${nameOf(guestId)} todavía debe ${formatCOP(-pos)}: que pague primero y luego lo quitas`)
+    if (pos > 0) throw new Error(`A ${nameOf(guestId)} todavía le deben ${formatCOP(pos)}: que le paguen primero y luego lo quitas`)
     await removeGuestMember(activeId, guestId)
     setHouseholds((prev) => prev.map((h) => h.id === activeId ? {
       ...h,
@@ -698,22 +709,10 @@ export default function HouseholdPage() {
   const partnerName = partnerUid ? nameOf(partnerUid) : 'Pareja'
   const myPhoto = user?.photoURL ?? null
 
-  // The history is not cut by month: the summary covers every record of the household.
-  const monthDebts = debts
+  // What I still have to pay in this household (0 when I'm even or owed), all-time
+  const myOwes  = Math.max(0, -positionOf(user?.uid))
+  const myDebts = debts.filter((d: any) => d.debtor === user?.uid)
 
-  // Live running balance — ALWAYS all-time, carries unpaid debt across months.
-  // This drives "Saldos Activos" and the comparative bar, independent of the
-  // month being browsed in the toolbar.
-  const myNet        = user ? calcNetBalance(debts, user.uid, crossings) : 0
-  const myDebts       = debts.filter((d: any) => d.debtor === user?.uid)
-
-  // A crossing nets two real debts against each other — it only makes sense
-  // when the counterpart actually owes something back. Without this, "Cruzar"
-  // would let you net a debt against a counterpart who's already al día.
-  function pendingDebtsOf(uid: string | null | undefined) {
-    if (!uid) return []
-    return debts.filter((d: any) => d.debtor === uid && isPendingDebt(d))
-  }
   // A crossing is between the debt's debtor and the person it is owed to, and I have to be one of them
   function counterpartOf(d: any): string | null {
     const creditor = creditorOf(d, members)
@@ -744,12 +743,10 @@ export default function HouseholdPage() {
     return out
   }
 
-  // "This cycle" reporting — new activity generated within the selected month only.
-  const totalGen     = monthDebts.filter(d => d.tipo === 'Deuda').reduce((s: number, d: any) => s + d.amount, 0)
-  const totalCruzado = monthDebts.filter(d => d.tipo === 'Deuda').reduce((s: number, d: any) => s + ((d.crossedAmount as number) || 0), 0)
-  const totalAbono   = monthDebts.filter(d => d.tipo === 'Abono').reduce((s: number, d: any) => s + d.amount, 0)
-  const pendiente    = totalGen - totalCruzado - totalAbono
-  const progress     = totalGen > 0 ? Math.min(100, Math.round(((totalCruzado + totalAbono) / totalGen) * 100)) : 0
+  // Everything ever registered, and how much of it is covered — paid, crossed or compensated: the engine's figures
+  const totalGen = balances.total
+  const covered  = balances.total - balances.remaining
+  const progress = totalGen > 0 ? Math.min(100, Math.floor((covered / totalGen) * 100)) : 0
 
   // Abono deleted from a debt's detail
   async function handleDeleteAbono(a: any) {
@@ -812,7 +809,7 @@ export default function HouseholdPage() {
 
   // Full ledger since day one, one row per debt with its abonos/crossings inside. The timeline starts at the oldest
   // thing still open (or the last 30 days when everything is settled) and runs forward; what came before is one click away.
-  const ledger = buildLedger(debts, crossings, user?.uid, partnerUid)
+  const ledger = buildLedger(debts, crossings, user?.uid, partnerUid, members)
   const allRows = groupByExpense(nestByDebt(ledger.rows), expenses)
   const openFrom = allRows
     .filter((r) => r.kind === 'deuda' && ['overdue', 'due-soon', 'pending'].includes(statusOf(r)))
@@ -833,19 +830,27 @@ export default function HouseholdPage() {
     const id = r.key ?? (r.debt?.id as string | undefined) ?? `row-${i}`
     payRowById.set(id, r)
     if (r.kind === 'cruce') {
-      return { id, zone: 'crossing' as const, date: r.date, concept: r.concept, sub: 'Compensación entre deudas', amount: Math.abs(r.delta), canDelete: false }
+      return { id, zone: 'crossing' as const, date: r.date, concept: r.concept, sub: 'Compensación entre deudas', amount: Math.abs(r.delta), neutral: true, canDelete: false }
     }
-    const creditor = kids[0]?.debt?.creditor as string | undefined
+    const creditor = kids[0]?.debt ? (creditorOf(kids[0].debt, members) ?? undefined) : undefined
     const receipt = kids.every((k) => k.debt?.receiptStatus === 'confirmed') ? 'recibido ✓' : kids.some((k) => k.debt?.receiptStatus === 'pending') ? `por confirmar${creditor ? ` por ${creditor === user?.uid ? 'ti' : nameOf(creditor)}` : ''}` : ''
     const iReceive = kids.some((k) => k.debt?.receiptStatus === 'pending') && creditor === user?.uid
+    // what the payment was for: the debts it was tied to, and the part tied to none — which counts in full all the same
+    const tiedTo = [...new Set(kids.filter((k) => k.target).map((k) => k.target!.concept as string))]
+    const untied = kids.filter((k) => !k.debt?.saldaId).reduce((t, k) => t + Math.abs(k.delta), 0)
+    const purpose = [
+      tiedTo.length > 0 ? `Para: ${tiedTo.join(', ')}` : '',
+      untied > 0 ? (tiedTo.length > 0 ? `${formatCOP(untied)} sin deuda específica` : 'Sin deuda específica: cuenta completo en su saldo') : '',
+    ].filter(Boolean).join(' · ')
     return {
       id,
       zone: 'payment' as const,
       date: r.date,
-      concept: r.concept,
-      sub: `${nameOf(r.debtor)}${creditor ? ` → ${nameOf(creditor)}` : ''}${receipt ? ` · ${receipt}` : ''}${kids.filter((k) => !k.debt?.saldaId).reduce((t, k) => t + Math.abs(k.delta), 0) > 0 ? ` · incluye ${formatCOP(kids.filter((k) => !k.debt?.saldaId).reduce((t, k) => t + Math.abs(k.delta), 0))} a favor` : ''}`,
-      // money that comes to me is "+", money that leaves is "−"
+      concept: `${nameOf(r.debtor)} le pagó a ${creditor ? nameOf(creditor) : 'alguien'}`,
+      sub: [purpose, receipt].filter(Boolean).join(' · '),
+      // from my side: money that comes to me is "+", money I pay is "−", and a payment between other people is neither
       amount: creditor === user?.uid ? Math.abs(r.delta) : -Math.abs(r.delta),
+      neutral: creditor !== user?.uid && r.debtor !== user?.uid,
       accountId: kids[0]?.debt?.accountId as string | undefined,
       attachmentId: (r.debt?.attachmentId ?? kids.find((k) => k.debt?.attachmentId)?.debt?.attachmentId) as string | undefined,
       action: iReceive ? (
@@ -856,7 +861,6 @@ export default function HouseholdPage() {
   const carryIn: number | null = null
   const carryOwed = 0
 
-  const myBreakdown      = balanceBreakdown(debts, crossings, user?.uid)
   // the same settlement the report shows (what really has to move once debts and credits are set against each other)
   const settlement = useMemo(
     () => buildHouseholdReport({ name: (household?.name as string) ?? '', members, guestIds, nameOf, expenses, debts, frozenPlan: (household?.settlementPlan as FrozenPlan | undefined) ?? null }),
@@ -908,10 +912,7 @@ export default function HouseholdPage() {
     { uid: user?.uid ?? '', name: myName, photoURL: myPhoto, color: colorOf(user?.uid ?? '') },
     ...otherUids.map((uid) => ({ uid, name: nameOf(uid), photoURL: photoOf(uid), color: colorOf(uid) })),
   ]
-  const people = [
-    { uid: user?.uid ?? '', name: myName, net: myNet, color: colorOf(user?.uid ?? ''), isGuest: false },
-    ...otherUids.map((uid) => ({ uid, name: nameOf(uid), net: calcNetBalance(debts, uid, crossings), color: colorOf(uid), isGuest: isGuest(uid) })),
-  ]
+  const people = [user?.uid ?? '', ...otherUids]
 
   // Contributions someone else declared on my behalf in a shared expense, still waiting for my OK
   const myPendingContributions = expenses.flatMap((e: any) => {
@@ -927,6 +928,82 @@ export default function HouseholdPage() {
       </div>
     )
   }
+
+  /** The household's name and way back to the list. `vt`: the copy that carries the view transition (only one may). */
+  const headerOf = (vt: boolean) => household && (
+    <div style={vt ? ({ viewTransitionName: `vt-household-${activeId}` } as React.CSSProperties) : undefined}>
+      <button
+        onClick={() => withTransition(() => setActiveId(null))}
+        className="flex items-center gap-1.5 text-xs font-semibold text-[#9aa4ac] hover:text-white transition mb-2"
+      >
+        <ArrowLeft size={13} /> Hogares
+      </button>
+      {household.archivedAt && (
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-[#c7ccd1]">
+          <span>Este hogar está inactivo: no aparece en la lista principal ni en el inicio.</span>
+          <button type="button" onClick={() => handleToggleArchive(activeId as string, false)} className="font-semibold text-brand-300 hover:text-brand-200 whitespace-nowrap">Reactivar</button>
+        </div>
+      )}
+      <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1 notch-sm bg-white/[0.04] border border-white/[0.08]">
+        <Home size={11} className="text-brand-400" />
+        <span className="font-pixel text-[8px] text-brand-400 uppercase tracking-widest">Hogar</span>
+      </div>
+      <h1 className="text-2xl font-bold tracking-tight break-words">{household.name as string}</h1>
+      <p className="hidden lg:block text-xs text-[#9aa4ac] mt-1">Cuentas compartidas: gastos que se dividen, abonos y cruces entre ustedes.</p>
+    </div>
+  )
+
+  /** Report and the household menu. `compact`: icon only (the phone header has little room). */
+  const toolsOf = (compact: boolean) => household && (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpenReport(true)}
+        className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#0d263a] px-3 py-2 text-xs font-semibold text-[#c7ccd1] transition hover:bg-white/10 hover:text-white"
+        title="Cuánto debe cada persona"
+        aria-label="Reporte"
+      >
+        <ClipboardList size={15} />{!compact && ' Reporte'}
+      </button>
+      <HouseholdMenu
+        inviteCode={household.inviteCode as string}
+        copied={copied}
+        onSettings={() => { setRenameVal(household.name as string); setOpenSettings(true) }}
+        onReport={() => setOpenReport(true)}
+        onInvite={() => setOpenInvite(true)}
+        onAddGuest={() => setOpenAddGuest(true)}
+        onCopyCode={copyCode}
+        onSwitch={() => withTransition(() => setActiveId(null))}
+        onCreate={() => setOpenCreate(true)}
+        onJoin={() => setOpenJoin(true)}
+      />
+    </>
+  )
+
+  const actions = household && (
+    <div className="flex gap-2 flex-wrap">
+      <Button onClick={() => setOpenExpense(true)} notched className="flex-1 min-w-[150px] max-lg:min-w-[30%] max-lg:px-2">
+        <ShoppingBag size={15} /> <span className="max-lg:hidden">Gasto compartido</span><span className="lg:hidden">Gasto</span>
+      </Button>
+      {people.length > 1 && (
+        <Button onClick={() => setOpenLoan(true)} variant="secondary" notched className="flex-1 min-w-[150px] max-lg:min-w-[30%] max-lg:px-2" title="Registrar un préstamo entre ustedes: quién prestó, a quién y cómo se paga">
+          <HandCoins size={15} className="text-amber-300" /> Préstamo
+        </Button>
+      )}
+      <Button
+        onClick={() => (crossed ? handleRegisterPlan(user?.uid ?? '') : handleOpenAbonoGeneral(user?.uid))}
+        disabled={crossed ? !myPlanPays : myOwes <= 0}
+        variant="secondary"
+        notched
+        className="flex-1 min-w-[150px] max-lg:min-w-[30%] max-lg:px-2"
+        title={crossed
+          ? (myPlanPays ? 'Registrar tus pagos según el plan' : 'Según el plan no tienes pagos pendientes')
+          : (myOwes > 0 ? 'Abonar a tus deudas del hogar' : 'Cuentas al día: no tienes nada que abonar')}
+      >
+        <Coins size={15} className="text-brand-400" /> Abonar
+      </Button>
+    </div>
+  )
 
 
   return (
@@ -949,52 +1026,34 @@ export default function HouseholdPage() {
       {household && (
         <>
           {/* Left pane: who owes whom, the actions, and each person. On phones it gives way to the debt detail. */}
+          {/* Phones: the household's header and actions stay compact on top, and a sticky bar switches between sections */}
+          <div className={clsx('lg:hidden space-y-3 p-4', framed)}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">{headerOf(false)}</div>
+              <div className="flex flex-shrink-0 items-center gap-1.5">{toolsOf(true)}</div>
+            </div>
+            {actions}
+          </div>
+          <MobileSectionBar
+            label="Secciones del hogar"
+            anchor={sections.anchor}
+            active={selectedDebt ? null : mobileView}
+            onOpen={openSection}
+            sections={[
+              { id: 'personas', label: 'Personas', Icon: Users, badge: people.length },
+              { id: 'gastos', label: 'Gastos', Icon: ShoppingBag, badge: gastosCount },
+              { id: 'pagos', label: 'Pagos', Icon: Coins, badge: pagosCount },
+              { id: 'mapa', label: 'Mapa', Icon: Network },
+            ]}
+          />
+
           <CurvedScrollContainer
-            className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, selectedDebt && 'max-lg:hidden', leftCollapsed && 'lg:hidden')}
+            className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, (selectedDebt || mobileView !== 'personas') && 'max-lg:hidden', leftCollapsed && 'lg:hidden')}
             {...scrollProps}
           >
-            <div style={{ viewTransitionName: `vt-household-${activeId}` } as React.CSSProperties}>
-              <button
-                onClick={() => withTransition(() => setActiveId(null))}
-                className="flex items-center gap-1.5 text-xs font-semibold text-[#9aa4ac] hover:text-white transition mb-2"
-              >
-                <ArrowLeft size={13} /> Hogares
-              </button>
-              {household.archivedAt && (
-                <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-[#c7ccd1]">
-                  <span>Este hogar está inactivo: no aparece en la lista principal ni en el inicio.</span>
-                  <button type="button" onClick={() => handleToggleArchive(activeId as string, false)} className="font-semibold text-brand-300 hover:text-brand-200 whitespace-nowrap">Reactivar</button>
-                </div>
-              )}
-              <div className="inline-flex items-center gap-1.5 px-2 py-0.5 mb-1 notch-sm bg-white/[0.04] border border-white/[0.08]">
-                <Home size={11} className="text-brand-400" />
-                <span className="font-pixel text-[8px] text-brand-400 uppercase tracking-widest">Hogar</span>
-              </div>
-              <h1 className="text-2xl font-bold tracking-tight break-words">{household.name as string}</h1>
-              <p className="hidden lg:block text-xs text-[#9aa4ac] mt-1">Cuentas compartidas: gastos que se dividen, abonos y cruces entre ustedes.</p>
-            </div>
-
-            <div className="flex gap-2 flex-wrap">
-              <Button onClick={() => setOpenExpense(true)} notched className="flex-1 min-w-[150px]">
-                <ShoppingBag size={15} /> Gasto compartido
-              </Button>
-              {people.length > 1 && (
-                <Button onClick={() => setOpenLoan(true)} variant="secondary" notched className="flex-1 min-w-[150px]" title="Registrar un préstamo entre ustedes: quién prestó, a quién y cómo se paga">
-                  <HandCoins size={15} className="text-amber-300" /> Préstamo
-                </Button>
-              )}
-              <Button
-                onClick={() => (crossed ? handleRegisterPlan(user?.uid ?? '') : handleOpenAbonoGeneral(user?.uid))}
-                disabled={crossed ? !myPlanPays : myNet <= 0}
-                variant="secondary"
-                notched
-                className="flex-1 min-w-[150px]"
-                title={crossed
-                  ? (myPlanPays ? 'Registrar tus pagos según el plan' : 'Según el plan no tienes pagos pendientes')
-                  : (myNet > 0 ? 'Abonar a tus deudas del hogar' : 'Cuentas al día: no tienes nada que abonar')}
-              >
-                <Coins size={15} className="text-brand-400" /> Abonar
-              </Button>
+            <div className="max-lg:hidden space-y-5">
+              {headerOf(true)}
+              {actions}
             </div>
 
             {debtsLoading ? (
@@ -1017,11 +1076,10 @@ export default function HouseholdPage() {
                     role="Responsable asignado"
                     photoURL={myPhoto}
                     color={colorOf(user?.uid ?? '')}
-                    net={myNet}
+                    position={positionOf(user?.uid)}
                     settle={settlement.people.find((p) => p.uid === user?.uid)}
                     onRegisterPlan={() => handleRegisterPlan(user?.uid ?? '')}
                     planMode={crossed}
-                    breakdown={myBreakdown}
                     debts={myDebts}
                     canCross={(d) => counterpartPendingDebts(d).length > 0}
                     creditorName={multi ? (d) => { const c = creditorOf(d, members); return c ? nameOf(c) : null } : undefined}
@@ -1049,11 +1107,10 @@ export default function HouseholdPage() {
                       isGuest={isGuest(uid)}
                       photoURL={photoOf(uid)}
                       color={colorOf(uid)}
-                      net={people.find((p) => p.uid === uid)?.net ?? 0}
+                      position={positionOf(uid)}
                       settle={settlement.people.find((p) => p.uid === uid)}
                       onRegisterPlan={() => handleRegisterPlan(uid)}
                       planMode={crossed}
-                      breakdown={balanceBreakdown(debts, crossings, uid)}
                       debts={debts.filter((d: any) => d.debtor === uid)}
                       canCross={(d) => counterpartPendingDebts(d).length > 0}
                       creditorName={multi ? (d) => { const c = creditorOf(d, members); return c ? nameOf(c) : null } : undefined}
@@ -1079,8 +1136,8 @@ export default function HouseholdPage() {
           </CurvedScrollContainer>
 
           {/* Right pane: fixed header (month, view, menu) and one card with summary on top, history below */}
-          <div className="min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0">
-            <div className="flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
+          <div className={clsx('min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0', mobileView === 'personas' && !selectedDebt && 'max-lg:hidden')}>
+            <div className="max-lg:hidden flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
               {!selectedDebt ? (
                 <p className="font-pixel text-[10px] text-brand-400 uppercase tracking-widest font-bold">
                   Historial del hogar
@@ -1091,28 +1148,7 @@ export default function HouseholdPage() {
                 </p>
               )}
 
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setOpenReport(true)}
-                  className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#0d263a] px-3 py-2 text-xs font-semibold text-[#c7ccd1] transition hover:bg-white/10 hover:text-white"
-                  title="Cuánto debe cada persona"
-                >
-                  <ClipboardList size={15} /> Reporte
-                </button>
-                <HouseholdMenu
-                  inviteCode={household.inviteCode as string}
-                  copied={copied}
-                  onSettings={() => { setRenameVal(household.name as string); setOpenSettings(true) }}
-                  onReport={() => setOpenReport(true)}
-                  onInvite={() => setOpenInvite(true)}
-                  onAddGuest={() => setOpenAddGuest(true)}
-                  onCopyCode={copyCode}
-                  onSwitch={() => withTransition(() => setActiveId(null))}
-                  onCreate={() => setOpenCreate(true)}
-                  onJoin={() => setOpenJoin(true)}
-                />
-              </div>
+              <div className="flex items-center gap-2">{toolsOf(false)}</div>
             </div>
 
             <div className={clsx('flex flex-col lg:flex-1 lg:min-h-0', framed)}>
@@ -1151,8 +1187,8 @@ export default function HouseholdPage() {
                       <div className="space-y-1.5">
                         <div className="flex flex-wrap items-center justify-between gap-x-3 text-[11px]">
                           <span className="text-[#9aa4ac] flex items-center gap-1.5">
-                            {formatCOP(totalAbono + totalCruzado)} cubierto ({progress}%)
-                            <Tip text="De todo lo generado: lo ya abonado o compensado." />
+                            {formatCOP(covered)} cubierto ({progress}%)
+                            <Tip text="De todo lo generado: lo ya pagado, cruzado o compensado (lo que alguien debe se descuenta de lo que le deben)." />
                           </span>
                           <span className="text-right">
                             <button type="button" onClick={() => setOpenReport(true)} className="inline-flex items-center gap-1 font-mono font-bold text-amber-300 hover:underline" title="Ver el reporte de cuentas">
@@ -1166,7 +1202,7 @@ export default function HouseholdPage() {
                     )}
                   </div>
 
-                  <div className="flex-shrink-0 flex items-center gap-1.5 border-b border-white/10 px-5 py-2" role="tablist" aria-label="Vista del historial">
+                  <div className="max-lg:hidden flex-shrink-0 flex items-center gap-1.5 border-b border-white/10 px-5 py-2" role="tablist" aria-label="Vista del historial">
                     {([['gastos', 'Gastos compartidos', gastosCount], ['pagos', 'Pagos', pagosCount], ['mapa', 'Mapa de pagos', null]] as const).map(([id, label, n]) => (
                       <button
                         key={id}
@@ -1187,7 +1223,7 @@ export default function HouseholdPage() {
 
                   <CurvedScrollContainer className="lg:flex-1 lg:min-h-0" {...scrollProps} corners="bottom-right">
                     {historyTab === 'mapa' ? (
-                      debtsLoading ? <SkeletonList count={4} /> : <PaymentMap report={settlement} debts={debts}nameOf={nameOf} photoOf={photoOf} colorOf={colorOf} />
+                      debtsLoading ? <SkeletonList count={4} /> : <PaymentMap report={settlement} debts={debts} members={members} nameOf={nameOf} photoOf={photoOf} colorOf={colorOf} />
                     ) : debtsLoading ? (
                       <SkeletonList count={4} />
                     ) : monthRows.length === 0 && !carryIn ? (

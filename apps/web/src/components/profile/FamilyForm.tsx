@@ -288,12 +288,13 @@ function InFamily({ family, uid, isAdmin, ask }: { family: Family; uid: string; 
             const admin = family.admins.includes(u)
             const canEditRelation = isAdmin || u === uid
             return (
-              <li key={u} className="flex flex-wrap items-center gap-3 py-2.5">
+              <li key={u} className="flex flex-col gap-2 py-2.5 sm:flex-row sm:items-center sm:gap-3">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
                 <Avatar name={family.memberNames[u] ?? '?'} photoURL={family.memberPhotos[u]} size={34} />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-[#f0fae8]">
+                  <p className="text-sm font-semibold text-[#f0fae8] break-words">
                     {nameOf(u)}
-                    {admin && <span className="ml-2 inline-flex items-center gap-1 rounded border border-amber-400/40 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-300"><Crown size={9} /> Admin</span>}
+                    {admin && <span className="ml-2 inline-flex items-center gap-1 whitespace-nowrap rounded border border-amber-400/40 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-300"><Crown size={9} /> Admin</span>}
                   </p>
                   {canEditRelation ? (
                     <ChipSelect
@@ -308,12 +309,14 @@ function InFamily({ family, uid, isAdmin, ask }: { family: Family; uid: string; 
                     <p className="text-[11px] text-[#8a929a]">{family.relations[u] || 'Sin parentesco'}</p>
                   )}
                 </div>
+                </div>
+                {/* phones: the actions get their own line under the name, sharing the width; wider: beside it */}
                 {isAdmin && u !== uid && (
-                  <div className="flex gap-2">
-                    <Button size="sm" variant="secondary" onClick={() => run(() => setAdmin(family.id, u, !admin), admin ? 'Ya no es administrador' : 'Ahora es administrador')}>
+                  <div className="flex gap-2 pl-[46px] sm:pl-0 sm:flex-shrink-0">
+                    <Button size="sm" variant="secondary" className="flex-1 sm:flex-none" onClick={() => run(() => setAdmin(family.id, u, !admin), admin ? 'Ya no es administrador' : 'Ahora es administrador')}>
                       <Shield size={13} /> {admin ? 'Quitar admin' : 'Hacer admin'}
                     </Button>
-                    <Button size="sm" variant="secondary" onClick={async () => { if (await ask(`¿Sacar a ${nameOf(u)} de la familia? Deja de ver lo que se comparte y los demás dejan de ver lo suyo.`, { title: 'Sacar de la familia', confirmLabel: 'Sacar' })) run(() => removeMember(family.id, u), `${nameOf(u)} salió de la familia`) }}>
+                    <Button size="sm" variant="secondary" className="flex-1 sm:flex-none" onClick={async () => { if (await ask(`¿Sacar a ${nameOf(u)} de la familia? Deja de ver lo que se comparte y los demás dejan de ver lo suyo.`, { title: 'Sacar de la familia', confirmLabel: 'Sacar' })) run(() => removeMember(family.id, u), `${nameOf(u)} salió de la familia`) }}>
                       <UserMinus size={13} /> Sacar
                     </Button>
                   </div>

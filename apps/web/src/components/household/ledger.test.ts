@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { balanceBreakdown, buildLedger, nestByDebt, splitByMonth, statusOf } from './ledger'
+import { buildLedger, nestByDebt, splitByMonth, statusOf } from './ledger'
 
 const d = (y: number, m: number, day: number) => new Date(y, m - 1, day)
 
@@ -21,30 +21,8 @@ function net(debts: any[], uid: string, crossings: any[]) {
   return b
 }
 
-describe('balanceBreakdown', () => {
-  it('is debts minus abonos minus crossed', () => {
-    const debts = [debt('a', ME, 100, d(2026, 10, 1), { crossedAmount: 20 }), abono('p', ME, 30, d(2026, 10, 5))]
-    expect(balanceBreakdown(debts, [], ME)).toEqual({ deuda: 100, abono: 30, abonoDeudas: 30, aFavor: 0, cruzado: 20, saldo: 50 })
-  })
-
-  it('counts a crossing made in your favour against the total balance', () => {
-    const debts = [debt('a', AL, 50, d(2026, 10, 1))]
-    const crossings = [{ id: 'c', debt1Id: 'x', debt2PersonId: AL, amount: 30 }]
-    expect(balanceBreakdown(debts, crossings, AL).saldo).toBe(20)
-  })
-
-  it('splits what was paid over the debts as a balance in favor', () => {
-    const debts = [debt('a', ME, 123, d(2026, 10, 1)), abono('p', ME, 200, d(2026, 10, 5))]
-    expect(balanceBreakdown(debts, [], ME)).toEqual({ deuda: 123, abono: 200, abonoDeudas: 123, aFavor: 77, cruzado: 0, saldo: -77 })
-  })
-
-  it('is empty without a person', () => {
-    expect(balanceBreakdown([], [], undefined)).toEqual({ deuda: 0, abono: 0, abonoDeudas: 0, aFavor: 0, cruzado: 0, saldo: 0 })
-  })
-})
-
 describe('buildLedger', () => {
-  it('orders every movement by date and keeps a running total per person', () => {
+  it('orders every movement by date and keeps what each person owes after each one (net of what they are owed)', () => {
     const debts = [
       abono('p', ME, 30, d(2026, 10, 10)),
       debt('a', ME, 100, d(2026, 10, 1)),
@@ -52,8 +30,21 @@ describe('buildLedger', () => {
     ]
     const { rows, finalDiff } = buildLedger(debts, [], ME, AL)
     expect(rows.map((r) => r.concept)).toEqual(['a', 'b', 'p'])
-    expect(rows[2]).toMatchObject({ myTotal: 70, partnerTotal: 40, diffAfter: 30 })
+    // I owed 100, Ale owed me 40, I paid 30: I still owe 30, Ale is owed 30
+    expect(rows[2]).toMatchObject({ myTotal: 30, partnerTotal: -30, diffAfter: 30 })
     expect(finalDiff).toBe(30)
+  })
+
+  it('in a household of several, someone who is owed more than they owe shows as owed, never as a debtor', () => {
+    const debts = [
+      { ...debt('j', 'carlos', 30, d(2026, 11, 1)), creditor: 'jhon' },
+      { ...debt('m', 'jhon', 50, d(2026, 11, 2)), creditor: 'carlos' },
+      { ...debt('l', 'lenin', 50, d(2026, 11, 3)), creditor: 'carlos' },
+    ]
+    const rows = buildLedger(debts, [], 'carlos', null, ['carlos', 'jhon', 'lenin']).rows
+    const last = rows[rows.length - 1]
+    expect(last.totals).toEqual({ carlos: -70, jhon: 20, lenin: 50 })
+    expect(last.totalOwed).toBe(70)
   })
 
   it('matches the balances of both people with a crossing between two debts', () => {
@@ -145,7 +136,7 @@ describe('same-day order and several people', () => {
       debt('x', 'b', 100, day, { createdAt: new Date(2026, 10, 2, 9) }),
       debt('y', 'c', 50, day, { createdAt: new Date(2026, 10, 2, 10) }),
       abono('p', 'b', 40, day),
-    ], [], ME, 'b').rows
+    ], [], ME, 'b', [ME, 'b', 'c', 'd', 'e']).rows
     const last = rows[rows.length - 1]
     expect(last.totals).toEqual({ b: 60, c: 50 })
     expect(last.totalOwed).toBe(110)

@@ -4,13 +4,16 @@ interface SettleableDebt {
   amount: number;
   crossedAmount?: number;
   paidAbono?: number;
+  /** Set by the household engine (`householdBalances`): what is open once everyone's position is counted. */
+  remaining?: number;
 }
 
 /**
- * What's actually left to settle on a debt — after crossings AND any abono
- * linked to it via saldaId. The single source of truth for "is this still owed".
+ * What's actually left to settle on a debt. On rows that went through the household engine it is the engine's figure
+ * (crossings, abonos and compensation all counted); on a bare stored row, what its crossings and tied abonos leave.
  */
 export function remainingOf(d: SettleableDebt): number {
+  if (typeof d.remaining === 'number') return d.remaining;
   return d.amount - (d.crossedAmount || 0) - (d.paidAbono || 0);
 }
 

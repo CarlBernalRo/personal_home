@@ -106,8 +106,18 @@ export function HouseholdReportModal({ open, onClose, name, members, guestIds, n
         )}
         {!report.balanced && (
           <p className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-200">
-            Hay pagos registrados sin destinatario: las cuentas pueden no cuadrar al peso.
+            Hay registros sin destinatario: las cuentas pueden no cuadrar al peso.
           </p>
+        )}
+        {report.checks.some((c) => c.reason !== 'pending') && (
+          <div className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-[11px] leading-snug text-red-200 space-y-1">
+            <p className="font-semibold">Gastos cuyas deudas registradas no cuadran con el gasto:</p>
+            {report.checks.filter((c) => c.reason !== 'pending').map((c) => (
+              <p key={c.expenseId}>
+                <b>{c.description}</b>{c.reason === 'declined' ? ' (alguien rechazó su aporte)' : ''}: {c.people.map((x) => `${x.name} ${formatCOP(Math.abs(x.expected))} esperado vs ${formatCOP(Math.abs(x.recorded))} registrado`).join(' · ')}. Las cuentas usan lo registrado; corrige el gasto para que coincidan.
+              </p>
+            ))}
+          </div>
         )}
 
         {crossed ? (
@@ -182,23 +192,12 @@ export function HouseholdReportModal({ open, onClose, name, members, guestIds, n
                     </ul>
                   )}
 
-                  {/* how the saldo a favor crossed */}
+                  {/* payments that were not tied to a debt: they count all the same */}
                   {p.credit.total > 0 && (
-                    <div className="mx-3 mb-3 space-y-1 rounded-lg border border-violet-400/25 bg-violet-500/[0.07] px-2.5 py-2">
-                      <p className="text-[9px] font-bold uppercase tracking-wider text-violet-300">Saldo a favor · {formatCOP(p.credit.total)}</p>
-                      <p className="text-[11px] leading-snug text-[#c7ccd1]">
-                        Pagó de más {p.paidTo.filter((x) => x.credit > 0).map((x) => `${formatCOP(x.credit)} a ${x.name}`).join(' y ')}. Ese dinero no se pierde: se aplica a lo que debe a cualquier persona.
-                      </p>
-                      {p.credit.uses.map((u) => (
-                        <div key={u.to} className="flex items-center gap-2">
-                          <ArrowRight size={12} className="flex-shrink-0 text-violet-300" />
-                          <Avatar name={u.name} photoURL={photoOf(u.to)} color={colorOf(u.to)} size={18} />
-                          <span className="min-w-0 flex-1 truncate text-xs text-[#dcf1eb]">Cubrió deuda con {u.name}</span>
-                          <span className="flex-shrink-0 font-mono text-xs font-bold text-violet-300">{formatCOP(u.amount)}</span>
-                        </div>
-                      ))}
-                      {p.credit.left > 0 && <p className="text-[10px] text-[#8a929a]">Sin aplicar todavía: {formatCOP(p.credit.left)} (no tiene más deudas abiertas).</p>}
-                    </div>
+                    <p className="mx-3 mb-3 rounded-lg border border-violet-400/25 bg-violet-500/[0.07] px-2.5 py-2 text-[11px] leading-snug text-[#c7ccd1]">
+                      <span className="font-semibold text-violet-300">Pagos sin deuda específica · {formatCOP(p.credit.total)}. </span>
+                      {p.paidTo.filter((x) => x.credit > 0).map((x) => `${formatCOP(x.credit)} a ${x.name}`).join(' y ')}. Cuentan completos en su saldo, igual que cualquier otro pago.
+                    </p>
                   )}
 
                   <div className="grid grid-cols-4 gap-px border-t border-white/10 bg-white/10 text-center">

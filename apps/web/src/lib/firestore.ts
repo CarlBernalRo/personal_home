@@ -581,54 +581,8 @@ export function getHouseholdIds(profile: Record<string, unknown> | null): string
 
 // ── Household Debts ───────────────────────────────────────────────────────────
 
-/**
- * Brings a debt's stored figures in line with the movements that touch it: what was abonado (the abonos that point
- * to it through `saldaId`) and its state. The movements are the truth; `paidAbono` and `estado` are a readable copy
- * kept in step, so the database shows the same as the screen. Safe to run any number of times.
- */
-export async function syncDebtFigures(debtId: string, householdId: string) {
-  const ref = doc(db, 'householdDebts', debtId)
-  const snap = await getDoc(ref)
-  if (!snap.exists() || snap.data().tipo !== 'Deuda') return
-  // the household is part of the query: the rules only allow reading a household's own debts
-  const abonos = await getDocs(query(collection(db, 'householdDebts'), where('householdId', '==', householdId), where('saldaId', '==', debtId)))
-  const paid = abonos.docs.filter((d) => d.data().tipo === 'Abono').reduce((s, d) => s + (d.data().amount as number), 0)
-  const d = snap.data()
-  const remaining = (d.amount as number) - ((d.crossedAmount as number) || 0) - paid - ((d.creditApplied as number) || 0)
-  const estado = remaining <= 0 ? 'Saldado' : ''
-  if ((d.paidAbono ?? 0) !== paid || (d.estado ?? '') !== estado) await updateDoc(ref, { paidAbono: paid, estado })
-}
-
-/**
- * Puts the balances in favor to work on the stored debts too: each debt keeps `creditApplied` (what a person's
- * overpayment covers of it) and its `estado` follows. The screen works this out by itself; this keeps the stored copy
- * — what the server functions or anything else reading the database sees — saying the same. Safe to run any time.
- */
-export async function syncHouseholdCredit(householdId: string) {
-  const [hh, snap] = await Promise.all([
-    getDoc(doc(db, 'households', householdId)),
-    getDocs(query(collection(db, 'householdDebts'), where('householdId', '==', householdId))),
-  ])
-  if (!hh.exists()) return
-  const members = ((hh.data().members as string[] | undefined) ?? [])
-  const rows = snap.docs.map((d) => mapDoc<any>(d))
-  const withCredit = householdDebtsWithCredit(rows, members)
-  const byId = new Map(withCredit.map((d) => [d.id, d]))
-  const batch = writeBatch(db)
-  let n = 0
-  for (const d of snap.docs) {
-    const x = byId.get(d.id)
-    if (!x || x.tipo !== 'Deuda') continue
-    const credit = (x.creditApplied as number) || 0
-    const remaining = x.amount - (x.crossedAmount || 0) - (x.paidAbono || 0)
-    const estado = remaining <= 0 ? 'Saldado' : ''
-    const stored = d.data()
-    if (((stored.creditApplied as number) || 0) !== credit || (stored.estado ?? '') !== estado) { batch.update(d.ref, { creditApplied: credit, estado }); n++ }
-  }
-  if (n > 0) await batch.commit()
-}
-
-const syncCredit = (householdId: string) => syncHouseholdCredit(householdId).catch(() => { /* the screen computes it anyway */ })
+// What is open on each debt is never stored: every reader works it out from the movements with the household engine
+// (`householdBalances`), so a payment made one way can never leave a stored copy saying something else.
 
 /**
  * Abonos that someone else just deleted touched money that is not theirs to fix: the account the abono came out of
@@ -674,9 +628,6 @@ export async function addHouseholdDebt(data: NewHouseholdDebt) {
   })
   if (data.tipo === 'Abono' && data.accountId) batch.update(doc(db, 'accounts', data.accountId), { balance: increment(-data.amount) })
   await batch.commit()
-  // an abono that pays a debt updates that debt's figures
-  if (data.tipo === 'Abono' && data.saldaId) await syncDebtFigures(data.saldaId, data.householdId).catch(() => { /* the screen computes it from the movements anyway */ })
-  await syncCredit(data.householdId)
   return ref
 }
 
@@ -694,13 +645,6 @@ export async function addHouseholdDebtsBatch(rows: NewHouseholdDebt[]) {
     if (data.tipo === 'Abono' && data.accountId) batch.update(doc(db, 'accounts', data.accountId), { balance: increment(-data.amount) })
   }
   await batch.commit()
-  const synced = new Set<string>()
-  for (const data of rows) {
-    if (data.tipo !== 'Abono' || !data.saldaId || synced.has(data.saldaId)) continue
-    synced.add(data.saldaId)
-    await syncDebtFigures(data.saldaId, data.householdId).catch(() => { /* the screen computes it from the movements anyway */ })
-  }
-  await syncCredit(rows[0].householdId)
 }
 
 export async function getHouseholdDebts(householdId: string) {
@@ -758,7 +702,6 @@ export async function createHouseholdLoan(data: {
     })
   }
   await batch.commit()
-  await syncCredit(data.householdId)
   return { loanId }
 }
 
@@ -775,7 +718,6 @@ export async function deleteHouseholdLoan(loanId: string, householdId: string) {
   await refundMyAbonos(batch, paid.map((d) => d.data()))
   await batch.commit()
   await noticeDeletedAbonos(paid.map((d) => d.data()), auth.currentUser?.uid, householdId)
-  await syncCredit(householdId)
 }
 
 export async function updateHouseholdDebt(id: string, data: Partial<NewHouseholdDebt>) {
@@ -803,7 +745,7 @@ async function refundMyAbonos(batch: ReturnType<typeof writeBatch>, abonos: { ac
 
 /**
  * Deletes a whole payment: every abono row it was split into, in one batch. The money each one took out of the
- * registrant's account goes back, and each debt it was paying gets its figures recomputed (it is owed again).
+ * registrant's account goes back; what it paid is owed again.
  */
 export async function deleteHouseholdPayment(abonoIds: string[], householdId: string) {
   const snaps = await Promise.all(abonoIds.map((id) => getDoc(doc(db, 'householdDebts', id))))
@@ -812,10 +754,7 @@ export async function deleteHouseholdPayment(abonoIds: string[], householdId: st
   abonoIds.forEach((id) => batch.delete(doc(db, 'householdDebts', id)))
   await refundMyAbonos(batch, rows)
   await batch.commit()
-  const paid = new Set(rows.map((r) => r.saldaId as string | null).filter((x): x is string => !!x))
-  await Promise.all([...paid].map((debtId) => syncDebtFigures(debtId, householdId).catch(() => { /* the screen computes it from the movements anyway */ })))
   await noticeDeletedAbonos(rows, auth.currentUser?.uid, householdId)
-  await syncCredit(householdId)
 }
 
 export async function deleteHouseholdDebt(id: string) {
@@ -825,36 +764,7 @@ export async function deleteHouseholdDebt(id: string) {
   batch.delete(doc(db, 'householdDebts', id))
   if (prev) await refundMyAbonos(batch, [prev])
   await batch.commit()
-  // deleting an abono gives the debt back what it had paid
-  if (prev?.tipo === 'Abono' && prev.saldaId) await syncDebtFigures(prev.saldaId as string, prev.householdId as string).catch(() => {})
-  if (prev) {
-    await noticeDeletedAbonos([prev], auth.currentUser?.uid, prev.householdId as string)
-    await syncCredit(prev.householdId as string)
-  }
-}
-
-/** Net debt for a single person: positive = they still owe, negative = they're ahead */
-export function calcNetBalance(
-  debts: Record<string, unknown>[],
-  debtorUid: string,
-  crossings?: Record<string, unknown>[],
-): number {
-  let balance = debts.reduce((acc, d) => {
-    if (d.debtor !== debtorUid) return acc
-    if (d.tipo === 'Deuda') {
-      const remaining = (d.amount as number) - ((d.crossedAmount as number) || 0)
-      return acc + remaining
-    }
-    return acc - (d.amount as number)
-  }, 0)
-
-  // Subtract total-balance crossings where this person is the counterpart
-  if (crossings) {
-    balance -= crossings
-      .filter(c => c.debt2PersonId === debtorUid && !c.debt2Id)
-      .reduce((s, c) => s + (c.amount as number), 0)
-  }
-  return balance
+  if (prev) await noticeDeletedAbonos([prev], auth.currentUser?.uid, prev.householdId as string)
 }
 
 // ── Household Crossings ───────────────────────────────────────────────────────
@@ -931,9 +841,6 @@ export async function addHouseholdCrossing(data: {
     tx.update(snap1.ref, { crossedAmount: nc1, cruzado: nc1 >= (d1.amount as number) })
   })
 
-  // every debt touched keeps its stored figures in step with its movements
-  await Promise.all([data.debt1Id, ...data.allocations.map((a) => a.debtId)].map((id) => syncDebtFigures(id, data.householdId).catch(() => {})))
-  await syncCredit(data.householdId)
 }
 
 function formatCOPRaw(n: number) {
@@ -1028,6 +935,9 @@ export async function createHouseholdExpense(data: NewHouseholdExpense, guestIds
     splitMode:    data.splitMode,
     shares,
     contributions,
+    // denormalized so a member's pending-contributions screen can query `array-contains` instead of reading
+    // every expense of the household and filtering client-side
+    pendingContributors: contributions.filter((c) => c.status === 'pending').map((c) => c.memberId),
     dueDate,
     notes:        data.notes ?? '',
     registeredBy: data.registeredBy,
@@ -1073,7 +983,6 @@ export async function createHouseholdExpense(data: NewHouseholdExpense, guestIds
   }
 
   await batch.commit()
-  await syncCredit(data.householdId)
   const pendingFor = contributions.filter((c) => c.status === 'pending').map((c) => c.memberId)
   return { id: expenseRef.id, shares, pendingFor }
 }
@@ -1122,11 +1031,11 @@ export async function confirmExpenseContribution(expenseId: string, memberId: st
     })
     if (accountId) tx.update(doc(db, 'accounts', accountId), { balance: increment(-c.amount) })
 
-    tx.update(expenseRef, { contributions: updated })
+    tx.update(expenseRef, {
+      contributions: updated,
+      pendingContributors: ((exp.pendingContributors as string[] | undefined) ?? []).filter((id) => id !== memberId),
+    })
   })
-  // the debts that just became real may be covered by someone's balance in favor
-  const hhId = (await getDoc(expenseRef)).data()?.householdId as string | undefined
-  if (hhId) await syncCredit(hhId)
 }
 
 /** The declared contribution wasn't actually theirs (or the amount is wrong): tells whoever registered the expense so they can fix it. */
@@ -1151,7 +1060,10 @@ export async function declineExpenseContribution(expenseId: string, memberId: st
 
     const updated = [...contributions]
     updated[idx] = { ...contributions[idx], status: 'declined' }
-    tx.update(expenseRef, { contributions: updated })
+    tx.update(expenseRef, {
+      contributions: updated,
+      pendingContributors: ((exp.pendingContributors as string[] | undefined) ?? []).filter((id) => id !== memberId),
+    })
   })
 
   await notifyHouseholdMembers([registeredBy], {
@@ -1176,6 +1088,34 @@ export function subscribeHouseholdDebts(householdId: string, onRows: (rows: Rows
 export function subscribeHouseholdExpenses(householdId: string, onRows: (rows: Rows) => void, onError?: (e: Error) => void) {
   const q = query(collection(db, 'householdExpenses'), where('householdId', '==', householdId), orderBy('date', 'desc'))
   return onSnapshot(q, (snap) => onRows(snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))), (e) => onError?.(e))
+}
+
+/**
+ * Lazy, idempotent backfill for expenses created before `pendingContributors` existed: they'd otherwise never
+ * match `subscribePendingContributionExpenses`'s `array-contains` query. Patches the field in the first time any
+ * member's full expense list (the Hogar page, via `subscribeHouseholdExpenses`) happens to load the document.
+ */
+export function backfillPendingContributors(rows: Record<string, unknown>[]) {
+  for (const row of rows) {
+    if (row.pendingContributors !== undefined) continue
+    const contributions = (row.contributions as ExpenseContribution[] | undefined) ?? []
+    const pendingContributors = contributions.filter((c) => c.status === 'pending').map((c) => c.memberId)
+    updateDoc(doc(db, 'householdExpenses', row.id as string), { pendingContributors }).catch(() => {})
+  }
+}
+
+const backfilledHouseholds = new Set<string>()
+
+/**
+ * Guarantees `pendingContributors` is backfilled for a household at least once per browser session, with a single
+ * one-off read (not a live listener) — so `usePendingContributions` is correct for every member even if nobody ever
+ * opens the Hogar page. One bounded read per household per session is negligible next to the live-listener cost
+ * `subscribeHouseholdExpenses` used to carry on every snapshot update, which is what this replaces here.
+ */
+export function ensurePendingContributorsBackfilled(householdId: string) {
+  if (backfilledHouseholds.has(householdId)) return
+  backfilledHouseholds.add(householdId)
+  getHouseholdExpenses(householdId).then(backfillPendingContributors).catch(() => { backfilledHouseholds.delete(householdId) })
 }
 
 export function subscribeHouseholdCrossings(householdId: string, onRows: (rows: Rows) => void, onError?: (e: Error) => void) {
@@ -1206,6 +1146,16 @@ export function subscribePendingReceiptRows(householdIds: string[], uid: string,
     () => { byHousehold.delete(hid); emit() },
   ))
   return () => stops.forEach((stop) => stop())
+}
+
+/**
+ * The shared expenses across my households where I still have a pending contribution to confirm or decline, live.
+ * Narrow (`array-contains` on the denormalized `pendingContributors`) instead of `subscribeHouseholdExpenses`'s full
+ * history, so this doesn't re-read every expense a household has ever had just to find the handful awaiting me.
+ */
+export function subscribePendingContributionExpenses(householdId: string, uid: string, onRows: (rows: Rows) => void, onError?: (e: Error) => void) {
+  const q = query(collection(db, 'householdExpenses'), where('householdId', '==', householdId), where('pendingContributors', 'array-contains', uid))
+  return onSnapshot(q, (snap) => onRows(snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))), (e) => onError?.(e))
 }
 
 export async function getHouseholdExpenses(householdId: string) {
@@ -1262,7 +1212,6 @@ export async function deleteHouseholdExpense(id: string, householdId: string, op
   batch.delete(doc(db, 'householdExpenses', id))
   await batch.commit()
   if (!opts.keepPayments) await noticeDeletedAbonos(paid.map((d) => d.data()), uid, householdId)
-  await syncCredit(householdId)
 
   if (uid && exp) {
     const others = ((exp.contributions as ExpenseContribution[] | undefined) ?? [])
@@ -1276,17 +1225,6 @@ export async function deleteHouseholdExpense(id: string, householdId: string, op
       }).catch(() => {})
     }
   }
-}
-
-/** Mark every non-cruzado debt in the household as cruzado (legacy period-close) */
-export async function cruzarCuentas(householdId: string) {
-  const q    = query(collection(db, 'householdDebts'), where('householdId', '==', householdId))
-  const snap = await getDocs(q)
-  const updates = snap.docs
-    .filter(d => !d.data().cruzado)
-    .map(d => updateDoc(d.ref, { cruzado: true }))
-  await Promise.all(updates)
-  return updates.length
 }
 
 // ── Allowed Users (Administración) ──────────────────────────────────────────
@@ -1560,10 +1498,7 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
     if (!hh || !members.includes(pm.userId)) throw new Error('Ya no perteneces a ese hogar. Descarta este movimiento.')
     if (pm.creditorId && !members.includes(pm.creditorId)) throw new Error('La persona a la que pagaste ya no está en el hogar. Descarta este movimiento.')
     // the debts as they are NOW: another payment may have changed what is owed since the screenshot was sent
-    const raw = (await getHouseholdDebts(pm.householdId)) as any[]
-    const paid = new Map<string, number>()
-    for (const x of raw) if (x.tipo === 'Abono' && x.saldaId) paid.set(x.saldaId, (paid.get(x.saldaId) || 0) + (x.amount as number))
-    const debts = raw.map((d) => (d.tipo === 'Deuda' ? { ...d, paidAbono: paid.get(d.id) || 0 } : d))
+    const debts = householdDebtsWithCredit((await getHouseholdDebts(pm.householdId)) as any[], members)
     if (pm.targetDebtId && !debts.some((d) => d.id === pm.targetDebtId && isPendingDebt(d))) throw new Error('Esa deuda ya está saldada. Descarta este movimiento.')
 
     plan = planAbono({ debts, members, debtor: pm.userId, creditor: pm.creditorId ?? null, targetDebtId: pm.targetDebtId ?? null, amount: pm.amount, category: 'otros_hogar' })
@@ -1603,7 +1538,10 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
       tx.set(doc(collection(db, 'expenses')), {
         userId: pm.userId, description: pm.concept, amount: pm.amount, category: pm.category ?? 'otro', date: Timestamp.fromDate(date),
         type: 'variable', isRecurring: false, tracked: true, ...(pm.comment ? { notes: pm.comment } : {}),
-        ...(pm.budgetId ? { variableBudgetId: pm.budgetId } : {}), ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+        ...(pm.budgetId ? { variableBudgetId: pm.budgetId } : {}), ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}),
+        // a spend of its own keeps the tags chosen in Telegram; a budget's spend shows the budget's tags instead
+        ...(!pm.budgetId && pm.tagIds?.length ? { tagIds: pm.tagIds } : {}),
+        createdAt: serverTimestamp(),
       })
       if (account) tx.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
     }
@@ -1614,7 +1552,6 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
   // work that only needs to happen once the commit above actually landed (figures of the debts, telling the person who was paid)
   if (pm.kind === 'abono' && plan && hh) {
     const myName = ((hh.memberNames as Record<string, string> | undefined) ?? {})[pm.userId] || 'Alguien'
-    for (const id of new Set(plan.rows.map((r) => r.saldaId).filter(Boolean) as string[])) await syncDebtFigures(id, pm.householdId!).catch(() => { /* the screen computes it from the movements anyway */ })
     // the person who was paid is told, with the detail, so they can confirm it and say in which account they got it
     const link = `/hogar?id=${pm.householdId}`
     if (!plan.paidTo || plan.paidTo === pm.userId) {

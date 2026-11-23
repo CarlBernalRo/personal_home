@@ -1,14 +1,18 @@
 import { useMemo, useState } from 'react'
 import { clsx } from 'clsx'
 import { Avatar } from '@/components/ui/Avatar'
-import { formatCOP } from '@/shared'
+import { LedgerTable } from './LedgerTable'
+import { creditorOf, formatCOP, isLegacyClosed } from '@/shared'
 import type { HouseholdReport, PersonReport } from './report'
 import type { Rec } from './ledger'
+
+const UNTIED = 'sin deuda específica'
 
 interface Props {
   report: HouseholdReport
   /** The household's debt rows: the abonos in them are the money that already changed hands. */
   debts: Rec[]
+  members: string[]
   nameOf: (uid?: string | null) => string
   photoOf: (uid: string) => string | null
   colorOf: (uid: string) => string
@@ -54,16 +58,18 @@ const GAP = 12
 const keyOf = (i: Item) => `${i.from}>${i.to}>${i.kind}>${i.concept}>${i.who ?? ''}`
 
 /** Every row of every account, itemized: what was put into which expense, each payment, each part. */
-function itemsOf(report: HouseholdReport, debts: Rec[]): Item[] {
+function itemsOf(report: HouseholdReport, debts: Rec[], members: string[]): Item[] {
   const out: Item[] = []
   const byId = new Map(debts.map((d) => [d.id as string, d]))
   for (const d of debts) {
-    if (d.tipo !== 'Abono' || !d.creditor || d.creditor === d.debtor) continue
+    if (d.tipo !== 'Abono' || isLegacyClosed(d)) continue
+    const to = creditorOf(d, members)
+    if (!to || to === d.debtor) continue
     // a payment is drawn whole, from who paid to who received, whatever debt the app tied it to
     const debt = d.saldaId ? byId.get(d.saldaId as string) : undefined
-    const concept = debt ? ((debt.concept as string) ?? '') : 'pago de más (saldo a favor)'
-    out.push({ from: d.debtor as string, to: d.creditor as string, kind: 'paid', concept, amount: d.amount as number })
-    out.push({ from: d.creditor as string, to: '', kind: 'recv', concept, amount: d.amount as number, who: d.debtor as string })
+    const concept = debt ? ((debt.concept as string) ?? '') : UNTIED
+    out.push({ from: d.debtor as string, to, kind: 'paid', concept, amount: d.amount as number })
+    out.push({ from: to, to: '', kind: 'recv', concept, amount: d.amount as number, who: d.debtor as string })
   }
   for (const p of report.people) {
     for (const l of p.lines) {
@@ -137,13 +143,13 @@ function layout(
  * they paid, what they received, their part, their saldo — and what the plan says they still pay. On the right, whoever
  * receives money: what they already got and what is still coming. Each payment is a line between the two.
  */
-export function PaymentMap({ report, debts, nameOf, photoOf, colorOf }: Props) {
+export function PaymentMap({ report, debts, members, nameOf, photoOf, colorOf }: Props) {
   const [focus, setFocus] = useState<string | null>(null)
   const [picked, setPicked] = useState<string | null>(null)
   const [hover, setHover] = useState<string | null>(null)
   const [hidden, setHidden] = useState<Set<Kind>>(new Set())
 
-  const all = useMemo(() => itemsOf(report, debts), [report, debts])
+  const all = useMemo(() => itemsOf(report, debts, members), [report, debts, members])
   // the selected person's rows stay itemized; everybody else's lines are one per pair of people and kind
   const items = useMemo(() => {
     const visible = all.filter((i) => !hidden.has(i.kind))
@@ -284,9 +290,8 @@ export function PaymentMap({ report, debts, nameOf, photoOf, colorOf }: Props) {
         if (i.amount === 0) return `${nameOf(i.who)} todavía no le ha pagado nada a ${me}: según el plan ${i.concept}.`
         return `${me} recibió ${formatCOP(i.amount)} de ${nameOf(i.who)}${i.concept ? ` (${i.concept})` : ''}: es plata que le devolvieron, y se resta.`
       case 'paid': {
-        if (i.concept === 'pago de más (saldo a favor)') {
-          const uses = person(i.from)?.credit.uses ?? []
-          return `${me} le pagó ${formatCOP(i.amount)} a ${nameOf(i.to)} por encima de lo que le debía a esa persona. Igual suma a su favor; en las deudas registradas se descontó de lo que debía a otros${uses.length ? ` (${uses.map((u) => `${u.name} ${formatCOP(u.amount)}`).join(', ')})` : ''}.`
+        if (i.concept === UNTIED) {
+          return `${me} le pagó ${formatCOP(i.amount)} a ${nameOf(i.to)} sin atarlo a una deuda (por ejemplo, según el plan). Cuenta completo a su favor, igual que cualquier otro pago.`
         }
         return `${me} le pagó ${formatCOP(i.amount)} a ${nameOf(i.to)}${i.concept ? ` por "${i.concept}"` : ''}: suma a su favor.`
       }
@@ -321,6 +326,9 @@ export function PaymentMap({ report, debts, nameOf, photoOf, colorOf }: Props) {
         )}
       </div>
 
+      <MobileMap report={report} items={all} hidden={hidden} nameOf={nameOf} photoOf={photoOf} colorOf={colorOf} saldoText={saldoText} saldoChip={saldoChip} />
+
+      <div className="hidden md:block space-y-4">
       {sel ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-white/10 bg-[#0d263a] px-4 py-2.5 text-sm text-[#dcf1eb]">
           <span className="flex items-center gap-2 font-semibold text-[#f3f5f6]">
@@ -369,6 +377,122 @@ export function PaymentMap({ report, debts, nameOf, photoOf, colorOf }: Props) {
           {focus ? `Desglose de ${nameOf(focus)}. Toca de nuevo su nombre para cerrarlo.` : 'Toca el nombre de una persona para ver su desglose.'} Línea continua = pago hecho; punteada = pendiente según el plan.
         </p>
       </div>
+      </div>
     </section>
+  )
+}
+
+interface Flow { uid: string; amount: number; concepts: string[] }
+
+/** Merges payment items by the other person, keeping what each was for. */
+function flowsBy(items: Item[], other: (i: Item) => string): Flow[] {
+  const by = new Map<string, Flow>()
+  for (const i of items) {
+    const uid = other(i)
+    const f = by.get(uid) ?? { uid, amount: 0, concepts: [] }
+    f.amount += i.amount
+    if (i.concept && !f.concepts.includes(i.concept)) f.concepts.push(i.concept)
+    by.set(uid, f)
+  }
+  return [...by.values()].sort((a, b) => b.amount - a.amount)
+}
+
+/**
+ * The map for a phone: a many-to-many diagram can't fit a narrow screen, so it is walked one person at a time — pick
+ * someone, see their account and every payment to and from them; tapping the other person of a payment moves to them.
+ */
+function MobileMap({ report, items, hidden, nameOf, photoOf, colorOf, saldoText, saldoChip }: {
+  report: HouseholdReport
+  items: Item[]
+  hidden: Set<Kind>
+  nameOf: (uid?: string | null) => string
+  photoOf: (uid: string) => string | null
+  colorOf: (uid: string) => string
+  saldoText: (n: number) => string
+  saldoChip: (n: number) => string
+}) {
+  const [picked, setPicked] = useState<string | null>(null)
+  const uid = picked && report.people.some((p) => p.uid === picked) ? picked : report.people[0]?.uid
+  const p = report.people.find((x) => x.uid === uid)
+  if (!p) return <p className="md:hidden text-sm text-[#8a929a]">Todavía no hay movimientos en este hogar.</p>
+
+  const go = (to: string) => {
+    if (!report.people.some((x) => x.uid === to)) return
+    setPicked(to)
+    document.getElementById(`pm-chip-${to}`)?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+  }
+  const showPaid = !hidden.has('paid')
+  const showPlan = !hidden.has('open')
+  const sections: { title: string; tone: string; dashed?: boolean; dir: 'out' | 'in'; flows: Flow[] }[] = [
+    { title: 'Le falta pagarle a (plan)', tone: KIND.open.color, dashed: true, dir: 'out', flows: showPlan ? p.pays.map((x) => ({ uid: x.to, amount: x.amount, concepts: [] })) : [] },
+    { title: 'Le falta recibir de (plan)', tone: KIND.open.color, dashed: true, dir: 'in', flows: showPlan ? p.receives.map((x) => ({ uid: x.from, amount: x.amount, concepts: [] })) : [] },
+    { title: 'Le pagó a', tone: KIND.paid.color, dir: 'out', flows: showPaid ? flowsBy(items.filter((i) => i.kind === 'paid' && i.from === p.uid), (i) => i.to) : [] },
+    { title: 'Recibió de', tone: KIND.recv.color, dir: 'in', flows: showPaid ? flowsBy(items.filter((i) => i.kind === 'paid' && i.to === p.uid), (i) => i.from) : [] },
+  ]
+
+  return (
+    <div className="md:hidden space-y-3">
+      <p className="text-[12px] leading-snug text-[#8a929a]">Elige a una persona para ver su cuenta y cada pago con los demás. Toca a quien le pagó (o le pagan) para ir a su cuenta.</p>
+
+      {/* everyone, in the report's order (who pays the most first), scrollable sideways */}
+      <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none]" role="tablist" aria-label="Personas del hogar">
+        {report.people.map((x) => {
+          const on = x.uid === p.uid
+          return (
+            <button
+              key={x.uid}
+              id={`pm-chip-${x.uid}`}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              onClick={() => go(x.uid)}
+              className={clsx('flex w-[72px] flex-shrink-0 flex-col items-center gap-1 rounded-xl border px-1.5 py-2 transition', on ? 'border-brand-400/70 bg-brand-500/10' : 'border-white/10 bg-[#0d263a]')}
+            >
+              <Avatar name={x.name} photoURL={photoOf(x.uid)} size={32} color={colorOf(x.uid)} className="!ring-white/15" />
+              <span className="w-full truncate text-center text-[11px] font-semibold text-[#f0fae8]">{x.name}</span>
+              <span className={clsx('h-1.5 w-1.5 rounded-full', x.position < 0 ? 'bg-amber-300' : x.position > 0 ? 'bg-sky-300' : 'bg-emerald-300')} aria-hidden="true" />
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="rounded-2xl border border-white/10 bg-[#081a28] p-3 space-y-3">
+        <div className="flex items-center gap-2.5">
+          <Avatar name={p.name} photoURL={photoOf(p.uid)} size={36} color={colorOf(p.uid)} className="!ring-white/15" />
+          <span className="min-w-0 flex-1 truncate text-base font-bold text-[#f3f5f6]">{p.name}</span>
+          <span className={clsx('flex-shrink-0 rounded-md border px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-wider', saldoChip(p.position))}>{saldoText(p.position)}</span>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-[#0d263a] p-2.5">
+          <LedgerTable p={p} />
+        </div>
+
+        {sections.filter((s) => s.flows.length > 0).map((s) => (
+          <div key={s.title} className="space-y-1.5">
+            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: s.tone }}>{s.title} · {formatCOP(s.flows.reduce((n, f) => n + f.amount, 0))}</p>
+            {s.flows.map((f) => (
+              <button
+                key={f.uid}
+                type="button"
+                onClick={() => go(f.uid)}
+                className={clsx('flex w-full items-start gap-2.5 rounded-xl border-l-4 border-y border-r border-y-white/10 border-r-white/10 bg-[#0d263a] px-2.5 py-2 text-left transition hover:bg-white/[0.04]', s.dashed && 'border-dashed')}
+                style={{ borderLeftColor: s.tone }}
+              >
+                <Avatar name={nameOf(f.uid)} photoURL={photoOf(f.uid)} size={28} color={colorOf(f.uid)} className="!ring-white/15 flex-shrink-0" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-baseline justify-between gap-2">
+                    <span className="min-w-0 break-words text-sm font-semibold text-[#f0fae8]">{nameOf(f.uid)}</span>
+                    <span className="flex-shrink-0 font-mono text-[13px] font-bold tabular-nums text-[#f3f5f6]">{formatCOP(f.amount)}</span>
+                  </span>
+                  {f.concepts.length > 0 && <span className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-[#8a929a]">{f.concepts.join(' · ')}</span>}
+                </span>
+              </button>
+            ))}
+          </div>
+        ))}
+        {sections.every((s) => s.flows.length === 0) && (
+          <p className="text-[11px] text-[#8a929a]">Sin pagos con nadie todavía.</p>
+        )}
+      </div>
+    </div>
   )
 }

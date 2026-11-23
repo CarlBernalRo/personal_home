@@ -41,14 +41,15 @@ export function usePendingReceipts() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.uid, idsKey])
 
-  // names of who paid, from each household's own member list
+  // names of who paid, from each household's own member list. Depends only on which households these are (not on
+  // the live rows): re-running this read on every snapshot update was pure waste (same households, same names).
   useEffect(() => {
     if (ids.length === 0) return
     let live = true
     getHouseholds(ids).then((hhs) => { if (live) setHouseholds(Object.fromEntries((hhs as any[]).map((h) => [h.id, h]))) }).catch(() => {})
     return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idsKey, rows.length])
+  }, [idsKey])
 
   const receipts = useMemo<PendingReceipt[]>(() => {
     const groups = new Map<string, PendingReceipt>()

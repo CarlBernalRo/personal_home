@@ -10,7 +10,7 @@
  * expense and month that can only be created once, together with the balance change, in one all-or-nothing write.
  */
 import {
-  autoDebitFloor, buildCalendarPeriods, buildSalaryPeriods, debtLines, deriveAlerts, FIXED_EXPENSE_CATEGORIES, isScheduleUsable, latestPayDate,
+  autoDebitFloor, buildCalendarPeriods, buildSalaryPeriods, deriveAlerts, FIXED_EXPENSE_CATEGORIES, householdStanding, isScheduleUsable, latestPayDate,
   nextPayDate, PERSONAL_CATEGORIES, periodAt, periodModeOf, planAutoPayments, salaryLedgers, reminderDates, dayKey,
 } from '../../../apps/web/src/shared/index'
 import { bogotaToday, fixedFor, households } from './commands'
@@ -34,17 +34,6 @@ const NOTICE_WINDOW_MS = 48 * HOUR
 const BOGOTA_HOURS = 5
 
 export interface TelegramResult { users: number; sent: number; skipped: number; created?: number }
-
-/** Same net balance the app shows for a household: debts (less what was crossed) minus abonos, minus total-balance crossings. */
-function netOwed(debts: any[], crossings: any[], uid: string) {
-  let net = 0
-  for (const x of debts) {
-    if (x.debtor !== uid) continue
-    net += x.tipo === 'Deuda' ? (x.amount || 0) - (x.crossedAmount || 0) : -(x.amount || 0)
-  }
-  for (const c of crossings) if (c.debt2PersonId === uid && !c.debt2Id) net -= c.amount || 0
-  return Math.max(0, net)
-}
 
 /** A calendar day in the Bogota frame: both sides must already be shifted/constructed that way (see `toFrame`). */
 const sameFrameDay = (a: Date, b: Date) => a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate()
@@ -126,9 +115,10 @@ export async function createServerNotices(d: JobDeps, users: Doc[], apply = true
       const householdLines: any[] = []
       const householdNames: Record<string, string> = {}
       for (const { h, debts } of hhs) {
-        const crossings = await d.db.query('householdCrossings', [{ field: 'householdId', op: 'EQUAL', value: h.id }]).catch(() => [])
+        // an inactive household has nothing pending, same as in the app's dashboard
+        if (h.archivedAt) continue
         householdNames[h.id] = h.name ?? 'Hogar'
-        householdLines.push(...debtLines(debts as any[], u.id, h.id, netOwed(debts as any[], crossings as any[], u.id)))
+        householdLines.push(...householdStanding(h, [], debts as any[], u.id).lines)
       }
 
       const sc = await salaryContext(d, u, today, fixed, householdLines, householdNames)
@@ -384,7 +374,7 @@ export async function sendDailyPending(d: JobDeps & { tg: Telegram; appUrl: stri
 }
 
 /**
- * Weekly close (Sunday 7 p.m. Colombia): how much went out this week (fixed payments + expenses), the categories
+ * Weekly close (Sunday 9 p.m. Colombia): how much went out this week (fixed payments + expenses), the categories
  * that took the most, how the occasional budgets are pacing this period, and how many days are left to the next
  * pay day. Purely informative — nothing is registered, and a person with nothing to report gets no message.
  */
@@ -393,8 +383,11 @@ export async function sendWeeklyClose(d: JobDeps & { tg: Telegram; appUrl: strin
   const out: TelegramResult = { users: users.length, sent: 0, skipped: 0 }
   const now = clock(d)
   const today = bogotaToday(now)
-  const start = new Date(today.getTime() - 6 * 24 * HOUR) // Monday of this week
-  const end = new Date(today.getTime() + 24 * HOUR) // exclusive: through Sunday (today)
+  // The week reported is Monday–Sunday, ending on the latest Sunday (today, when it runs on Sunday evening as scheduled).
+  // Worked out from the weekday instead of assuming the run day, so a trigger on another day can't shift the window.
+  const sunday = new Date(today.getTime() - today.getUTCDay() * 24 * HOUR)
+  const start = new Date(sunday.getTime() - 6 * 24 * HOUR) // Monday
+  const end = new Date(sunday.getTime() + 24 * HOUR) // exclusive: through Sunday
   const inWeek = (v: unknown) => {
     const t = v instanceof Date ? v.getTime() : new Date(v as string).getTime()
     return t >= start.getTime() && t < end.getTime()
@@ -429,7 +422,7 @@ export async function sendWeeklyClose(d: JobDeps & { tg: Telegram; appUrl: strin
       const activeBudgets = sc.budgets.filter((b: any) => b.active && b.source !== 'household-debt' && b.amount > 0)
       if (total === 0 && activeBudgets.length === 0) { out.skipped++; continue }
 
-      const lines = [`📊 <b>Cierre de la semana</b>`, `<i>${dayShort(start)} – ${dayShort(today)}</i>`, rule]
+      const lines = [`📊 <b>Cierre de la semana</b>`, `<i>${dayShort(start)} – ${dayShort(sunday)}</i>`, rule]
       lines.push(`💸 Gastaste <b>${cop(total)}</b> esta semana`)
       const topCats = [...byCat.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
       if (topCats.length) lines.push(quote(topCats.map(([id, amt]) => `• ${esc(catLabel(id))} — ${cop(amt)}`)))

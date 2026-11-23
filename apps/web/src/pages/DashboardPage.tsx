@@ -1,10 +1,10 @@
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { CalendarRange, Sparkles } from 'lucide-react'
+import { CalendarDays, CalendarRange, Landmark, LayoutGrid, Receipt, Sparkles } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useLayoutStore } from '@/store/layout'
 import { SkeletonCard } from '@/components/ui/Skeleton'
-import { MobileCollapse } from '@/components/ui/MobileCollapse'
+import { MobileBlockTitle, MobileSectionBar, useMobileSections } from '@/components/ui/MobileSections'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { SalaryPanel } from '@/components/salary/SalaryPanel'
 import { useDashboardData } from '@/hooks/useDashboardData'
@@ -26,6 +26,7 @@ const DAY_MS = 86_400_000
 export default function DashboardPage() {
   const data = useDashboardData()
   const leftCollapsed = useLayoutStore((s) => s.leftCollapsed)
+  const sections = useMobileSections<'resumen' | 'agenda' | 'gastos' | 'cuentas'>('resumen')
   useDefaultAccount(data.salary, data.outlook ? data.outlook.computedCash : null)
 
   if (data.loading) {
@@ -64,12 +65,25 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-5 fade-in text-[#f0fae8] min-w-0 lg:flex-row lg:h-full lg:min-h-0">
+      <MobileSectionBar
+        label="Secciones del inicio"
+        anchor={sections.anchor}
+        active={sections.active}
+        onOpen={sections.open}
+        sections={[
+          { id: 'resumen', label: 'Resumen', Icon: LayoutGrid },
+          { id: 'agenda', label: 'Agenda', Icon: CalendarDays },
+          { id: 'gastos', label: 'Gastos', Icon: Receipt },
+          { id: 'cuentas', label: 'Cuentas', Icon: Landmark },
+        ]}
+      />
+
       {/* Left pane: who you are, the salary and the money now; the zones that need little room (Hogar, metas) */}
       <CurvedScrollContainer
-        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, leftCollapsed && 'lg:hidden')}
+        className={clsx('lg:w-[32%] lg:min-w-[340px] lg:max-w-[560px] lg:flex-shrink-0 lg:min-h-0', framed, leftCollapsed && 'lg:hidden', sections.only('resumen', 'cuentas'))}
         {...scrollProps}
       >
-        <div className="min-w-0">
+        <div className={clsx('min-w-0', sections.only('resumen'))}>
           <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 mb-1.5 notch-sm bg-brand-500/10 border border-brand-500/30 text-brand-400 font-pixel text-[8px] uppercase tracking-wider glow-brand-sm">
             <Sparkles size={10} aria-hidden="true" />
             <span>{data.salary.periodMode === 'calendar' ? 'Mes calendario' : 'Período de sueldo'}</span>
@@ -82,42 +96,49 @@ export default function DashboardPage() {
         </div>
 
         {/* On pay day the prompt to confirm the salary shows here; the detailed breakdown lives in Fijos / Gastos */}
-        <SalaryPanel variant="pending" salary={data.salary} expenses={data.fixed.expenses} paymentIndex={data.fixed.paymentIndex} />
+        <div className={clsx('empty:hidden', sections.only('resumen'))}>
+          <SalaryPanel variant="pending" salary={data.salary} expenses={data.fixed.expenses} paymentIndex={data.fixed.paymentIndex} />
+        </div>
 
-        <KpiRow compact outlook={data.outlook} ledger={data.ledger} income={data.income} salary={data.salary} />
+        <div className={sections.only('resumen')}>
+          <KpiRow compact outlook={data.outlook} ledger={data.ledger} income={data.income} salary={data.salary} />
+        </div>
 
-        <MobileCollapse title="Hogar y metas">
+        <div className={clsx('space-y-5', sections.only('cuentas'))}>
+          <MobileBlockTitle>Hogar y metas</MobileBlockTitle>
           <HouseholdZone households={data.households} householdTotals={data.householdTotals} />
           <GoalsCard goals={data.goals} />
-        </MobileCollapse>
+        </div>
       </CurvedScrollContainer>
 
       {/* Right pane: the salary split is the fixed header, the charts and the zones scroll below it */}
-      <div className="min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0">
+      <div className={clsx('min-w-0 flex flex-col gap-5 lg:flex-1 lg:min-h-0', sections.only('resumen', 'agenda', 'gastos', 'cuentas'))}>
         {/* Where the salary went stays fixed on top; the charts and zones scroll below it */}
-        <div className="flex-shrink-0">
+        <div className={clsx('flex-shrink-0', sections.only('resumen'))}>
           <SalarySplit ledger={data.ledger} income={data.income} />
         </div>
 
-        <CurvedScrollContainer className={`lg:flex-1 lg:min-h-0 ${framed}`} {...scrollProps}>
-          <MobileCollapse title="Cronograma de períodos">
+        <CurvedScrollContainer className={clsx('lg:flex-1 lg:min-h-0', framed, sections.only('agenda', 'gastos', 'cuentas'))} {...scrollProps}>
+          <div className={clsx('space-y-5', sections.only('agenda'))}>
+            <MobileBlockTitle>Cronograma de períodos</MobileBlockTitle>
             <ScheduleTimeline salary={data.salary} expenses={data.fixed.expenses} paymentIndex={data.fixed.paymentIndex} />
-          </MobileCollapse>
-
-          <MobileCollapse title="Cronograma de gastos">
+            <MobileBlockTitle>Cronograma de gastos</MobileBlockTitle>
             <ExpensesSchedule data={data} />
-          </MobileCollapse>
+          </div>
 
-          <MobileCollapse title="Tendencias y saldo proyectado">
+          <div className={clsx('space-y-3', sections.only('gastos'))}>
+            <MobileBlockTitle>Tendencias y saldo proyectado</MobileBlockTitle>
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               <TrendChart history={data.history} />
               <BalanceChart balanceCurve={data.balanceCurve} outlook={data.outlook} />
             </div>
-          </MobileCollapse>
+          </div>
 
-          <AccountsZone accounts={data.salary.accounts} />
+          <div className={sections.only('cuentas')}>
+            <AccountsZone accounts={data.salary.accounts} />
+          </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+          <div className={clsx('grid grid-cols-1 xl:grid-cols-2 gap-4 items-start', sections.only('gastos'))}>
             <FixedZone fixedStats={data.fixedStats} entries={data.entries} />
             <ExpensesZone additional={data.additional} categories={data.categories} spendCurve={data.spendCurve} bounds={data.bounds} />
           </div>

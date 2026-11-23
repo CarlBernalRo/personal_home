@@ -8,14 +8,14 @@
  *
  * The state of the conversation lives in `telegramFlows/{chatId}` (the Worker keeps nothing in memory).
  */
-import { PERSONAL_CATEGORIES, creditorOf, inPaymentOrder, isPendingDebt, owedByCreditor, remainingOf } from '../../../apps/web/src/shared/index'
+import { PERSONAL_CATEGORIES, creditorOf, inPaymentOrder, isPendingDebt, remainingOf } from '../../../apps/web/src/shared/index'
 import { fixedFor, bogotaToday, households } from './commands'
 import type { Db } from './db'
 import type { Keyboard, Telegram } from './telegram'
 import { EMPTY_EXTRACTED, b64, type Extracted } from './vision'
 
 export type Kind = 'income' | 'fixed' | 'occasional' | 'abono'
-type Step = 'amount' | 'date' | 'kind' | 'family' | 'concept' | 'fixed' | 'budget' | 'category' | 'household' | 'creditor' | 'target' | 'account' | 'comment' | 'confirm'
+type Step = 'amount' | 'date' | 'kind' | 'family' | 'concept' | 'fixed' | 'budget' | 'category' | 'tags' | 'household' | 'creditor' | 'target' | 'account' | 'comment' | 'confirm'
 
 export interface FlowData {
   amount?: number
@@ -39,6 +39,8 @@ export interface FlowData {
   /** Money sent to / received from a family member: who (null = the person said it wasn't family). */
   familyWith?: string | null
   familyName?: string
+  /** Tags of an additional expense (fixed and occasional ones carry their own, set in the app). */
+  tagIds?: string[]
   /** null = the person chose "sin cuenta" */
   accountId?: string | null
   accountLabel?: string
@@ -61,6 +63,8 @@ export interface Flow {
   attachmentId?: string
   /** The person's family (the other members), read when the flow starts: a transfer with one of them reaches them too. */
   family?: { id: string; myName: string; members: { uid: string; name: string }[] } | null
+  /** The person's tags, read when the flow starts (buttons point to them by position, to keep callback data short). */
+  tags?: { id: string; name: string }[]
   updatedAt: Date
 }
 
@@ -151,7 +155,8 @@ function stepsOf(f: Flow): Step[] {
     case 'income': return [...head, ...fam, ...(f.data.familyWith ? [] : (['concept'] as Step[])), 'account', 'comment', 'confirm']
     case 'fixed': return [...head, 'fixed', 'account', 'comment', 'confirm']
     case 'abono': return [...head, 'household', 'creditor', 'target', 'account', 'comment', 'confirm']
-    case 'occasional': return [...head, ...fam, ...(f.data.familyWith ? [] : (['budget', ...(f.data.budgetId === 'other' ? (['concept', 'category'] as Step[]) : [])] as Step[])), 'account', 'comment', 'confirm']
+    // an expense of its own (not a budget's) can carry tags, like in the app; only asked when the person has some
+    case 'occasional': return [...head, ...fam, ...(f.data.familyWith ? [] : (['budget', ...(f.data.budgetId === 'other' ? (['concept', 'category', ...(f.tags?.length ? ['tags'] : [])] as Step[]) : [])] as Step[])), 'account', 'comment', 'confirm']
     default: return head
   }
 }
@@ -199,6 +204,8 @@ function recap(f: Flow): string {
   if (d.targetDebtId) lines.push(`🎯 Va a: <b>${esc(d.targetDebtId === 'auto' ? 'sus deudas, la más antigua primero' : d.targetLabel)}</b>`)
   if (d.concept && d.kind !== 'fixed' && d.kind !== 'abono') lines.push(`📝 Concepto: <b>${esc(d.concept)}</b>`)
   if (d.category) lines.push(`🗂 Categoría: <b>${esc(PERSONAL_CATEGORIES.find((c) => c.id === d.category)?.label ?? d.category)}</b>`)
+  const tagNames = (d.tagIds ?? []).map((id) => f.tags?.find((t) => t.id === id)?.name).filter(Boolean)
+  if (tagNames.length) lines.push(`🔖 Etiquetas: <b>${esc(tagNames.join(', '))}</b>`)
   if (d.accountId !== undefined) lines.push(`🏦 Cuenta: <b>${esc(d.accountId ? d.accountLabel : 'Sin cuenta')}</b>`)
   return lines.length ? `${lines.join('\n')}\n\n` : ''
 }
@@ -278,6 +285,17 @@ async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboar
     }
     case 'category':
       return { text: `${head}${body}¿En qué <b>categoría</b> lo pones?`, kb: [...rows(PERSONAL_CATEGORIES.map((c) => ({ text: clip(c.label, 22), data: `f:cat:${c.id}` })), 2), NAV[0]] }
+    case 'tags': {
+      const chosen = new Set(f.data.tagIds ?? [])
+      return {
+        text: `${head}${body}🔖 ¿Le pones <b>etiquetas</b>? Toca las que quieras (puedes elegir varias o ninguna) y luego continúa.`,
+        kb: [
+          ...rows((f.tags ?? []).map((t, i) => ({ text: `${chosen.has(t.id) ? '✅' : '▫️'} ${clip(t.name, 20)}`, data: `f:tg:${i}` })), 2),
+          [{ text: chosen.size ? `➡️ Continuar (${chosen.size})` : '➡️ Continuar sin etiquetas', data: 'f:tg:done' }],
+          NAV[0],
+        ],
+      }
+    }
     case 'household': {
       const hhs = await households(d.db, f.userId)
       if (hhs.length === 0) return { text: `${head}${body}No perteneces a ningún hogar todavía, así que no puedo registrar un abono.`, kb: [NAV[0]] }
@@ -289,7 +307,8 @@ async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboar
     case 'creditor': {
       const hh = (await households(d.db, f.userId)).find((x) => x.h.id === f.data.householdId)
       if (!hh) return { text: `${head}${body}Ese hogar ya no está disponible.`, kb: [NAV[0]] }
-      const owed = new Map(owedByCreditor(hh.debts as any[], f.userId, hh.members).map((l) => [l.creditor, l.owed]))
+      // whom the user really has to pay, once everything is set against each other (the same plan the app shows)
+      const owed = new Map((hh.me?.pays ?? []).map((l) => [l.to, l.amount]))
       const others = hh.members.filter((m) => m !== f.userId).sort((a, b) => (owed.get(b) ?? 0) - (owed.get(a) ?? 0))
       return {
         text: `${head}${body}¿A quién le pagaste?`,
@@ -427,7 +446,13 @@ export async function startFromImage(d: FlowDeps, userId: string, chatId: number
       if (members.length) family = { id: fam.id, myName: (names[userId] ?? '').split(' ')[0], members }
     }
   } catch (e) { console.error('family:', (e as Error)?.message) }
-  const flow: Flow = { userId, chatId, step: 'amount', history: [], awaiting: null, editing: false, extracted, data: {}, messageId, attachmentId, family, updatedAt: new Date(clock(d)) }
+  // the person's tags (kept in their profile): offered for an expense of its own
+  let tags: Flow['tags'] = []
+  try {
+    const profile = await d.db.get(`users/${userId}`)
+    tags = ((profile?.tags ?? []) as any[]).filter((t) => t?.id && t?.name).map((t) => ({ id: String(t.id), name: String(t.name) }))
+  } catch (e) { console.error('tags:', (e as Error)?.message) }
+  const flow: Flow = { userId, chatId, step: 'amount', history: [], awaiting: null, editing: false, extracted, data: {}, messageId, attachmentId, family, tags, updatedAt: new Date(clock(d)) }
   enter(flow)
   const { text, kb } = await render(d, flow)
   await d.tg.edit(chatId, messageId, note + text, kb)
@@ -474,7 +499,7 @@ export async function onCallback(d: FlowDeps, userId: string, cb: { id: string; 
         delete d0.concept; delete d0.category; delete d0.fixedExpenseId; delete d0.occMonth; delete d0.fixedLabel
         delete d0.budgetId; delete d0.budgetLabel; delete d0.accountId; delete d0.accountLabel
         delete d0.householdId; delete d0.householdLabel; delete d0.creditorId; delete d0.creditorLabel; delete d0.targetDebtId; delete d0.targetLabel
-        delete d0.familyWith; delete d0.familyName
+        delete d0.familyWith; delete d0.familyName; delete d0.tagIds
       }
       d0.kind = a as Kind
       advance(f)
@@ -490,7 +515,7 @@ export async function onCallback(d: FlowDeps, userId: string, cb: { id: string; 
       } else {
         const m = f.family?.members.find((x) => x.uid === a)
         if (!m) { notice = 'Esa persona ya no está en tu familia'; break }
-        d0.familyWith = m.uid; d0.familyName = m.name
+        d0.familyWith = m.uid; d0.familyName = m.name; delete d0.tagIds
         if (d0.kind === 'income') d0.concept = `Transferencia de ${m.name}`
         else { d0.budgetId = 'other'; delete d0.budgetLabel; d0.concept = `Transferencia a ${m.name}`; d0.category = 'transferencias' }
       }
@@ -547,7 +572,8 @@ export async function onCallback(d: FlowDeps, userId: string, cb: { id: string; 
       else {
         const bd = (await budgetsOf(d, f.userId)).find((x) => x.id === a)
         if (!bd) { notice = 'Esa opción ya no está disponible'; break }
-        d0.budgetId = bd.id; d0.budgetLabel = bd.concept; d0.concept = bd.concept; d0.category = bd.category
+        // a budget's spend carries the budget's own tags
+        d0.budgetId = bd.id; d0.budgetLabel = bd.concept; d0.concept = bd.concept; d0.category = bd.category; delete d0.tagIds
       }
       advance(f)
       break
@@ -555,6 +581,17 @@ export async function onCallback(d: FlowDeps, userId: string, cb: { id: string; 
     case 'cat':
       if (f.step === 'category' && PERSONAL_CATEGORIES.some((c) => c.id === a)) { d0.category = a; advance(f) }
       break
+    case 'tg': {
+      if (f.step !== 'tags') break
+      if (a === 'done') { advance(f); break }
+      const tag = f.tags?.[Number(a)]
+      if (!tag) { notice = 'Esa etiqueta ya no está disponible'; break }
+      const chosen = new Set(d0.tagIds ?? [])
+      if (chosen.has(tag.id)) chosen.delete(tag.id)
+      else chosen.add(tag.id)
+      d0.tagIds = [...chosen]
+      break
+    }
     case 'acc': {
       if (f.step !== 'account') break
       if (a === 'none') { d0.accountId = null; delete d0.accountLabel }
@@ -638,6 +675,7 @@ async function send(d: FlowDeps, f: Flow) {
     fixedExpenseId: x.fixedExpenseId,
     occMonth: x.occMonth,
     budgetId: x.budgetId && x.budgetId !== 'other' ? x.budgetId : undefined,
+    tagIds: x.kind === 'occasional' && x.budgetId === 'other' && x.tagIds?.length ? x.tagIds : undefined,
     accountId: x.accountId ?? undefined,
     comment: x.comment ?? undefined,
     source: 'telegram',

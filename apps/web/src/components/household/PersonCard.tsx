@@ -31,47 +31,6 @@ function ExpandSection({ open, children }: { open: boolean; children: ReactNode 
   )
 }
 
-// ── How a person's balance was calculated ────────────────────────────────────
-function BalanceBreakdown({ name, deuda, abono, abonoDeudas = abono, aFavor = 0, cruzado, saldo }: { name: string; deuda: number; abono: number; abonoDeudas?: number; aFavor?: number; cruzado: number; saldo: number }) {
-  return (
-    <div className="bg-[#0d263a] border border-white/10 rounded-xl px-3.5 py-3 mb-3 space-y-1.5">
-      <p className={clsx(labelCls, 'mb-1.5')}>
-        Cómo se calcula
-        <Tip text="Suma de todas sus deudas históricas, menos lo que ha abonado y lo que se le ha cruzado: nunca se resetea por mes." />
-      </p>
-      <div className="flex items-center justify-between text-[11px]">
-        <span className="text-[#9aa4ac]">Deudas totales</span>
-        <span className="font-semibold text-[#f3f5f6] tabular-nums font-mono">{formatCOP(deuda)}</span>
-      </div>
-      {abonoDeudas > 0 && (
-        <div className="flex items-center justify-between text-[11px]">
-          <span className="text-[#9aa4ac]">{aFavor > 0 ? '− Abonos a sus deudas' : '− Abonos'}</span>
-          <span className="font-semibold text-brand-300 tabular-nums font-mono">−{formatCOP(abonoDeudas)}</span>
-        </div>
-      )}
-      {aFavor > 0 && (
-        <div className="flex items-center justify-between text-[11px]">
-          <span className="text-violet-300">− Pagó de más (saldo a favor)</span>
-          <span className="font-semibold text-violet-300 tabular-nums font-mono">−{formatCOP(aFavor)}</span>
-        </div>
-      )}
-      {cruzado > 0 && (
-        <div className="flex items-center justify-between text-[11px]">
-          <span className="text-[#9aa4ac]">− Cruzado</span>
-          <span className="font-semibold text-sky-300 tabular-nums font-mono">−{formatCOP(cruzado)}</span>
-        </div>
-      )}
-      <div className="flex items-center justify-between text-[11px] pt-1.5 mt-1 border-t border-white/10">
-        <span className="font-bold text-[#f3f5f6]">{saldo < 0 ? `= ${name} tiene a favor` : `= ${name} debe`}</span>
-        <span className={clsx('font-bold tabular-nums font-mono text-xs', saldo < 0 ? 'text-violet-300' : 'text-amber-300')}>{formatCOP(Math.abs(saldo))}</span>
-      </div>
-      {saldo < 0 && (
-        <p className="text-[10px] leading-snug text-[#8a929a]">Ese saldo se descuenta solo de las próximas deudas que {name} tenga en el hogar, con quien sea.</p>
-      )}
-    </div>
-  )
-}
-
 // ── Read-only compact row for settled debts / abonos ─────────────────────────
 function StatusItem({ d, label, chip, onSelect }: { d: Rec; label: string; chip: string; onSelect: () => void }) {
   return (
@@ -94,14 +53,14 @@ function StatusItem({ d, label, chip, onSelect }: { d: Rec; label: string; chip:
 function DebtItem({ d, canCross, canAbonar, creditor, onCross, onAbonar, onSelect }: {
   d: Rec; canCross: boolean; creditor: string | null; canAbonar: boolean; onCross: () => void; onAbonar: () => void; onSelect: () => void
 }) {
-  const crossed = (d.crossedAmount as number) || 0
-  // `paidAbono` also carries a balance in favor applied to this debt: split it so each is named for what it is
+  const crossed = (d.coverage?.crossed as number | undefined) ?? ((d.crossedAmount as number) || 0)
+  // what covered it, each named for what it is: crossed, abonado to it, or compensated by what the debtor is owed
   const credit = (d.creditApplied as number) || 0
   const paidAbono = ((d.paidAbono as number) || 0) - credit
   const remaining = remainingOf(d)
   const dueDate = d.dueDate ? toDate(d.dueDate) : null
   const overdue = dueDate ? dueDate < new Date() : false
-  const progress = d.amount > 0 ? Math.min(100, Math.round(((crossed + paidAbono + credit) / d.amount) * 100)) : 0
+  const progress = d.amount > 0 ? Math.min(100, Math.round(((d.amount - remaining) / d.amount) * 100)) : 0
 
   return (
     <div className="py-3 border-b border-white/[0.06] last:border-0">
@@ -110,15 +69,15 @@ function DebtItem({ d, canCross, canAbonar, creditor, onCross, onAbonar, onSelec
           <div className="min-w-0">
             <p className="text-sm font-semibold text-[#f0fae8] truncate group-hover:text-brand-300 transition">
               {d.concept}
-              {d.loanId && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-amber-300 border border-amber-400/40 rounded px-1 py-0.5">préstamo</span>}
-              {d.expenseId && <span className="ml-2 align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">gasto compartido</span>}
+              {d.loanId && <span className="ml-2 inline-block whitespace-nowrap align-middle text-[9px] font-bold uppercase tracking-wider text-amber-300 border border-amber-400/40 rounded px-1 py-0.5">préstamo</span>}
+              {d.expenseId && <span className="ml-2 inline-block whitespace-nowrap align-middle text-[9px] font-bold uppercase tracking-wider text-sky-300 border border-sky-400/40 rounded px-1 py-0.5">gasto compartido</span>}
             </p>
             <div className="flex items-center gap-1.5 text-[10px] font-mono text-[#8a929a] mt-0.5 flex-wrap">
               <span>{format(toDate(d.date), 'dd MMM yyyy', { locale: es })}</span>
               {creditor && <span className="text-[#c7ccd1]">· a {creditor}</span>}
               {crossed > 0 && <span className="text-sky-300">· {formatCOP(crossed)} cruzado</span>}
               {paidAbono > 0 && <span className="text-brand-300">· {formatCOP(paidAbono)} abonado</span>}
-              {credit > 0 && <span className="text-violet-300">· {formatCOP(credit)} con saldo a favor</span>}
+              {credit > 0 && <span className="text-violet-300">· {formatCOP(credit)} compensado</span>}
             </div>
             {dueDate && (
               <p className={clsx('text-[10px] mt-0.5 flex items-center gap-1', overdue ? 'text-red-400 font-semibold' : 'text-[#8a929a]')}>
@@ -192,14 +151,14 @@ function ExpenseEdgeItem({ d, canCross, canAbonar, creditorUid, creditorName, co
   colorOf?: (uid: string) => string; photoOf?: (uid: string) => string | null
   onCross: () => void; onAbonar: () => void; onSelect: () => void
 }) {
-  const crossed = (d.crossedAmount as number) || 0
-  // `paidAbono` also carries a balance in favor applied to this debt: split it so each is named for what it is
+  const crossed = (d.coverage?.crossed as number | undefined) ?? ((d.crossedAmount as number) || 0)
+  // what covered it, each named for what it is: crossed, abonado to it, or compensated by what the debtor is owed
   const credit = (d.creditApplied as number) || 0
   const paidAbono = ((d.paidAbono as number) || 0) - credit
   const remaining = remainingOf(d)
   const dueDate = d.dueDate ? toDate(d.dueDate) : null
   const overdue = dueDate ? dueDate < new Date() : false
-  const progress = d.amount > 0 ? Math.min(100, Math.round(((crossed + paidAbono + credit) / d.amount) * 100)) : 0
+  const progress = d.amount > 0 ? Math.min(100, Math.round(((d.amount - remaining) / d.amount) * 100)) : 0
 
   return (
     <div className="py-3 border-b border-white/[0.06] last:border-0">
@@ -212,7 +171,7 @@ function ExpenseEdgeItem({ d, canCross, canAbonar, creditorUid, creditorName, co
               <span>{format(toDate(d.date), 'dd MMM yyyy', { locale: es })}</span>
               {crossed > 0 && <span className="text-sky-300">· {formatCOP(crossed)} cruzado</span>}
               {paidAbono > 0 && <span className="text-brand-300">· {formatCOP(paidAbono)} abonado</span>}
-              {credit > 0 && <span className="text-violet-300">· {formatCOP(credit)} con saldo a favor</span>}
+              {credit > 0 && <span className="text-violet-300">· {formatCOP(credit)} compensado</span>}
             </div>
             {dueDate && (
               <p className={clsx('text-[10px] mt-0.5 flex items-center gap-1', overdue ? 'text-red-400 font-semibold' : 'text-[#8a929a]')}>
@@ -303,7 +262,7 @@ function ExpenseGroupItem({ concept, edges, canCross, canAbonar, creditorName, c
 /** A debt that is part of a shared expense but still waits for someone's confirmation: shown, never counted. */
 export interface AwaitingDebt { id: string; concept: string; creditor: string; amount: number; waitingFor: string }
 
-function PersonDebtGroups({ personDebts, canCross, canAbonar, creditorName, creditorUid, colorOf, photoOf, onCross, onAbonar, onAbonarGroup, onSelect, owedToMe, nameOf, awaiting, net, detail }: {
+function PersonDebtGroups({ personDebts, canCross, canAbonar, creditorName, creditorUid, colorOf, photoOf, onCross, onAbonar, onAbonarGroup, onSelect, owedToMe, nameOf, awaiting, detail }: {
   personDebts: Rec[]; canCross: boolean | ((d: Rec) => boolean); creditorName?: (d: Rec) => string | null; canAbonar: boolean; onCross: (d: Rec) => void; onAbonar: (d: Rec) => void; onSelect: (d: Rec) => void
   onAbonarGroup?: (edges: Rec[]) => void
   /** Whom a debt is owed to, by uid — so a grouped expense's edges can show that person's avatar. */
@@ -314,8 +273,6 @@ function PersonDebtGroups({ personDebts, canCross, canAbonar, creditorName, cred
   owedToMe?: Rec[]
   nameOf?: (uid: string) => string
   awaiting?: AwaitingDebt[]
-  /** This person's net balance: below zero they are ahead, and an abono tied to no debt reads as "a favor". */
-  net: number
   /** The headline already says what the person pays or collects: these groups are only the itemised detail, with no total of their own. */
   detail?: boolean
 }) {
@@ -324,12 +281,16 @@ function PersonDebtGroups({ personDebts, canCross, canAbonar, creditorName, cred
   const newestFirst = (a: Rec, b: Rec) => toDate(b.date).getTime() - toDate(a.date).getTime()
   const pendientes = withExpenseGroups(inPaymentOrder(personDebts.filter((d) => isPendingDebt(d))))
   const cruzados = personDebts.filter((d) => d.tipo === 'Deuda' && d.cruzado).sort(newestFirst)
-  const saldados = personDebts.filter((d) => d.tipo === 'Deuda' && !d.cruzado && remainingOf(d) <= 0).sort(newestFirst)
+  const closed = personDebts.filter((d) => d.tipo === 'Deuda' && !d.cruzado && remainingOf(d) <= 0)
+  // compensated: nothing was paid on it, what this person is owed (or paid elsewhere) already covers it
+  const isCompensated = (d: Rec) => d.coverage && d.coverage.abonado === 0 && d.coverage.crossed === 0 && d.coverage.netted > 0
+  const compensados = closed.filter(isCompensated).sort(newestFirst)
+  const saldados = closed.filter((d) => !isCompensated(d)).sort(newestFirst)
   const abonos = personDebts.filter((d) => d.tipo === 'Abono').sort(newestFirst)
   const owed = owedToMe ?? []
   const waiting = awaiting ?? []
 
-  if (pendientes.length + cruzados.length + saldados.length + abonos.length + owed.length + waiting.length === 0) {
+  if (pendientes.length + cruzados.length + compensados.length + saldados.length + abonos.length + owed.length + waiting.length === 0) {
     return <p className="text-xs text-[#8a929a] py-3">Sin registros.</p>
   }
 
@@ -397,20 +358,25 @@ function PersonDebtGroups({ personDebts, canCross, canAbonar, creditorName, cred
           {cruzados.map((d) => <StatusItem key={d.id} d={d} label="Cruzado" chip="bg-sky-500/15 text-sky-300 border-sky-500/30" onSelect={() => onSelect(d)} />)}
         </Group>
       )}
+      {compensados.length > 0 && (
+        <Group title="Compensado" tip="No hubo que pagarlo: lo que esta persona debía se descontó de lo que otros le deben a ella (o de lo que pagó por otro lado).">
+          {compensados.map((d) => <StatusItem key={d.id} d={d} label="Compensado" chip="bg-violet-500/15 text-violet-300 border-violet-500/35" onSelect={() => onSelect(d)} />)}
+        </Group>
+      )}
       {saldados.length > 0 && (
-        <Group title="Pagado" tip="Se pagó directamente, en efectivo o transferencia: ya no cuenta como pendiente.">
+        <Group title="Pagado" tip="Se pagó, en efectivo o transferencia: ya no cuenta como pendiente.">
           {saldados.map((d) => <StatusItem key={d.id} d={d} label="Pagado" chip="bg-emerald-500/15 text-emerald-300 border-emerald-500/30" onSelect={() => onSelect(d)} />)}
         </Group>
       )}
       {abonos.length > 0 && (
-        <Group title="Movimientos de abono" tip="El historial de pagos directos registrados, en orden.">
+        <Group title="Pagos que hizo" tip="Cada pago registrado, en orden. Todos cuentan completos en su saldo, estén atados a una deuda o no.">
           {abonos.map((d) => {
-            // an abono is not a debt: tapping it opens the debt it paid (for what was paid over, the debt of the same payment)
+            // a payment is not a debt: tapping it opens the debt it paid (for the untied part, the debt of the same payment)
             const paid = personDebts.find((x) => x.id === (d.saldaId ?? personDebts.find((y) => y.tipo === 'Abono' && y.saldaId && y.paymentId && y.paymentId === d.paymentId)?.saldaId))
             const open = () => { if (paid) onSelect(paid) }
-            return d.saldaId || net >= 0
+            return d.saldaId
               ? <StatusItem key={d.id} d={d} label="Abono" chip="bg-brand-500/20 text-brand-300 border-brand-500/40" onSelect={open} />
-              : <StatusItem key={d.id} d={d} label="A favor" chip="bg-violet-500/20 text-violet-300 border-violet-500/40" onSelect={open} />
+              : <StatusItem key={d.id} d={d} label="Pago general" chip="bg-violet-500/20 text-violet-300 border-violet-500/40" onSelect={open} />
           })}
         </Group>
       )}
@@ -425,8 +391,8 @@ interface PersonCardProps {
   color: string
   /** No account, can't log in — flagged next to the name and with a dashed avatar ring, same language as the expense wizard's participant picker. */
   isGuest?: boolean
-  net: number
-  breakdown: { deuda: number; abono: number; abonoDeudas?: number; aFavor?: number; cruzado: number; saldo: number }
+  /** Where this person stands (household engine): < 0 still has to pay that much · > 0 is owed that much · 0 even. */
+  position: number
   debts: Rec[]
   /** One value for the whole card, or decided per debt (each debt may be owed to a different person). */
   canCross: boolean | ((d: Rec) => boolean)
@@ -450,7 +416,7 @@ interface PersonCardProps {
   owedToMe?: Rec[]
   /** Names the debtor of each `owedToMe` row. */
   nameOf?: (uid: string) => string
-  /** Debts of shared expenses that wait for someone's confirmation: listed, but not part of `net`. */
+  /** Debts of shared expenses that wait for someone's confirmation: listed, but not part of `position`. */
   awaiting?: AwaitingDebt[]
   /** Where this person really stands once everything is set against each other, and whom they pay (or who pays them). */
   settle?: PersonReport
@@ -463,9 +429,8 @@ interface PersonCardProps {
 }
 
 /** One member of the household: balance chip on top, breakdown and debts when expanded. */
-export function PersonCard({ name, role, photoURL, color, isGuest, net, breakdown, debts, canCross, creditorName, creditorUid, colorOf, photoOf, canAbonar, expanded, onToggle, onAbonarAll, onCross, onAbonar, onAbonarGroup, onSelect, owedToMe, nameOf, awaiting, settle, onRegisterPlan, planMode, bare }: PersonCardProps) {
-  // the headline: with a settlement worked out, what the person has to pay or will be paid — not just the debts registered to them
-  const pos = settle ? settle.position : null
+export function PersonCard({ name, role, photoURL, color, isGuest, position: pos, debts, canCross, creditorName, creditorUid, colorOf, photoOf, canAbonar, expanded, onToggle, onAbonarAll, onCross, onAbonar, onAbonarGroup, onSelect, owedToMe, nameOf, awaiting, settle, onRegisterPlan, planMode, bare }: PersonCardProps) {
+  const waitingTotal = (awaiting ?? []).reduce((t, w) => t + w.amount, 0)
   return (
     <div className={bare ? '' : 'rounded-2xl border border-white/10 bg-[#0a1f2f] shadow-xl overflow-hidden'}>
       <div
@@ -488,19 +453,12 @@ export function PersonCard({ name, role, photoURL, color, isGuest, net, breakdow
           <p className="font-pixel text-[8px] text-[#8a929a] uppercase tracking-widest">{role}</p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          {pos !== null && pos !== 0 ? (
-            <span className="flex flex-col items-end gap-0.5">
-              <span className={clsx('text-[10px] font-bold uppercase tracking-wider border px-2 py-1 rounded-md font-mono', pos < 0 ? 'text-amber-300 bg-amber-500/15 border-amber-500/30' : 'text-sky-300 bg-sky-500/15 border-sky-500/30')}>
-                {pos < 0 ? `Debe pagar ${formatCOP(-pos)}` : `Le deben ${formatCOP(pos)}`}
-              </span>
-              {/* what is registered against them, when that is not the same thing */}
+          {pos !== 0 ? (
+            <span className={clsx('text-[10px] font-bold uppercase tracking-wider border px-2 py-1 rounded-md font-mono', pos < 0 ? 'text-amber-300 bg-amber-500/15 border-amber-500/30' : 'text-sky-300 bg-sky-500/15 border-sky-500/30')}>
+              {pos < 0 ? `Debe pagar ${formatCOP(-pos)}` : `Le deben ${formatCOP(pos)}`}
             </span>
-          ) : net > 0 ? (
-            <span className="text-sm font-bold font-mono text-amber-300">{formatCOP(net)}</span>
-          ) : net < 0 ? (
-            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-2 py-1 rounded-md">A favor {formatCOP(-net)}</span>
-          ) : (awaiting?.length ?? 0) > 0 ? (
-            <span className="text-[10px] font-bold uppercase tracking-wider text-sky-300 bg-sky-500/15 border border-sky-500/30 px-2 py-1 rounded-md">{formatCOP(awaiting!.reduce((t, w) => t + w.amount, 0))} por confirmar</span>
+          ) : waitingTotal > 0 ? (
+            <span className="text-[10px] font-bold uppercase tracking-wider text-sky-300 bg-sky-500/15 border border-sky-500/30 px-2 py-1 rounded-md">{formatCOP(waitingTotal)} por confirmar</span>
           ) : (
             <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-2 py-1 rounded-md">Al día</span>
           )}
@@ -544,7 +502,7 @@ export function PersonCard({ name, role, photoURL, color, isGuest, net, breakdow
             </div>
           )}
           {/* with a single pending item the debt's own "Abonar" does the same: only one button, so nobody wonders which to press */}
-          {!planMode && net > 0 && canAbonar && withExpenseGroups(debts.filter((d) => isPendingDebt(d))).length > 1 && (
+          {!planMode && pos < 0 && canAbonar && withExpenseGroups(debts.filter((d) => isPendingDebt(d))).length > 1 && (
             <button
               onClick={onAbonarAll}
               className="w-full mb-3 py-1.5 rounded-lg border border-brand-500/30 bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 text-[11px] font-semibold transition flex items-center justify-center gap-1.5"
@@ -553,9 +511,7 @@ export function PersonCard({ name, role, photoURL, color, isGuest, net, breakdow
               <Coins size={12} /> Abonar al saldo de {name}
             </button>
           )}
-          {/* with no abonos or crossings the breakdown just repeats the balance already in the header — only show it when it adds something */}
-          {!planMode && (breakdown.abono > 0 || breakdown.cruzado > 0) && <BalanceBreakdown name={name} {...breakdown} />}
-          {!planMode && <PersonDebtGroups personDebts={debts} canCross={canCross} creditorName={creditorName} creditorUid={creditorUid} colorOf={colorOf} photoOf={photoOf} canAbonar={canAbonar} onCross={onCross} onAbonar={onAbonar} onAbonarGroup={onAbonarGroup} onSelect={onSelect} owedToMe={owedToMe} nameOf={nameOf} awaiting={awaiting} net={net} detail={!!settle && (settle.position !== 0 || settle.share > 0)} />}
+          {!planMode && <PersonDebtGroups personDebts={debts} canCross={canCross} creditorName={creditorName} creditorUid={creditorUid} colorOf={colorOf} photoOf={photoOf} canAbonar={canAbonar} onCross={onCross} onAbonar={onAbonar} onAbonarGroup={onAbonarGroup} onSelect={onSelect} owedToMe={owedToMe} nameOf={nameOf} awaiting={awaiting} detail={!!settle && (settle.position !== 0 || settle.share > 0)} />}
         </div>
       </ExpandSection>
     </div>

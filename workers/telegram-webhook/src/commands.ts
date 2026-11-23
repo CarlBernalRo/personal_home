@@ -4,7 +4,7 @@
  */
 import {
   indexPayments, monthEntries, monthKey, relativeDay, shiftMonth, withAutoPayments,
-  owedByCreditor, householdDebtsWithCredit, withPockets, topAccounts,
+  householdDebtsWithCredit, withPockets, topAccounts, buildHouseholdReport,
 } from '../../../apps/web/src/shared/index'
 import type { Db } from './db'
 
@@ -76,44 +76,48 @@ async function proximos(db: Db, uid: string, today: Date) {
 }
 
 // ── households ───────────────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * Each household of the user, through the household engine — the same one every screen of the app uses: `debts` carry
+ * what is open on each, and `report` says who pays whom (the shared plan when the accounts were crossed). Positions come
+ * from the registered debts and payments alone, so the expenses don't need to be read here.
+ */
 export async function households(db: Db, uid: string) {
   const list = await db.query('households', [{ field: 'members', op: 'ARRAY_CONTAINS', value: uid }])
   return Promise.all(list.map(async (h) => {
     const raw = await db.query('householdDebts', [{ field: 'householdId', op: 'EQUAL', value: h.id }])
     const members: string[] = h.members ?? []
-    // what each debt's abonos paid, and the balances in favor on top: the very same function the app uses
     const debts = householdDebtsWithCredit(raw as any[], members)
     const names: Record<string, string> = h.memberNames ?? {}
-    return { h, debts, members, name: (u: string | null) => (u ? (u === uid ? 'ti' : names[u] || 'alguien') : 'alguien sin definir') }
+    const name = (u: string | null) => (u ? (u === uid ? 'ti' : names[u] || 'alguien') : 'alguien sin definir')
+    const report = buildHouseholdReport({
+      name: (h.name as string) ?? 'Hogar', members, guestIds: (h.guestIds as string[] | undefined) ?? [], nameOf: (u) => name(u ?? null),
+      expenses: [], debts: debts as any[], frozenPlan: (h.settlementPlan as any) ?? null,
+    })
+    const person = (u: string) => report.people.find((p) => p.uid === u)
+    return { h, debts, members, name, report, person, me: person(uid) }
   }))
 }
 
 async function debo(db: Db, uid: string) {
   const hhs = await households(db, uid)
   if (hhs.length === 0) return 'No perteneces a ningún hogar todavía.'
-  let any = false
-  const blocks = hhs.map(({ h, debts, members, name }) => {
-    const lines = owedByCreditor(debts as any[], uid, members).filter((l) => l.owed > 0)
-    if (lines.length === 0) return ''
-    any = true
-    return `<b>${esc(h.name)}</b>\n${lines.map((l) => `• a ${esc(name(l.creditor))}: <b>${cop(l.owed)}</b>`).join('\n')}`
+  const blocks = hhs.map(({ h, me }) => {
+    const pays = me?.pays ?? []
+    if (pays.length === 0) return ''
+    return `<b>${esc(h.name)}</b>\n${pays.map((l) => `• a ${esc(l.name)}: <b>${cop(l.amount)}</b>`).join('\n')}`
   }).filter(Boolean)
-  return any ? `<b>💸 Lo que debes</b>\n\n${blocks.join('\n\n')}` : '🎉 No debes nada en tus hogares.'
+  return blocks.length ? `<b>💸 Lo que debes</b>\n\n${blocks.join('\n\n')}` : '🎉 No debes nada en tus hogares.'
 }
 
 async function medeben(db: Db, uid: string) {
   const hhs = await households(db, uid)
   if (hhs.length === 0) return 'No perteneces a ningún hogar todavía.'
-  let any = false
-  const blocks = hhs.map(({ h, debts, members, name }) => {
-    const lines = members.filter((m) => m !== uid)
-      .map((m) => ({ who: m, owed: owedByCreditor(debts as any[], m, members).filter((l) => l.creditor === uid).reduce((s, l) => s + l.owed, 0) }))
-      .filter((l) => l.owed > 0)
-    if (lines.length === 0) return ''
-    any = true
-    return `<b>${esc(h.name)}</b>\n${lines.map((l) => `• ${esc(name(l.who))}: <b>${cop(l.owed)}</b>`).join('\n')}`
+  const blocks = hhs.map(({ h, me }) => {
+    const receives = me?.receives ?? []
+    if (receives.length === 0) return ''
+    return `<b>${esc(h.name)}</b>\n${receives.map((l) => `• ${esc(l.name)}: <b>${cop(l.amount)}</b>`).join('\n')}`
   }).filter(Boolean)
-  return any ? `<b>🤝 Lo que te deben</b>\n\n${blocks.join('\n\n')}` : 'Nadie te debe nada por ahora.'
+  return blocks.length ? `<b>🤝 Lo que te deben</b>\n\n${blocks.join('\n\n')}` : 'Nadie te debe nada por ahora.'
 }
 
 // ── /resumen ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -129,9 +133,9 @@ async function resumen(db: Db, uid: string, today: Date) {
   const overdue = pending.filter((e) => e.status === 'overdue')
   let owe = 0
   let owed = 0
-  for (const { debts, members } of hhs) {
-    owe += owedByCreditor(debts as any[], uid, members).reduce((s, l) => s + l.owed, 0)
-    for (const m of members.filter((x) => x !== uid)) owed += owedByCreditor(debts as any[], m, members).filter((l) => l.creditor === uid).reduce((s, l) => s + l.owed, 0)
+  for (const { me } of hhs) {
+    owe += (me?.pays ?? []).reduce((s, l) => s + l.amount, 0)
+    owed += (me?.receives ?? []).reduce((s, l) => s + l.amount, 0)
   }
   const month = today.toLocaleDateString('es-CO', { month: 'long', year: 'numeric', timeZone: 'UTC' })
   return [

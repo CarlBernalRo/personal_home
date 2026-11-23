@@ -117,4 +117,4 @@ O todo junto: `firebase deploy`.
 
 ## Pruebas
 
-La lógica de negocio pura (split de gastos, cruce de deudas, balance neto) tiene pruebas unitarias en `apps/web/src/shared/utils/*.test.ts` y `apps/web/src/lib/firestore.calcNetBalance.test.ts`. Córrelas con `npm run test` (desde la raíz o desde `apps/web`).
+La lógica de negocio pura (split de gastos, cruce de deudas, saldos del hogar) tiene pruebas unitarias en `apps/web/src/shared/utils/*.test.ts` y `apps/web/src/components/household/*.test.ts`. El motor de saldos del hogar (`householdBalance.ts`) es la única fuente de "quién debe a quién" para la app, el dashboard y el bot de Telegram. Córrelas con `npm run test` (desde la raíz o desde `apps/web`).

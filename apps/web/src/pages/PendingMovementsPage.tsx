@@ -5,6 +5,7 @@ import { CalendarClock, CheckCheck, CheckCircle2, Heart, Home, Inbox, Layers, Lo
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/Button'
 import { AccountSelect } from '@/components/ui/AccountSelect'
+import { TagPicker } from '@/components/ui/TagPicker'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { SkeletonList } from '@/components/ui/Skeleton'
 import { useToast } from '@/components/ui/Toast'
@@ -74,6 +75,9 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
   const relatives = family ? family.members.filter((u) => u !== user?.uid) : []
   const canForward = pm.kind === 'occasional' && pm.source !== 'family' && !pm.familyTransfer && relatives.length > 0
   const [forwardTo, setForwardTo] = useState<string | null>(null)
+  // a spend of its own (no budget) can carry tags: the ones chosen in Telegram come preselected and can be changed here
+  const canTag = pm.kind === 'occasional' && !pm.budgetId
+  const [tagIds, setTagIds] = useState<string[]>(pm.tagIds ?? [])
   const k = KIND[pm.kind]
   const Icon = k.icon
   const category = pm.category ? PERSONAL_CATEGORIES.find((c) => c.id === pm.category)?.label : null
@@ -83,11 +87,11 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
     try {
       // a movement whose family side was already sent (from Telegram) is only confirmed, never forwarded again
       if (forwardTo && family && user && !pm.familyTransfer) {
-        await confirmPendingMovement({ ...pm, category: 'transferencias', concept: pm.concept || `Transferencia a ${family.memberNames[forwardTo] ?? ''}` }, accountId)
+        await confirmPendingMovement({ ...pm, tagIds, category: 'transferencias', concept: pm.concept || `Transferencia a ${family.memberNames[forwardTo] ?? ''}` }, accountId)
         const sent = await forwardToFamily({ family, from: user.uid, fromName: myName, to: forwardTo, amount: pm.amount, date: dateOf(pm.date), notes: pm.comment, attachmentId: pm.attachmentId }, pm.id)
         showToast(sent ? `Transferencia registrada: a ${family.memberNames[forwardTo] ?? 'tu familiar'} le llegó para confirmarla` : 'Transferencia registrada (ya le había llegado a tu familiar)', 'success')
       } else {
-        await confirmPendingMovement(pm, accountId)
+        await confirmPendingMovement(canTag ? { ...pm, tagIds } : pm, accountId)
         showToast(`${k.label} registrado`, 'success')
       }
       window.dispatchEvent(new Event(PENDING_CHANGED))
@@ -163,6 +167,7 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
             )}
           </div>
         )}
+        {canTag && <TagPicker value={tagIds} onChange={setTagIds} />}
         <AccountSelect
           label={pm.kind === 'income' ? 'Cuenta donde entra el dinero' : 'Cuenta de la que sale el dinero'}
           accounts={accounts}
