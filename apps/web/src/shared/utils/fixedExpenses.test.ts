@@ -414,3 +414,25 @@ describe('planAutoPayments: what it never stores', () => {
     expect(planAutoPayments([card], [], [matched], today, 'u1')).toEqual([]);
   });
 });
+
+describe('archived expenses', () => {
+  const today = new Date(2026, 10, 20);
+  const archived = { ...fe(), id: 'f1', estimatedAmount: 41000, archivedAt: new Date(2026, 10, 1) };
+
+  it('owe nothing more, but what was paid keeps showing as paid', () => {
+    expect(getStatus(archived, '2026-11', undefined, today)).toBe('na');
+    expect(getStatus(archived, '2026-09', undefined, today)).toBe('na'); // no arrears either
+    expect(getStatus(archived, '2026-10', { paidAmount: 41000 }, today)).toBe('paid');
+  });
+
+  it('only their paid months appear in a month', () => {
+    const payments = new Map([['f1|2026-10', { paidAmount: 41000 }]]);
+    expect(monthEntries([archived], '2026-10', payments, today).map((e) => e.status)).toEqual(['paid']);
+    expect(monthEntries([archived], '2026-11', payments, today)).toEqual([]);
+  });
+
+  it('generate no automatic debits', () => {
+    const auto = { ...archived, autoDebit: [{ from: '2026-01' }] };
+    expect(withAutoPayments([auto], [], today)).toEqual([]);
+  });
+});

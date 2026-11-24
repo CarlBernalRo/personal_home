@@ -228,6 +228,17 @@ export function useSalary() {
 
   const removeBudget = (id: string) => saveBudgets(budgets.filter((b) => b.id !== id))
   const removeBudgets = (ids: string[]) => saveBudgets(budgets.filter((b) => !ids.includes(b.id)))
+  // archived instead of deleted: inactive (so it estimates nothing) but kept, so its spends keep their budget and tags
+  const archiveBudgets = (ids: string[]) => {
+    const at = new Date().toISOString()
+    return saveBudgets(budgets.map((b) => (ids.includes(b.id) ? { ...b, active: false, archivedAt: at } : b)))
+  }
+  const unarchiveBudget = (id: string) =>
+    saveBudgets(budgets.map((b) => {
+      if (b.id !== id) return b
+      const { archivedAt: _gone, ...rest } = b
+      return { ...rest, active: true }
+    }))
 
   async function registerSpend(budget: VariableBudget, amount: number, date: Date, accountId = '', attachmentId?: string, notes = '') {
     if (!user) return
@@ -285,7 +296,7 @@ export function useSalary() {
     await load()
   }
 
-  return { periodMode, boundsSchedule, accounts, accountsLoaded, reloadAccounts, depositAccountId, pickAccount, rememberAccount, schedule: usable ? schedule : null, salaries, extras: countedExtras, allExtras: extras, movesMoney, budgets, spends: allSpends, variable, addBudget, updateBudget, removeBudget, removeBudgets, registerSpend, removeSpend, personal, addPersonalExpense, editPersonalExpense, addExtra, removeExtra, periods, currentPeriod, pending, confirm, loading, reload: load }
+  return { periodMode, boundsSchedule, accounts, accountsLoaded, reloadAccounts, depositAccountId, pickAccount, rememberAccount, schedule: usable ? schedule : null, salaries, extras: countedExtras, allExtras: extras, movesMoney, budgets, spends: allSpends, variable, addBudget, updateBudget, removeBudget, removeBudgets, archiveBudgets, unarchiveBudget, registerSpend, removeSpend, personal, addPersonalExpense, editPersonalExpense, addExtra, removeExtra, periods, currentPeriod, pending, confirm, loading, reload: load }
 }
 
 export type SalaryState = ReturnType<typeof useSalary>

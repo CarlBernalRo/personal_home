@@ -6,6 +6,7 @@ import { clsx } from 'clsx'
 import { Button } from '@/components/ui/Button'
 import { AccountSelect } from '@/components/ui/AccountSelect'
 import { TagPicker } from '@/components/ui/TagPicker'
+import { syncFixedHouseholdShares } from '@/lib/fixedHousehold'
 import { CurvedScrollContainer } from '@/components/ui/CurvedScrollContainer'
 import { SkeletonList } from '@/components/ui/Skeleton'
 import { useToast } from '@/components/ui/Toast'
@@ -92,6 +93,8 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
         showToast(sent ? `Transferencia registrada: a ${family.memberNames[forwardTo] ?? 'tu familiar'} le llegó para confirmarla` : 'Transferencia registrada (ya le había llegado a tu familiar)', 'success')
       } else {
         await confirmPendingMovement(canTag ? { ...pm, tagIds } : pm, accountId)
+        // a fixed expense shared with a household gets its share registered there
+        if (pm.kind === 'fixed') syncFixedHouseholdShares(pm.userId).catch(() => {})
         showToast(`${k.label} registrado`, 'success')
       }
       window.dispatchEvent(new Event(PENDING_CHANGED))

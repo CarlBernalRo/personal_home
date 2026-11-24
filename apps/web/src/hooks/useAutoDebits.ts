@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { getAccounts, getAllFixedExpensePayments, getFixedExpenses, materializeAutoPayments } from '@/lib/firestore'
 import { planAutoPayments } from '@/shared'
+import { syncFixedHouseholdShares } from '@/lib/fixedHousehold'
 
 /** Fired when the stored fixed payments / account balances changed behind the screens' back, so they reload. */
 export const FIXED_DATA_CHANGED = 'fixed-data-changed'
@@ -22,7 +23,12 @@ export function useAutoDebits() {
     if (!user) return
     const uid = user.uid
 
+    // fixed expenses shared with a household: payments that came in from anywhere (Telegram, a server auto-debit) get
+    // their share registered there too. Cheap when nothing is linked; failures retry next time.
+    const share = () => { syncFixedHouseholdShares(uid).catch(() => {}) }
+
     async function run() {
+      share()
       if (running.current || Date.now() - lastRun.current < MIN_GAP_MS) return
       running.current = true
       lastRun.current = Date.now()
@@ -35,6 +41,7 @@ export function useAutoDebits() {
           accountId: p.accountId, month: p.month, paymentDate: p.paymentDate, notes: '',
         })))
         window.dispatchEvent(new Event(FIXED_DATA_CHANGED))
+        share()
       } catch {
         lastRun.current = 0 // try again next time
       } finally {

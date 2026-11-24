@@ -49,7 +49,23 @@ export interface FixedExpense {
   oneTime?: boolean;
   /** Account this expense is paid from: automatic debits take the money from it and it is offered when paying. */
   accountId?: string;
+  /**
+   * Archived (instead of deleted): it stops generating pending payments, alerts and automatic debits, and leaves the
+   * configuration, but its payments keep showing and counting everywhere. It can be reactivated.
+   */
+  archivedAt?: Date | null;
+  /** Shared with a household: every payment of it (from `from` on) becomes a shared expense there, paid by its owner. */
+  household?: FixedHouseholdLink | null;
   createdAt: Date;
+}
+
+export interface FixedHouseholdLink {
+  householdId: string;
+  /** First month (yyyy-MM) whose payment is shared: earlier ones stay as they were. */
+  from: string;
+  splitMode: 'equal' | 'percentage';
+  /** Who takes part (the owner included when they carry part of it); `percentage` when splitMode = 'percentage'. */
+  shares: { memberId: string; percentage?: number }[];
 }
 
 /** A span of months: from `from` (inclusive) to `until` (exclusive); open-ended while `until` is undefined. */

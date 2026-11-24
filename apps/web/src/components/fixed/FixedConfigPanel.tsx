@@ -6,7 +6,7 @@ import { clsx } from 'clsx'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { scheduledDate } from './ProgramExpenseModal'
-import { Plus, Pencil, Trash2, ChevronDown, ArrowUpDown } from 'lucide-react'
+import { Plus, Pencil, Trash2, ChevronDown, ArrowUpDown, Archive, ArchiveRestore } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
@@ -20,8 +20,9 @@ import { useTags } from '@/hooks/useTags'
 import { tagsOf } from '@/shared'
 import { ActiveToggleModal } from './ActiveToggleModal'
 import { useMyHouseholds } from '@/hooks/useMyHouseholds'
-import { addFixedExpense, updateFixedExpense, deleteFixedExpense } from '@/lib/firestore'
-import { FIXED_EXPENSE_CATEGORIES, PERSONAL_CATEGORIES, formatCOP, monthKey, cadenceRevisionStart, reviseHistory, revisionStart, startMonthOf, toggleRange, openRange, type AutoDebitRange, type VariableBudget } from '@/shared'
+import { addFixedExpense, updateFixedExpense, deleteFixedExpense, archiveFixedExpense, unarchiveFixedExpense, restoreFixedExpenseHistory } from '@/lib/firestore'
+import { FIXED_EXPENSE_CATEGORIES, PERSONAL_CATEGORIES, formatCOP, monthKey, cadenceRevisionStart, reviseHistory, revisionStart, startMonthOf, toggleRange, openRange, type AutoDebitRange, type FixedHouseholdLink, type VariableBudget } from '@/shared'
+import { syncFixedHouseholdShares } from '@/lib/fixedHousehold'
 import { AppIcon, EmptyMark } from '@/components/ui/AppIcon'
 
 const CATEGORY_OPTIONS = FIXED_EXPENSE_CATEGORIES.map((c) => ({ value: c.id, label: c.label }))
@@ -98,6 +99,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
   const [openFixed, setOpenFixed] = useState(false)
   const [openProgramados, setOpenProgramados] = useState(false)
   const [openOcasional, setOpenOcasional] = useState(false)
+  const [openArchived, setOpenArchived] = useState(false)
   const [fixedSort, setFixedSort] = useState<SortKey>('day')
   const [programadosSort, setProgramadosSort] = useState<SortKey>('day')
   const [ocasionalSort, setOcasionalSort] = useState<SortKey>('day')
@@ -106,6 +108,22 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
   // tags are picked apart from the form fields
   const [tagIds, setTagIds] = useState<string[]>([])
   const { tags: allTags } = useTags()
+
+  // ── Shared with a household: every payment becomes a shared expense there (see syncFixedHouseholdShares) ──
+  const [link, setLink] = useState<FixedHouseholdLink | null>(null)
+  const sharable = myHouseholds.filter((h) => !h.archived && h.members.length > 1)
+  const linkHousehold = link ? sharable.find((h) => h.id === link.householdId) ?? null : null
+  function pickHousehold(id: string) {
+    const hh = sharable.find((h) => h.id === id)
+    if (!hh) { setLink(null); return }
+    setLink({ householdId: id, from: link?.from ?? currentMonth, splitMode: link?.splitMode ?? 'equal', shares: hh.members.map((m) => ({ memberId: m, percentage: Math.round(100 / hh.members.length) })) })
+  }
+  const toggleShare = (m: string) => link && setLink({ ...link, shares: link.shares.some((s) => s.memberId === m) ? link.shares.filter((s) => s.memberId !== m) : [...link.shares, { memberId: m, percentage: 0 }] })
+  const setPercentage = (m: string, v: number) => link && setLink({ ...link, shares: link.shares.map((s) => (s.memberId === m ? { ...s, percentage: Math.max(0, Math.min(100, v)) } : s)) })
+  const linkError = !link ? null
+    : !link.shares.some((s) => s.memberId !== userId) ? 'Elige al menos a otra persona del hogar.'
+      : link.splitMode === 'percentage' && link.shares.reduce((n, s) => n + (s.percentage ?? 0), 0) !== 100 ? `Los porcentajes deben sumar 100 (van ${link.shares.reduce((n, s) => n + (s.percentage ?? 0), 0)}).`
+        : null
 
   const form = useForm<FormData>({
     resolver: zodResolver(schema) as any,
@@ -117,6 +135,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
   function openCreate() {
     setEditing(null)
     setTagIds([])
+    setLink(null)
     form.reset({ concept: '', estimatedAmount: undefined as any, paymentDay: null, category: 'servicios', frequency: 'fijo', isVariable: false, autoDebit: false, accountId: '', everyMonths: 1, cycleStart: '', startMonth: currentMonth, notes: '' })
     setModalOpen(true)
   }
@@ -126,6 +145,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
     if (fe.oneTime) { onProgram(fe); return }
     setEditing(fe)
     setTagIds(fe.tagIds ?? [])
+    setLink(fe.household ?? null)
     form.reset({
       concept: fe.concept,
       estimatedAmount: fe.estimatedAmount,
@@ -144,12 +164,14 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
   }
 
   async function onSubmit(data: FormData) {
+    if (linkError) return
     setSaving(true)
     try {
       const { autoDebit, cycleStart, ...rest } = data
       // Paid every N months: bills fall every N months counted from one month (the first bill when creating)
       const cadence = { everyMonths: data.everyMonths, cycleStart: null as string | null }
-      const payload = { ...rest, ...cadence, notes: data.notes ?? '', tagIds }
+      const household = link ? { ...link, shares: link.shares.map((s) => (link.splitMode === 'percentage' ? s : { memberId: s.memberId })) } : null
+      const payload = { ...rest, ...cadence, notes: data.notes ?? '', tagIds, household }
       if (editing) {
         // A new day, amount or frequency only applies from the current month on (or the next one if this
         // month is already paid/overdue); closed months keep the values they had.
@@ -179,6 +201,8 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
       }
       setModalOpen(false)
       onChanged()
+      // shared (or no longer shared, or split differently from now on): the household catches up with its payments
+      if (household || editing?.household) syncFixedHouseholdShares(userId).catch(() => {})
     } catch {
       showToast('Error al guardar', 'error')
     } finally {
@@ -190,25 +214,27 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
   const [selected, setSelected] = useState<string[]>([])
   const toggleRow = (key: string) => setSelected((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
 
-  async function handleDeleteSelected(fixedList: any[], ocasionalList: any[]) {
+  const ARCHIVE_NOTE = 'Deja de generar pendientes, avisos y débitos automáticos. Lo que ya pagaste sigue en tu historial y en tus cuentas, y puedes reactivarlo desde Archivados.'
+
+  async function handleArchiveSelected(fixedList: any[], ocasionalList: any[]) {
     const fx = fixedList.filter((f) => selected.includes(`fixed|${f.id}`))
     const oc = ocasionalList.filter((b) => selected.includes(`oc|${b.id}`))
     const names = [...fx, ...oc].map((x) => x.concept as string)
     if (names.length === 0) return
     const shown = names.slice(0, 5).map((n) => `• ${n}`).join('\n') + (names.length > 5 ? `\n… y ${names.length - 5} más` : '')
     const ok = await ask(
-      `¿Eliminar ${names.length} ${names.length === 1 ? 'gasto' : 'gastos'}?\n\n${shown}\n\nSe borran con su configuración. Los pagos que ya registraste se conservan y siguen contando en tu dinero en cuenta.`,
-      { title: `Eliminar ${names.length} ${names.length === 1 ? 'gasto' : 'gastos'}`, confirmLabel: 'Eliminar' },
+      `¿Archivar ${names.length} ${names.length === 1 ? 'gasto' : 'gastos'}?\n\n${shown}\n\n${ARCHIVE_NOTE}`,
+      { title: `Archivar ${names.length} ${names.length === 1 ? 'gasto' : 'gastos'}`, confirmLabel: 'Archivar' },
     )
     if (!ok) return
     try {
-      await Promise.all(fx.map((f) => deleteFixedExpense(f.id)))
-      if (oc.length > 0) await salary.removeBudgets(oc.map((b) => b.id))
+      await Promise.all(fx.map((f) => archiveFixedExpense(f.id)))
+      if (oc.length > 0) await salary.archiveBudgets(oc.map((b) => b.id))
       setSelected([])
       onChanged()
-      showToast(`${names.length} ${names.length === 1 ? 'gasto eliminado' : 'gastos eliminados'}`, 'delete')
+      showToast(`${names.length} ${names.length === 1 ? 'gasto archivado' : 'gastos archivados'}`, 'success')
     } catch {
-      showToast('No se pudieron eliminar todos los gastos', 'error')
+      showToast('No se pudieron archivar todos los gastos', 'error')
       onChanged()
     }
   }
@@ -228,19 +254,54 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
     )
   }
 
-  async function handleDelete(fe: any) {
-    const ok = await ask(
-      `¿Eliminar "${fe.concept}"? Se borra el gasto y su configuración. Los pagos que ya registraste se conservan y siguen contando en tu dinero en cuenta.`,
-      { title: 'Eliminar gasto fijo', confirmLabel: 'Eliminar' },
-    )
-    if (!ok) return
+  async function handleArchive(fe: any) {
+    if (!(await ask(`¿Archivar "${fe.concept}"? ${ARCHIVE_NOTE}`, { title: 'Archivar gasto', confirmLabel: 'Archivar' }))) return
+    try {
+      await archiveFixedExpense(fe.id)
+      onChanged()
+      showToast(`"${fe.concept}" archivado`, 'success')
+    } catch {
+      showToast('No se pudo archivar el gasto', 'error')
+    }
+  }
+
+  async function handleArchiveBudget(b: VariableBudget) {
+    if (!(await ask(`¿Archivar "${b.concept}"? Deja de estimarse en tus períodos. Los gastos ya registrados se conservan y puedes reactivarlo desde Archivados.`, { title: 'Archivar gasto ocasional', confirmLabel: 'Archivar' }))) return
+    salary.archiveBudgets([b.id]).then(() => showToast(`"${b.concept}" archivado`, 'success')).catch(() => showToast('No se pudo archivar', 'error'))
+  }
+
+  // ── Archived: reactivate, delete for good (only with no payments), or recover payments of deleted expenses ──
+  const paidIds = new Set([...paymentIndex.values()].map((p: any) => p.fixedExpenseId as string))
+  async function handleUnarchive(fe: any) {
+    try {
+      await unarchiveFixedExpense(fe.id)
+      onChanged()
+      showToast(`"${fe.concept}" está activo otra vez`, 'success')
+    } catch { showToast('No se pudo reactivar', 'error') }
+  }
+  async function handleDeleteForGood(fe: any) {
+    if (paidIds.has(fe.id)) return
+    if (!(await ask(`¿Eliminar "${fe.concept}" definitivamente? No tiene pagos registrados, así que no se pierde historial.`, { title: 'Eliminar definitivamente', confirmLabel: 'Eliminar' }))) return
     try {
       await deleteFixedExpense(fe.id)
       onChanged()
-      showToast('Gasto fijo eliminado', 'delete')
-    } catch {
-      showToast('No se pudo eliminar el gasto fijo', 'error')
-    }
+      showToast(`"${fe.concept}" eliminado`, 'delete')
+    } catch { showToast('No se pudo eliminar', 'error') }
+  }
+  // payments whose expense was deleted before archiving existed: they show nowhere until their expense comes back
+  const knownIds = new Set(expenses.map((e) => e.id as string))
+  const orphans = [...[...paymentIndex.values()].reduce((m: Map<string, any[]>, p: any) => {
+    const id = p.fixedExpenseId as string
+    if (!id || knownIds.has(id) || p.auto) return m
+    m.set(id, [...(m.get(id) ?? []), p])
+    return m
+  }, new Map<string, any[]>()).entries()].map(([id, payments]) => ({ id, payments, concept: (payments.find((p: any) => p.concept)?.concept as string) || 'Gasto sin nombre', total: payments.reduce((s: number, p: any) => s + (p.paidAmount || 0), 0) }))
+  async function handleRestore(o: { id: string; payments: any[]; concept: string }) {
+    try {
+      await restoreFixedExpenseHistory(userId, o.id, o.payments)
+      onChanged()
+      showToast(`Historial de "${o.concept}" recuperado (queda archivado)`, 'success')
+    } catch { showToast('No se pudo recuperar el historial', 'error') }
   }
 
   const errors = form.formState.errors
@@ -293,10 +354,13 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
     )
   }
   // What the fixed expenses cost per month on average: one paid every N months counts as 1/N of its bill
-  const fixedOnly = expenses.filter((e) => e.frequency !== 'ocasional' && !e.oneTime)
+  const fixedOnly = expenses.filter((e) => e.frequency !== 'ocasional' && !e.oneTime && !e.archivedAt)
   // A scheduled one-off payment (Programar gasto) is neither fijo nor ocasional: it lives in the same
   // collection (it reuses the due-date/payment engine) but gets its own category here.
-  const programados = expenses.filter((e) => e.oneTime)
+  const programados = expenses.filter((e) => e.oneTime && !e.archivedAt)
+  const archivedFixed = expenses.filter((e) => e.archivedAt)
+  const archivedBudgets = salary.budgets.filter((b) => b.archivedAt)
+  const archivedCount = archivedFixed.length + archivedBudgets.length + orphans.length
   const total = fixedOnly.reduce((s, e) => s + e.estimatedAmount / (e.everyMonths ?? 1), 0)
   const hasSpread = fixedOnly.some((e) => (e.everyMonths ?? 1) > 1)
   const ocasionales = salary.budgets.filter((b) => b.active)
@@ -331,7 +395,7 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
         </div>
       </div>
 
-      {expenses.length === 0 && ocasionales.length === 0 ? (
+      {fixedOnly.length + programados.length === 0 && ocasionales.length === 0 ? (
         <div className="notch bg-[#0a1f2f] border border-white/10 text-center py-10 px-6">
           <EmptyMark name="list" />
           <p className="text-sm font-bold text-[#f0fae8]">Sin gastos configurados</p>
@@ -346,8 +410,8 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
             </p>
             <div className="flex gap-2">
               <Button size="sm" variant="secondary" onClick={() => setSelected([])}>Cancelar</Button>
-              <Button size="sm" variant="danger" notched onClick={() => handleDeleteSelected(expenses, ocasionales)}>
-                <Trash2 size={14} /> Eliminar seleccionados
+              <Button size="sm" variant="secondary" notched onClick={() => handleArchiveSelected(expenses, ocasionales)}>
+                <Archive size={14} /> Archivar seleccionados
               </Button>
             </div>
           </div>
@@ -431,6 +495,12 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
                             {accountChip(fe)}
                             <span aria-hidden="true">·</span>
                             <span>Desde {startMonthOf(fe, currentMonth)}</span>
+                            {fe.household && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span className="text-sky-300">Compartido con {myHouseholds.find((h) => h.id === fe.household.householdId)?.name ?? 'un hogar'}</span>
+                              </>
+                            )}
                           </div>
                           {fe.notes && <p className="mt-1 text-[10px] text-[#8a929a] break-words">{fe.notes}</p>}
                           {tagsOf(fe.tagIds, allTags).length > 0 && <div className="mt-1 flex flex-wrap gap-1">{tagsOf(fe.tagIds, allTags).map((t) => <TagChip key={t.id} tag={t} />)}</div>}
@@ -441,8 +511,8 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
                             <button onClick={() => openEdit(fe)} title="Editar" className="p-1.5 rounded-lg text-[#8a929a] hover:text-white hover:bg-white/10 transition">
                               <Pencil size={14} />
                             </button>
-                            <button onClick={() => handleDelete(fe)} title="Eliminar" aria-label={`Eliminar ${fe.concept}`} className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition">
-                              <Trash2 size={14} />
+                            <button onClick={() => handleArchive(fe)} title="Archivar" aria-label={`Archivar ${fe.concept}`} className="p-1.5 rounded-lg text-[#8a929a] hover:text-amber-300 hover:bg-amber-500/10 transition">
+                              <Archive size={14} />
                             </button>
                           </div>
                         </div>
@@ -535,8 +605,8 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
                             <button onClick={() => openEdit(fe)} title="Editar" className="p-1.5 rounded-lg text-[#8a929a] hover:text-white hover:bg-white/10 transition">
                               <Pencil size={14} />
                             </button>
-                            <button onClick={() => handleDelete(fe)} title="Eliminar" aria-label={`Eliminar ${fe.concept}`} className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition">
-                              <Trash2 size={14} />
+                            <button onClick={() => handleArchive(fe)} title="Archivar" aria-label={`Archivar ${fe.concept}`} className="p-1.5 rounded-lg text-[#8a929a] hover:text-amber-300 hover:bg-amber-500/10 transition">
+                              <Archive size={14} />
                             </button>
                           </div>
                         </div>
@@ -633,16 +703,8 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
                             <button onClick={() => setOcasional({ editing: b })} title="Editar" className="p-1.5 rounded-lg text-[#8a929a] hover:text-white hover:bg-white/10 transition">
                               <Pencil size={14} />
                             </button>
-                            <button
-                              onClick={async () => {
-                                if (await ask(`¿Eliminar "${b.concept}"? Los gastos ya registrados se conservan.`, { title: 'Eliminar gasto ocasional' })) {
-                                  salary.removeBudget(b.id).catch(() => showToast('No se pudo eliminar', 'error'))
-                                }
-                              }}
-                              title="Eliminar"
-                              className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition"
-                            >
-                              <Trash2 size={14} />
+                            <button onClick={() => handleArchiveBudget(b)} title="Archivar" aria-label={`Archivar ${b.concept}`} className="p-1.5 rounded-lg text-[#8a929a] hover:text-amber-300 hover:bg-amber-500/10 transition">
+                              <Archive size={14} />
                             </button>
                           </div>
                         </div>
@@ -653,6 +715,84 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
             </>
           ))}
         </div>
+        </div>
+      )}
+
+      {/* ── Archivados ─────────────────────────────────────────────────── */}
+      {archivedCount > 0 && (
+        <div className="space-y-2.5">
+          <button
+            type="button"
+            onClick={() => setOpenArchived((v) => !v)}
+            aria-expanded={openArchived}
+            className="group flex w-full items-center gap-2.5 rounded-xl border border-white/10 bg-[#0d263a] px-4 py-3 text-left transition hover:bg-white/5"
+          >
+            <Archive size={13} className="text-[#8a929a]" aria-hidden="true" />
+            <span className="font-pixel text-[10px] uppercase tracking-widest text-[#9aa4ac]">Archivados</span>
+            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-[#c7ccd1]">{archivedCount}</span>
+            {orphans.length > 0 && <span className="rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-200">historial por recuperar</span>}
+            <span className="ml-auto flex items-center gap-1.5 text-[10px] font-semibold text-[#6f7a83] group-hover:text-brand-300">
+              {openArchived ? 'Ocultar' : 'Ver'}
+              <ChevronDown size={15} className={clsx('transition-transform', openArchived && 'rotate-180')} aria-hidden="true" />
+            </span>
+          </button>
+
+          {openArchived && (
+            <div className="space-y-2">
+              <p className="px-1 text-[11px] leading-snug text-[#8a929a]">No generan pendientes ni avisos. Lo que pagaste en ellos sigue en tu historial, tus reportes y tus cuentas.</p>
+
+              {orphans.map((o) => (
+                <div key={o.id} className="flex flex-wrap items-center gap-3 notch-sm border border-amber-400/30 bg-amber-500/[0.06] p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#f0fae8] break-words">{o.concept}</p>
+                    <p className="text-[10px] text-amber-200/90">Gasto eliminado · {o.payments.length} {o.payments.length === 1 ? 'pago' : 'pagos'} por {formatCOP(o.total)} que no se están mostrando</p>
+                  </div>
+                  <Button size="sm" variant="secondary" onClick={() => handleRestore(o)}>
+                    <ArchiveRestore size={14} /> Recuperar historial
+                  </Button>
+                </div>
+              ))}
+
+              {archivedFixed.map((fe) => {
+                const cat = FIXED_EXPENSE_CATEGORIES.find((c) => c.id === fe.category)
+                const hasPayments = paidIds.has(fe.id)
+                return (
+                  <div key={fe.id} className="flex flex-wrap items-center gap-3 notch-sm border border-white/10 bg-[#0a1f2f] p-3 opacity-90">
+                    <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center notch-sm border border-white/10 bg-white/5 text-[#9aa4ac]" aria-hidden="true">
+                      <AppIcon name={cat?.icon} size={16} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-[#f0fae8] break-words">{fe.concept}</p>
+                      <p className="text-[10px] text-[#9aa4ac]">{fe.oneTime ? 'Programado' : 'Fijo'} · {formatCOP(fe.estimatedAmount)} · {hasPayments ? 'con pagos en tu historial' : 'sin pagos'}</p>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <Button size="sm" variant="secondary" onClick={() => handleUnarchive(fe)}><ArchiveRestore size={14} /> Reactivar</Button>
+                      {!hasPayments && (
+                        <button onClick={() => handleDeleteForGood(fe)} title="Eliminar definitivamente" aria-label={`Eliminar ${fe.concept} definitivamente`} className="p-1.5 rounded-lg text-[#8a929a] hover:text-red-400 hover:bg-red-500/10 transition">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+
+              {archivedBudgets.map((b) => (
+                <div key={b.id} className="flex flex-wrap items-center gap-3 notch-sm border border-white/10 bg-[#0a1f2f] p-3 opacity-90">
+                  <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center notch-sm border border-white/10 bg-white/5 text-[#9aa4ac]" aria-hidden="true">
+                    <AppIcon name={PERSONAL_CATEGORIES.find((c) => c.id === b.category)?.icon} size={16} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#f0fae8] break-words">{b.concept}</p>
+                    <p className="text-[10px] text-[#9aa4ac]">Ocasional · ~{formatCOP(b.amount)} por período</p>
+                  </div>
+                  <Button size="sm" variant="secondary" onClick={() => salary.unarchiveBudget(b.id).then(() => showToast(`"${b.concept}" está activo otra vez`, 'success')).catch(() => showToast('No se pudo reactivar', 'error'))}>
+                    <ArchiveRestore size={14} /> Reactivar
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -747,6 +887,62 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
               <TagPicker value={tagIds} onChange={setTagIds} />
             </div>
           </div>
+
+          {/* Compartir con un hogar */}
+          {sharable.length > 0 && (
+            <div className="pt-1 border-t border-white/10">
+              <div className="pt-3 space-y-2.5">
+                <Select
+                  label="Compartir con un hogar"
+                  value={link?.householdId ?? ''}
+                  onChange={(e) => pickHousehold(e.target.value)}
+                  options={[{ value: '', label: 'No compartir' }, ...sharable.map((h) => ({ value: h.id, label: h.name }))]}
+                />
+                {link && linkHousehold && (
+                  <div className="space-y-2.5 rounded-xl border border-white/10 bg-[#0d263a] p-3">
+                    <p className="text-[11px] leading-snug text-[#9aa4ac]">Cada vez que pagues este gasto se registra solo en «{linkHousehold.name}», pagado por ti, y los demás quedan debiendo su parte.</p>
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-[#8a929a]">¿Entre quiénes se divide?</p>
+                      {linkHousehold.members.map((m) => {
+                        const on = link.shares.some((s) => s.memberId === m)
+                        const share = link.shares.find((s) => s.memberId === m)
+                        return (
+                          <div key={m} className="flex items-center gap-2">
+                            <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-[#dcf1eb] cursor-pointer">
+                              <input type="checkbox" checked={on} onChange={() => toggleShare(m)} />
+                              <span className="truncate">{m === userId ? 'Tú' : (linkHousehold.memberNames[m] ?? 'Integrante')}</span>
+                            </label>
+                            {on && link.splitMode === 'percentage' && (
+                              <span className="flex items-center gap-1">
+                                <input
+                                  type="number" min={0} max={100} inputMode="numeric"
+                                  value={share?.percentage ?? 0}
+                                  onChange={(e) => setPercentage(m, Number(e.target.value) || 0)}
+                                  aria-label={`Porcentaje de ${m === userId ? 'ti' : (linkHousehold.memberNames[m] ?? 'integrante')}`}
+                                  className="w-16 rounded-lg border border-white/10 bg-[#0a1f2f] px-2 py-1 text-right text-xs text-white outline-none focus:border-brand-500"
+                                />
+                                <span className="text-xs text-[#8a929a]">%</span>
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="flex gap-1 rounded-lg bg-[#0a1f2f] p-1 text-xs" role="group" aria-label="Cómo se divide">
+                      {(['equal', 'percentage'] as const).map((mode) => (
+                        <button key={mode} type="button" onClick={() => setLink({ ...link, splitMode: mode })} aria-pressed={link.splitMode === mode}
+                          className={clsx('flex-1 rounded-md px-2 py-1.5 font-semibold transition', link.splitMode === mode ? 'bg-brand-500/20 text-brand-300' : 'text-[#8a929a] hover:text-white')}>
+                          {mode === 'equal' ? 'Partes iguales' : 'Porcentaje'}
+                        </button>
+                      ))}
+                    </div>
+                    <Input label="Desde el pago de" type="month" value={link.from} onChange={(e) => setLink({ ...link, from: e.target.value || currentMonth })} />
+                    {linkError && <p className="text-[11px] text-red-300">{linkError}</p>}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setModalOpen(false)}>Cancelar</Button>

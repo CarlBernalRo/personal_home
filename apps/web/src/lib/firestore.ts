@@ -151,8 +151,47 @@ export async function updateFixedExpense(id: string, data: Partial<NewFixedExpen
 }
 
 /** Deletes the expense's configuration. Payments already registered are kept: they are real money movements. */
+/** Only for an expense with no payment at all (archived ones with payments are kept: their history depends on them). */
 export async function deleteFixedExpense(id: string) {
   return deleteDoc(doc(db, 'fixedExpenses', id))
+}
+
+/** Archives an expense: no more pending payments, alerts or automatic debits; its payments stay in the history. */
+export async function archiveFixedExpense(id: string) {
+  return updateDoc(doc(db, 'fixedExpenses', id), { archivedAt: serverTimestamp() })
+}
+
+export async function unarchiveFixedExpense(id: string) {
+  return updateDoc(doc(db, 'fixedExpenses', id), { archivedAt: deleteField() })
+}
+
+/**
+ * Payments whose expense was deleted (before archiving existed) show nowhere: everything reads a payment through its
+ * expense. This brings the expense back, archived and with the same id, so those payments show and count again.
+ * Built from what the payments themselves say (concept, amounts, dates); an existing but inactive one is reused.
+ */
+export async function restoreFixedExpenseHistory(userId: string, fixedExpenseId: string, payments: { concept?: string; paidAmount: number; month: string; paymentDate?: Date | string }[]) {
+  const ref = doc(db, 'fixedExpenses', fixedExpenseId)
+  // (looked for among all of the user's own, inactive ones included: reading a deleted one by id is not allowed)
+  const mine = await getDocs(query(collection(db, 'fixedExpenses'), where('userId', '==', userId)))
+  if (mine.docs.some((d) => d.id === fixedExpenseId)) return updateDoc(ref, { active: true, archivedAt: serverTimestamp() })
+  const sorted = [...payments].sort((a, b) => a.month.localeCompare(b.month))
+  const last = sorted[sorted.length - 1]
+  const lastDate = last?.paymentDate ? new Date(last.paymentDate) : null
+  return setDoc(ref, {
+    userId,
+    concept: last?.concept || 'Gasto fijo recuperado',
+    estimatedAmount: last?.paidAmount ?? 0,
+    paymentDay: lastDate && !isNaN(lastDate.getTime()) ? lastDate.getDate() : null,
+    category: 'otro',
+    isVariable: false,
+    notes: 'Recuperado de pagos de un gasto eliminado.',
+    frequency: 'fijo',
+    active: true,
+    startMonth: sorted[0]?.month,
+    archivedAt: serverTimestamp(),
+    createdAt: serverTimestamp(),
+  })
 }
 
 // ── Fixed Expense Payments ────────────────────────────────────────────────────
@@ -879,7 +918,12 @@ export async function getDebtCrossings(debtId: string) {
  * touched, until they confirm it with `confirmExpenseContribution` — exactly the "don't debit until they confirm"
  * guarantee the rest of the app already gives Telegram-sourced movements.
  */
-export async function createHouseholdExpense(data: NewHouseholdExpense, guestIds: string[] = []) {
+export async function createHouseholdExpense(
+  data: NewHouseholdExpense,
+  guestIds: string[] = [],
+  /** `fixedLink`: it is the share of a fixed expense's payment (see `syncFixedHouseholdShares`); `id`: a fixed id. */
+  opts: { id?: string; fixedLink?: { fixedExpenseId: string; month: string; userId: string } } = {},
+) {
   if (data.payers.length === 0) throw new Error('Indica quién puso el dinero')
   if (data.shareInputs.length === 0) throw new Error('Elige al menos a una persona con quien dividir el gasto')
   const totalPaid = data.payers.reduce((s, p) => s + p.amount, 0)
@@ -922,10 +966,12 @@ export async function createHouseholdExpense(data: NewHouseholdExpense, guestIds
     edges:    edgesOf.get(p.memberId) ?? [],
   }))
 
-  const batch = writeBatch(db)
-  const expenseRef = doc(collection(db, 'householdExpenses'))
+  const expenseRef = opts.id ? doc(db, 'householdExpenses', opts.id) : doc(collection(db, 'householdExpenses'))
   const dueDate = data.dueDate ? Timestamp.fromDate(data.dueDate) : null
-
+  // With a fixed id, its debts get fixed ids too: two screens syncing the same payment at once write the very same
+  // documents, so nothing can ever be created twice (no read needed, which the rules wouldn't allow on a missing doc).
+  const debtRef = (i: number) => (opts.id ? doc(db, 'householdDebts', `${opts.id}_d${i}`) : doc(collection(db, 'householdDebts')))
+  const batch = writeBatch(db)
   batch.set(expenseRef, {
     householdId:  data.householdId,
     description:  data.description,
@@ -943,11 +989,12 @@ export async function createHouseholdExpense(data: NewHouseholdExpense, guestIds
     registeredBy: data.registeredBy,
     createdAt:    serverTimestamp(),
     ...(data.attachmentId ? { attachmentId: data.attachmentId } : {}),
+    ...(opts.fixedLink ? { fixedLink: opts.fixedLink } : {}),
   })
 
   // only the edges with every party already confirmed become real debts right now
-  for (const e of readyEdges) {
-    batch.set(doc(collection(db, 'householdDebts')), {
+  for (const [i, e] of readyEdges.entries()) {
+    batch.set(debtRef(i), {
       householdId:  data.householdId,
       concept:      data.description,
       tipo:         'Deuda',
@@ -971,8 +1018,9 @@ export async function createHouseholdExpense(data: NewHouseholdExpense, guestIds
 
   // the creator asserts their own contribution live, same as a guest's — but unlike a guest, it's their real
   // money and their real account, so it belongs in their own expense history, exactly like a confirmed one
+  // (a fixed expense's payment already is that history and already took the money out of the account: not again)
   const ownContribution = data.payers.find((p) => p.memberId === data.registeredBy)
-  if (ownContribution) {
+  if (ownContribution && !opts.fixedLink) {
     const accountId = data.registeredByAccountId || undefined
     batch.set(doc(collection(db, 'expenses')), {
       userId: data.registeredBy, description: `Aporte a "${data.description}" (hogar)`, amount: ownContribution.amount,

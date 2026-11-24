@@ -11,6 +11,7 @@ type ExpenseLike = Pick<FixedExpense, 'paymentDay' | 'frequency'> & {
   history?: SettingsRevision[];
   autoDebit?: AutoDebitRange[];
   pauses?: AutoDebitRange[];
+  archivedAt?: unknown;
   createdAt?: Date | string | null;
 };
 
@@ -56,6 +57,8 @@ export function getStatus(
   today: Date,
 ): FixedStatus {
   if (payment) return 'paid';
+  // archived: only what was paid still shows; nothing else is owed, ever
+  if (fe.archivedAt) return 'na';
   if (fe.frequency === 'ocasional') return 'na';
 
   const current = monthKey(today);
@@ -357,7 +360,7 @@ export function withAutoPayments<P extends { fixedExpenseId: string; month: stri
   const todayEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
 
   for (const fe of expenses) {
-    if (!fe.autoDebit?.length || fe.frequency === 'ocasional') continue;
+    if (!fe.autoDebit?.length || fe.frequency === 'ocasional' || fe.archivedAt) continue;
     const first = [startMonthOf(fe, current), ...fe.autoDebit.map((r) => r.from), ...(fromMonth ? [fromMonth] : [])].sort().pop()!;
     // one month ahead: a payment moved to an earlier date can already be due
     for (const occMonth of monthRange(first, shiftMonth(current, 1))) {

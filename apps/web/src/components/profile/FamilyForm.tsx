@@ -345,7 +345,8 @@ function MyShare({ family, uid }: { family: Family; uid: string }) {
   const [expenses, setExpenses] = useState<any[]>([])
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => { getFixedExpenses(uid).then((x) => setExpenses(x as any[])).catch(() => setExpenses([])) }, [uid])
+  // archived ones aren't offered for sharing (their past payments stay shared as they were)
+  useEffect(() => { getFixedExpenses(uid).then((x) => setExpenses((x as any[]).filter((e) => !e.archivedAt))).catch(() => setExpenses([])) }, [uid])
   // what is stored changes (another tab, a member left): start again from it
   useEffect(() => {
     setCategories(current?.categories ?? [])

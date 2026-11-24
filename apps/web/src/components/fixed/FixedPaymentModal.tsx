@@ -20,7 +20,8 @@ import { useToast } from '@/components/ui/Toast'
 import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/hooks/useAuth'
 import { removeAttachment, saveAttachment, withAttachment } from '@/lib/attachments'
-import { addFixedExpensePayments, deleteFixedExpensePayment, deleteFixedExpense, updateFixedExpensePayment } from '@/lib/firestore'
+import { addFixedExpensePayments, deleteFixedExpensePayment, deleteFixedExpense, archiveFixedExpense, updateFixedExpensePayment } from '@/lib/firestore'
+import { syncFixedHouseholdShares } from '@/lib/fixedHousehold'
 import { formatCOP, paymentKey, amountFor, effectiveDue, monthKey, type MonthEntry, type OwedLine } from '@/shared'
 import type { SalaryState } from '@/hooks/useSalary'
 import { TagChip } from '@/components/ui/TagPicker'
@@ -109,7 +110,12 @@ export function FixedPaymentModal({ entry, onClose, expenses, paymentIndex, sala
   }, [entry])
 
   const close = () => { setSelected(null); onClose() }
-  const load = async () => { await onChanged() }
+  // after any change to a payment: reload, and keep a household it is shared with in step (its share is created,
+  // redone or removed there)
+  const load = async () => {
+    await onChanged()
+    if (user) syncFixedHouseholdShares(user.uid).catch(() => {})
+  }
   const setProgramming = ({ editing }: { editing: any }) => onEditScheduled(editing)
 
   // For a scheduled (one-off) expense: change the schedule itself, or remove it
@@ -165,21 +171,25 @@ export function FixedPaymentModal({ entry, onClose, expenses, paymentIndex, sala
     }
   }
 
-  // A scheduled payment can be removed from its own dialog; what was already paid stays registered
+  // A scheduled payment can be removed from its own dialog. One already paid is archived (its payment keeps showing in
+  // the history); one never paid has no history to lose, so it is deleted.
   async function deleteScheduled(fe: any) {
     const wasPaid = [...paymentIndex.keys()].some((k) => k.startsWith(`${fe.id}|`))
     const ok = await ask(
-      `¿Eliminar el gasto programado "${fe.concept}"?${wasPaid ? ' El pago que ya registraste se conserva.' : ''}`,
-      { title: 'Eliminar gasto programado', confirmLabel: 'Eliminar' },
+      wasPaid
+        ? `¿Archivar el gasto programado "${fe.concept}"? El pago que ya registraste sigue en tu historial; puedes reactivarlo desde Archivados.`
+        : `¿Eliminar el gasto programado "${fe.concept}"? Todavía no tiene pagos.`,
+      { title: wasPaid ? 'Archivar gasto programado' : 'Eliminar gasto programado', confirmLabel: wasPaid ? 'Archivar' : 'Eliminar' },
     )
     if (!ok) return
     try {
-      await deleteFixedExpense(fe.id)
+      if (wasPaid) await archiveFixedExpense(fe.id)
+      else await deleteFixedExpense(fe.id)
       close()
       await load()
-      showToast('Gasto programado eliminado', 'delete')
+      showToast(wasPaid ? 'Gasto programado archivado' : 'Gasto programado eliminado', wasPaid ? 'success' : 'delete')
     } catch {
-      showToast('No se pudo eliminar el gasto programado', 'error')
+      showToast('No se pudo quitar el gasto programado', 'error')
     }
   }
 

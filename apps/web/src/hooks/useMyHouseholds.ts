@@ -5,6 +5,9 @@ import { getHouseholdIds, getHouseholds } from '@/lib/firestore'
 export interface MyHousehold {
   id: string
   name: string
+  members: string[]
+  memberNames: Record<string, string>
+  archived: boolean
 }
 
 /** The households the user belongs to (id and name), for pickers and labels. */
@@ -22,7 +25,13 @@ export function useMyHouseholds(enabled = true): MyHousehold[] {
     let cancelled = false
     getHouseholds(ids, user?.uid)
       .then((docs) => {
-        if (!cancelled) setHouseholds(docs.map((h) => ({ id: h.id as string, name: (h.name as string) || 'Hogar' })))
+        if (!cancelled) setHouseholds(docs.map((h) => ({
+          id: h.id as string,
+          name: (h.name as string) || 'Hogar',
+          members: (h.members as string[] | undefined) ?? [],
+          memberNames: (h.memberNames as Record<string, string> | undefined) ?? {},
+          archived: !!h.archivedAt,
+        })))
       })
       .catch(() => { /* names are only labels; the ids still work */ })
     return () => { cancelled = true }

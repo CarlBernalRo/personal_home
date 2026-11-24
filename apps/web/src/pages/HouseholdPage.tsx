@@ -421,6 +421,7 @@ export default function HouseholdPage() {
   // A debt born from a gasto compartido (has expenseId) is deleted through its
   // expense, which cascades to every share it generated — not just this row.
   async function handleDelete(d: any) {
+    if (fromFixed(d.expenseId)) return
     const fromExpense = Boolean(d.expenseId)
     const isLoan = Boolean(d.loanId)
     if (!(await ask(
@@ -444,7 +445,18 @@ export default function HouseholdPage() {
   }
 
   /** Opens a saved shared expense in the form to fix wrong values; only whoever registered it can (the old one is replaced). */
+  /** A share that comes from a fixed expense's payment follows that payment: it is changed (or removed) there. */
+  function fromFixed(expenseId: string | undefined) {
+    const exp = expenseId ? expenses.find((e) => e.id === expenseId) : null
+    if (!exp?.fixedLink) return false
+    showToast(exp.fixedLink.userId === user?.uid
+      ? 'Este gasto sale de uno de tus gastos fijos: corrígelo o bórralo desde su pago en Mi dinero'
+      : `Este gasto sale de un gasto fijo de ${nameOf(exp.fixedLink.userId)}: lo maneja desde su pago`, 'info')
+    return true
+  }
+
   function handleEditExpense(expenseId: string) {
+    if (fromFixed(expenseId)) return
     const exp = expenses.find((e) => e.id === expenseId)
     if (!exp) return
     if (exp.registeredBy !== user?.uid) {
@@ -457,7 +469,7 @@ export default function HouseholdPage() {
 
   /** A shared expense with no debt yet can be removed whole: nothing has been registered against anyone. */
   async function handleDeleteExpense(expenseId: string, concept: string) {
-    if (!activeId) return
+    if (!activeId || fromFixed(expenseId)) return
     if (!(await ask(`¿Eliminar el gasto "${concept}"? Todavía no tiene movimientos: no se ha creado ninguna deuda.`, { title: 'Eliminar gasto compartido' }))) return
     try {
       await deleteHouseholdExpense(expenseId, activeId)
@@ -528,10 +540,12 @@ export default function HouseholdPage() {
   async function handleAddGuest(name: string) {
     if (!activeId) throw new Error('Elige un hogar primero')
     const { id: guestId } = await addGuestMember(activeId, name)
+    // the live listener on the household may have brought the guest in already: never list them twice
+    const withGuest = (ids: string[] | undefined) => [...new Set([...(ids ?? []), guestId])]
     setHouseholds((prev) => prev.map((h) => h.id === activeId ? {
       ...h,
-      members:     [...((h.members as string[] | undefined) ?? []), guestId],
-      guestIds:    [...((h.guestIds as string[] | undefined) ?? []), guestId],
+      members:     withGuest(h.members as string[] | undefined),
+      guestIds:    withGuest(h.guestIds as string[] | undefined),
       memberNames: { ...((h.memberNames as Record<string, string> | undefined) ?? {}), [guestId]: name },
     } : h))
     return { id: guestId, name }

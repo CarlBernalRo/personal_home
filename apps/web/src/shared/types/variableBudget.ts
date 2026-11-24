@@ -23,6 +23,8 @@ export interface VariableBudget {
   pauses?: { from: string; until?: string }[];
   /** The user's tags it carries (its spends carry them too). */
   tagIds?: string[];
+  /** Archived (ISO date): kept with `active: false` so its spends keep their budget, its tags and their history. */
+  archivedAt?: string;
 }
 
 /** One real spend registered against a budget. */
