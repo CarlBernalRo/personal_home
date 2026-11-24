@@ -1,5 +1,11 @@
 /** What kind of record a movement read from a Telegram screenshot would become once the person confirms it. */
-export type PendingKind = 'income' | 'fixed' | 'occasional' | 'abono';
+export type PendingKind = 'income' | 'fixed' | 'occasional' | 'abono' | 'received' | 'shared';
+
+/** How a shared household expense prepared in Telegram is split: `value` is a percentage or an amount, by `mode`. */
+export interface PendingSplit {
+  mode: 'equal' | 'percentage' | 'fixed';
+  shares: { memberId: string; value?: number }[];
+}
 
 /**
  * A movement the person prepared in Telegram (from a screenshot) and that is waiting for them to confirm it in the app.
@@ -28,6 +34,14 @@ export interface PendingMovement {
   householdId?: string;
   creditorId?: string;
   targetDebtId?: string;
+  /** For a `received` payment: who of the household (a member or a guest) paid the user. */
+  debtorId?: string;
+  /** For a `shared` household expense: among whom it is split, who put the money, and the agreed date to pay it. */
+  split?: PendingSplit;
+  payers?: { memberId: string; amount: number }[];
+  dueDate?: Date | null;
+  /** A line the bot wrote to explain a household movement in words (who paid, among whom it is split). */
+  detail?: string;
   /** Account chosen in Telegram; the person can change it before confirming. */
   accountId?: string;
   comment?: string;

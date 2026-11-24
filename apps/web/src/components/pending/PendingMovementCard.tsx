@@ -10,6 +10,8 @@ const KIND = {
   fixed: { label: 'Gasto fijo', icon: CalendarClock, border: 'border-l-sky-400', iconBox: 'border-sky-400/30 bg-sky-400/10 text-sky-300', chip: 'text-sky-300', sign: '-' },
   occasional: { label: 'Gasto adicional', icon: ShoppingBag, border: 'border-l-amber-400', iconBox: 'border-amber-400/30 bg-amber-400/10 text-amber-300', chip: 'text-amber-300', sign: '-' },
   abono: { label: 'Abono al hogar', icon: Home, border: 'border-l-violet-400', iconBox: 'border-violet-400/30 bg-violet-400/10 text-violet-300', chip: 'text-violet-300', sign: '-' },
+  received: { label: 'Pago en el hogar', icon: Home, border: 'border-l-emerald-400', iconBox: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300', chip: 'text-emerald-300', sign: '+' },
+  shared: { label: 'Gasto compartido', icon: Home, border: 'border-l-violet-400', iconBox: 'border-violet-400/30 bg-violet-400/10 text-violet-300', chip: 'text-violet-300', sign: '-' },
 } as const
 
 /** One movement waiting for confirmation, read-only: used in the bell-style preview (the full card with Confirmar / Descartar lives in /pendientes). */

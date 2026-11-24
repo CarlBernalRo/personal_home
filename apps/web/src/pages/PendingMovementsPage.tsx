@@ -19,7 +19,7 @@ import { confirmPaymentReceipt, confirmPendingMovement, discardPendingMovement }
 import { useAuth } from '@/hooks/useAuth'
 import type { PendingReceipt } from '@/hooks/usePendingReceipts'
 import { PendingContributionsCard } from '@/components/household/PendingContributionsCard'
-import { PERSONAL_CATEGORIES, formatCOP } from '@/shared'
+import { HOUSEHOLD_DEBT_CATEGORIES, PERSONAL_CATEGORIES, formatCOP } from '@/shared'
 import type { PendingMovement, PendingKind } from '@/shared'
 import { useLayoutStore } from '@/store/layout'
 import { useFamily } from '@/hooks/useFamily'
@@ -37,6 +37,8 @@ const KIND = {
   contribution: { label: 'Aporte a gasto compartido', plural: 'Aportes por confirmar', icon: Home, border: 'border-l-sky-400', iconBox: 'border-sky-400/30 bg-sky-400/10 text-sky-300', chip: 'text-sky-300', sign: '-' },
   receipt: { label: 'Pago recibido', plural: 'Pagos recibidos', icon: Home, border: 'border-l-emerald-400', iconBox: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300', chip: 'text-emerald-300', sign: '+' },
   abono: { label: 'Abono al hogar', plural: 'Abonos al hogar', icon: Home, border: 'border-l-violet-400', iconBox: 'border-violet-400/30 bg-violet-400/10 text-violet-300', chip: 'text-violet-300', sign: '-' },
+  received: { label: 'Pago en el hogar', plural: 'Pagos en el hogar', icon: Home, border: 'border-l-emerald-400', iconBox: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300', chip: 'text-emerald-300', sign: '+' },
+  shared: { label: 'Gasto compartido', plural: 'Gastos compartidos', icon: Home, border: 'border-l-violet-400', iconBox: 'border-violet-400/30 bg-violet-400/10 text-violet-300', chip: 'text-violet-300', sign: '-' },
 } as const
 
 const FILTERS: { id: Filter; label: string; icon: typeof Layers }[] = [
@@ -45,6 +47,8 @@ const FILTERS: { id: Filter; label: string; icon: typeof Layers }[] = [
   { id: 'fixed', label: KIND.fixed.plural, icon: CalendarClock },
   { id: 'occasional', label: KIND.occasional.plural, icon: ShoppingBag },
   { id: 'abono', label: KIND.abono.plural, icon: Home },
+  { id: 'received', label: KIND.received.plural, icon: Home },
+  { id: 'shared', label: KIND.shared.plural, icon: Home },
   { id: 'receipt', label: KIND.receipt.plural, icon: Home },
   { id: 'contribution', label: KIND.contribution.plural, icon: Home },
 ]
@@ -58,6 +62,8 @@ const EMPTY_TEXT: Record<Filter, string> = {
   fixed: 'No hay gastos fijos por confirmar.',
   occasional: 'No hay gastos adicionales por confirmar.',
   abono: 'No hay abonos al hogar por confirmar.',
+  received: 'No hay pagos en el hogar por confirmar.',
+  shared: 'No hay gastos compartidos por confirmar.',
   receipt: 'Cuando alguien del hogar te pague, aparecerá aquí para que confirmes en qué cuenta lo recibiste.',
   contribution: 'Cuando alguien registre que pusiste dinero en un gasto compartido, aparecerá aquí para que lo confirmes o lo rechaces.',
 }
@@ -81,7 +87,13 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
   const [tagIds, setTagIds] = useState<string[]>(pm.tagIds ?? [])
   const k = KIND[pm.kind]
   const Icon = k.icon
-  const category = pm.category ? PERSONAL_CATEGORIES.find((c) => c.id === pm.category)?.label : null
+  const category = pm.category ? (pm.kind === 'shared' ? HOUSEHOLD_DEBT_CATEGORIES : PERSONAL_CATEGORIES).find((c) => c.id === pm.category)?.label : null
+  // a payment between two people of the household brings the user money only when it was paid to them
+  const toMe = pm.kind === 'received' && (pm.creditorId ?? pm.userId) === pm.userId
+  const moneyIn = pm.kind === 'income' || toMe
+  // a shared expense moves the user's money only for the part they put in themselves; someone else's payment, none
+  const myPart = pm.kind === 'shared' ? (pm.payers ?? []).find((p) => p.memberId === pm.userId)?.amount ?? 0 : pm.kind === 'received' && !toMe ? 0 : pm.amount
+  const sign = moneyIn ? '+' : myPart > 0 ? '-' : ''
 
   async function confirm() {
     setBusy('confirm')
@@ -122,7 +134,7 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <p className="break-words sm:truncate text-sm font-bold leading-snug text-[#f3f5f6]">{pm.concept || 'Sin concepto'}</p>
-            <p className={clsx('flex-shrink-0 font-mono text-sm font-bold tabular-nums', pm.kind === 'income' ? 'text-emerald-300' : 'text-rose-300')}>{k.sign}{formatCOP(pm.amount)}</p>
+            <p className={clsx('flex-shrink-0 font-mono text-sm font-bold tabular-nums', moneyIn ? 'text-emerald-300' : myPart > 0 ? 'text-rose-300' : 'text-[#c7ccd1]')}>{sign}{formatCOP(pm.amount)}</p>
           </div>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[#8a929a]">
             {pm.attachmentId && <AttachmentButton compact attachmentId={pm.attachmentId} />}
@@ -131,6 +143,7 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
             <time dateTime={dateOf(pm.date).toISOString()} className="font-mono">{format(dateOf(pm.date), "d MMM yyyy", { locale: es })}</time>
             {pm.kind === 'fixed' && pm.occMonth && (<><span aria-hidden="true">·</span><span>pago de {format(new Date(`${pm.occMonth}-01T12:00:00`), 'MMMM yyyy', { locale: es })}</span></>)}
             {category && (<><span aria-hidden="true">·</span><span>{category}</span></>)}
+            {pm.kind === 'received' && (<><span aria-hidden="true">·</span><span>{pm.targetDebtId ? 'a una deuda elegida' : 'se reparte entre sus deudas, la más antigua primero'}</span></>)}
             {pm.kind === 'abono' && (<><span aria-hidden="true">·</span><span>{pm.targetDebtId ? 'a una deuda elegida' : 'se reparte entre sus deudas, la más antigua primero'}</span></>)}
             {pm.source === 'family' && (<><span aria-hidden="true">·</span><span className="inline-flex items-center gap-1 text-rose-300"><Heart size={10} aria-hidden="true" /> De {pm.fromName ?? 'tu familia'} · familia</span></>)}
           </p>
@@ -146,6 +159,7 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
               <Heart size={11} aria-hidden="true" /> A {pm.familyTransfer.name} ya le llegó su parte para confirmarla{pm.familyTransfer.direction === 'out' ? ' como ingreso' : ' como gasto'}.
             </p>
           )}
+          {pm.detail && <p className="mt-1.5 text-[11px] text-[#9aa4ac]">{pm.detail}</p>}
           {pm.comment && <p className="mt-2 rounded-lg border border-white/10 bg-[#0a1f2f] px-2.5 py-1.5 text-xs text-[#c7ccd1]">💬 {pm.comment}</p>}
         </div>
       </div>
@@ -171,14 +185,16 @@ function PendingCard({ pm, accounts, onDone }: { pm: PendingMovement; accounts: 
           </div>
         )}
         {canTag && <TagPicker value={tagIds} onChange={setTagIds} />}
-        <AccountSelect
-          label={pm.kind === 'income' ? 'Cuenta donde entra el dinero' : 'Cuenta de la que sale el dinero'}
-          accounts={accounts}
-          value={accountId}
-          onChange={setAccountId}
-          noneLabel="Sin cuenta (no mueve saldos)"
-          outflow={pm.kind === 'income' ? 0 : pm.amount}
-        />
+        {myPart > 0 && (
+          <AccountSelect
+            label={moneyIn ? 'Cuenta donde entra el dinero' : pm.kind === 'shared' ? `Cuenta de la que salió tu parte (${formatCOP(myPart)})` : 'Cuenta de la que sale el dinero'}
+            accounts={accounts}
+            value={accountId}
+            onChange={setAccountId}
+            noneLabel="Sin cuenta (no mueve saldos)"
+            outflow={moneyIn ? 0 : myPart}
+          />
+        )}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">
             <Button type="button" variant="ghost" size="sm" disabled={!!busy} onClick={discard}>

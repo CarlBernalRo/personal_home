@@ -1527,6 +1527,8 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
   let hh: Record<string, unknown> | null = null
   let members: string[] = []
   let paymentId = ''
+  // a payment between two people of the household: who received it
+  let receiver = ''
   // a payment of an expense shared with the family is visible to the same people as its expense
   let fixedShared: string[] = []
 
@@ -1552,6 +1554,21 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
     plan = planAbono({ debts, members, debtor: pm.userId, creditor: pm.creditorId ?? null, targetDebtId: pm.targetDebtId ?? null, amount: pm.amount, category: 'otros_hogar' })
     // everything this confirmation writes is ONE payment, even when it is spread over several debts
     paymentId = crypto.randomUUID()
+  } else if (pm.kind === 'received') {
+    // one person of the household paid another (the user, or anyone else): the abono the household screen writes when
+    // "¿Quién abona?" is someone other than the person registering it. Old ones (no creditor) were paid to the user.
+    if (!pm.householdId || !pm.debtorId) throw new Error('Falta saber quién pagó y en qué hogar')
+    receiver = pm.creditorId ?? pm.userId
+    hh = await getHousehold(pm.householdId)
+    members = ((hh?.members as string[] | undefined) ?? [])
+    if (!hh || !members.includes(pm.userId)) throw new Error('Ya no perteneces a ese hogar. Descarta este movimiento.')
+    if (!members.includes(pm.debtorId) || !members.includes(receiver)) throw new Error('Esa persona ya no está en el hogar. Descarta este movimiento.')
+    const debts = householdDebtsWithCredit((await getHouseholdDebts(pm.householdId)) as any[], members)
+    if (pm.targetDebtId && !debts.some((d) => d.id === pm.targetDebtId && isPendingDebt(d))) throw new Error('Esa deuda ya está saldada. Descarta este movimiento.')
+    plan = planAbono({ debts, members, debtor: pm.debtorId, creditor: receiver, targetDebtId: pm.targetDebtId ?? null, amount: pm.amount, category: 'otros_hogar' })
+    paymentId = crypto.randomUUID()
+  } else if (pm.kind === 'shared') {
+    return confirmPendingSharedExpense(pm, account)
   }
 
   await runTransaction(db, async (tx) => {
@@ -1582,6 +1599,32 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
         })
       }
       if (account) tx.update(doc(db, 'accounts', account), { balance: increment(-pm.amount) })
+    } else if (pm.kind === 'received') {
+      // money that came to the user is their income (in the account it came into), and that abono is already received —
+      // exactly what confirming a payment received does. Paid to someone else, none of the user's money moves: a real
+      // member confirms it in their app like any payment made to them; a guest can't, so theirs is taken as it is.
+      const guestIds = (hh!.guestIds as string[] | undefined) ?? []
+      const fromName = ((hh!.memberNames as Record<string, string> | undefined) ?? {})[pm.debtorId!] || 'alguien del hogar'
+      const incomeRef = doc(collection(db, 'incomes'))
+      if (receiver === pm.userId) {
+        tx.set(incomeRef, {
+          userId: pm.userId, concept: `Pago recibido de ${fromName}`, amount: pm.amount, month: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+          date: Timestamp.fromDate(date), kind: 'extra', ...(account ? { accountId: account } : {}), ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+        })
+        if (account) tx.update(doc(db, 'accounts', account), { balance: increment(pm.amount) })
+      }
+      for (const r of plan!.rows) {
+        const toMe = r.creditor === pm.userId
+        tx.set(doc(collection(db, 'householdDebts')), {
+          householdId: pm.householdId, concept: r.concept, tipo: 'Abono', amount: r.amount, debtor: pm.debtorId, creditor: r.creditor, paymentId,
+          // the payer's own account is not the user's to move
+          accountId: null,
+          receiptStatus: toMe ? 'confirmed' : r.creditor && !guestIds.includes(r.creditor) ? 'pending' : null,
+          ...(toMe ? { receivedAccountId: account ?? null, incomeId: incomeRef.id, receivedAt: serverTimestamp() } : {}),
+          category: r.category, date: Timestamp.fromDate(date), registeredBy: pm.userId, estado: '', saldaId: r.saldaId, notas: pm.comment ?? '', cruzado: false, crossedAmount: 0,
+          ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}), createdAt: serverTimestamp(),
+        })
+      }
     } else {
       tx.set(doc(collection(db, 'expenses')), {
         userId: pm.userId, description: pm.concept, amount: pm.amount, category: pm.category ?? 'otro', date: Timestamp.fromDate(date),
@@ -1612,6 +1655,98 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
         link, receipt: { householdId: pm.householdId!, paymentId, amount: pm.amount, fromName: myName, lines: plan.paidLines, date: date.toISOString() },
       }).catch(() => {})
     }
+  }
+  if (pm.kind === 'received' && plan && hh) {
+    const names = (hh.memberNames as Record<string, string> | undefined) ?? {}
+    const guestIds = (hh.guestIds as string[] | undefined) ?? []
+    shareWithHousehold(pm, members, guestIds)
+    const me = names[pm.userId] || 'Alguien'
+    const payerName = names[pm.debtorId!] || 'Alguien'
+    const link = `/hogar?id=${pm.householdId}`
+    const detail = plan.paidLines.length ? plan.paidLines.map((l) => `${l.concept} (${l.amount.toLocaleString('es-CO')})`).join(' · ') : 'Quedó como pago general a su favor.'
+    // the payer (when they have an account) is told their payment was registered, with what it paid
+    if (!guestIds.includes(pm.debtorId!)) {
+      await notifyHouseholdMembers([pm.debtorId!], {
+        fromUid: pm.userId, zone: 'hogar', severity: 'info', link,
+        title: receiver === pm.userId ? `${me} registró que le pagaste ${pm.amount.toLocaleString('es-CO')}` : `${me} registró que le pagaste ${pm.amount.toLocaleString('es-CO')} a ${names[receiver] || 'alguien'}`,
+        body: detail,
+      }).catch(() => {})
+    }
+    // someone else received it: like any payment made to them, they confirm it and say in which account it came in
+    if (receiver !== pm.userId && !guestIds.includes(receiver)) {
+      await notifyHouseholdMembers([receiver], {
+        fromUid: pm.userId, zone: 'hogar', severity: 'info', link,
+        title: `${payerName} te pagó ${pm.amount.toLocaleString('es-CO')}`,
+        body: `${detail}. Lo registró ${me}. Confirma que lo recibiste y en qué cuenta.`,
+        receipt: { householdId: pm.householdId!, paymentId, amount: pm.amount, fromName: payerName, lines: plan.paidLines, date: date.toISOString() },
+      }).catch(() => {})
+    }
+  }
+}
+
+/** The screenshot of a household movement can be seen by the household's members (guests have no account to read it). */
+function shareWithHousehold(pm: PendingMovement, members: string[], guestIds: string[]) {
+  const others = members.filter((m) => m !== pm.userId && !guestIds.includes(m))
+  if (pm.attachmentId && others.length) updateDoc(doc(db, 'attachments', pm.attachmentId), { sharedWith: others }).catch(() => {})
+}
+
+/**
+ * A shared household expense prepared in Telegram, registered exactly like the "Nuevo gasto compartido" form: the same
+ * split and settlement, a guest's or the user's own contribution taken at their word, any other member's waiting for
+ * their confirmation, and the user's own part out of their account. Its id comes from the pending movement, so
+ * confirming twice can never register it twice.
+ */
+async function confirmPendingSharedExpense(pm: PendingMovement, account: string | undefined) {
+  if (!pm.householdId || !pm.split || !pm.payers?.length) throw new Error('Faltan datos del gasto compartido')
+  const hh = await getHousehold(pm.householdId)
+  const members = ((hh?.members as string[] | undefined) ?? [])
+  if (!hh || !members.includes(pm.userId)) throw new Error('Ya no perteneces a ese hogar. Descarta este movimiento.')
+  const gone = [...pm.split.shares.map((s) => s.memberId), ...pm.payers.map((p) => p.memberId)].filter((m) => !members.includes(m))
+  if (gone.length) throw new Error('Alguien del reparto ya no está en el hogar. Descarta este movimiento y regístralo desde Hogar.')
+  const pmRef = doc(db, 'pendingMovements', pm.id)
+  const snap = await getDoc(pmRef)
+  if (!snap.exists()) throw new Error('Ese movimiento ya no existe')
+  if (snap.data().status !== 'pending') throw new Error('Ese movimiento ya fue registrado')
+
+  const guestIds = (hh.guestIds as string[] | undefined) ?? []
+  const names = (hh.memberNames as Record<string, string> | undefined) ?? {}
+  const date = toDate(pm.date)
+  const { mode, shares } = pm.split
+  const { pendingFor } = await createHouseholdExpense({
+    householdId: pm.householdId,
+    description: pm.concept,
+    amount: pm.amount,
+    category: pm.category ?? 'otro',
+    date,
+    splitMode: mode,
+    shareInputs: shares.map((s) => ({
+      memberId: s.memberId,
+      percentage: mode === 'percentage' ? s.value ?? 0 : undefined,
+      fixedAmount: mode === 'fixed' ? s.value ?? 0 : undefined,
+    })),
+    payers: pm.payers,
+    dueDate: pm.dueDate ? toDate(pm.dueDate) : null,
+    notes: pm.comment ?? '',
+    registeredBy: pm.userId,
+    registeredByAccountId: account ?? null,
+    ...(pm.attachmentId ? { attachmentId: pm.attachmentId } : {}),
+  }, guestIds, { id: `tg_${pm.id}` })
+  await updateDoc(pmRef, { status: 'confirmed', confirmedAt: serverTimestamp(), accountId: account ?? deleteField() })
+  shareWithHousehold(pm, members, guestIds)
+
+  const me = names[pm.userId] || 'Alguien'
+  const link = `/hogar?id=${pm.householdId}`
+  const participants = shares.map((s) => s.memberId)
+  await notifyHouseholdMembers(participants.filter((id) => id !== pm.userId && !guestIds.includes(id)), {
+    fromUid: pm.userId, zone: 'hogar', severity: 'info', link,
+    title: `${me} registró un gasto compartido`, body: `${pm.concept} · $${pm.amount.toLocaleString('es-CO')}.`,
+  }).catch(() => {})
+  for (const uid of pendingFor) {
+    await notifyHouseholdMembers([uid], {
+      fromUid: pm.userId, zone: 'hogar', severity: 'info', link: '/pendientes',
+      title: `${me} dice que pusiste dinero para "${pm.concept}"`,
+      body: `$${(pm.payers.find((p) => p.memberId === uid)?.amount ?? 0).toLocaleString('es-CO')}. Confírmalo para que se registre como tu gasto y te empiecen a deber.`,
+    }).catch(() => {})
   }
 }
 

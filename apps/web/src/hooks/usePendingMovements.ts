@@ -38,6 +38,8 @@ export function usePendingMovements() {
     fixed: items.filter((p) => p.kind === 'fixed').length,
     occasional: items.filter((p) => p.kind === 'occasional').length,
     abono: items.filter((p) => p.kind === 'abono').length,
+    received: items.filter((p) => p.kind === 'received').length,
+    shared: items.filter((p) => p.kind === 'shared').length,
     receipt: receipts.length,
     contribution: contributions.length,
     total: items.length + receipts.length + contributions.length,

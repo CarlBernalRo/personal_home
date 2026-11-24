@@ -8,14 +8,22 @@
  *
  * The state of the conversation lives in `telegramFlows/{chatId}` (the Worker keeps nothing in memory).
  */
-import { PERSONAL_CATEGORIES, creditorOf, inPaymentOrder, isPendingDebt, remainingOf } from '../../../apps/web/src/shared/index'
+import { HOUSEHOLD_DEBT_CATEGORIES, PERSONAL_CATEGORIES, creditorOf, inPaymentOrder, isPendingDebt, remainingOf, resolveExpenseShares, settleExpenseContributions } from '../../../apps/web/src/shared/index'
 import { fixedFor, bogotaToday, households } from './commands'
 import type { Db } from './db'
 import type { Keyboard, Telegram } from './telegram'
 import { EMPTY_EXTRACTED, b64, type Extracted } from './vision'
 
-export type Kind = 'income' | 'fixed' | 'occasional' | 'abono'
-type Step = 'amount' | 'date' | 'kind' | 'family' | 'concept' | 'fixed' | 'budget' | 'category' | 'tags' | 'household' | 'creditor' | 'target' | 'account' | 'comment' | 'confirm'
+/**
+ * `received`: someone of a household (a member or a guest) paid the user — their abono, the money into the user's account.
+ * `shared`: a shared household expense, split and settled exactly like the app's "Nuevo gasto compartido".
+ */
+export type Kind = 'income' | 'fixed' | 'occasional' | 'abono' | 'received' | 'shared'
+type Step = 'amount' | 'date' | 'kind' | 'family' | 'concept' | 'fixed' | 'budget' | 'category' | 'tags' | 'household' | 'creditor' | 'target'
+  | 'debtor' | 'rtarget' | 'hcategory' | 'participants' | 'split' | 'shares' | 'payers' | 'payamounts' | 'due'
+  | 'account' | 'comment' | 'confirm'
+type SplitMode = 'equal' | 'percentage' | 'fixed'
+const SPLIT_LABEL: Record<SplitMode, string> = { equal: 'partes iguales', percentage: 'por porcentaje', fixed: 'montos fijos' }
 
 export interface FlowData {
   amount?: number
@@ -36,6 +44,20 @@ export interface FlowData {
   creditorLabel?: string
   targetDebtId?: string
   targetLabel?: string
+  /** The chosen household's people (the user as "Tú"), so every step can name them without reading it again. */
+  memberNames?: Record<string, string>
+  guestIds?: string[]
+  /** Payment received in a household: who paid the user. */
+  debtorId?: string
+  debtorLabel?: string
+  /** Shared household expense: among whom (in order), how, the typed values (same order), who paid and how much each. */
+  participants?: string[]
+  splitMode?: SplitMode
+  shareValues?: number[]
+  payers?: string[]
+  payerAmounts?: number[]
+  /** YYYY-MM-DD; null = no agreed date */
+  dueDate?: string | null
   /** Money sent to / received from a family member: who (null = the person said it wasn't family). */
   familyWith?: string | null
   familyName?: string
@@ -53,7 +75,7 @@ export interface Flow {
   step: Step
   history: Step[]
   /** Typing is expected for this field. */
-  awaiting: 'amount' | 'date' | 'concept' | 'comment' | null
+  awaiting: 'amount' | 'date' | 'concept' | 'comment' | 'shares' | 'payamounts' | 'due' | null
   /** The person pressed "Escribir otro/a": "Atrás" then only cancels the typing. */
   editing: boolean
   extracted: Extracted
@@ -155,6 +177,20 @@ function stepsOf(f: Flow): Step[] {
     case 'income': return [...head, ...fam, ...(f.data.familyWith ? [] : (['concept'] as Step[])), 'account', 'comment', 'confirm']
     case 'fixed': return [...head, 'fixed', 'account', 'comment', 'confirm']
     case 'abono': return [...head, 'household', 'creditor', 'target', 'account', 'comment', 'confirm']
+    // a payment between any two people of the household: the account is only asked when the user's money moves
+    case 'received': return [...head, 'household', 'debtor', 'creditor', 'rtarget', ...(f.data.debtorId === f.userId || f.data.creditorId === f.userId ? (['account'] as Step[]) : []), 'comment', 'confirm']
+    case 'shared': {
+      const d = f.data
+      return [
+        ...head, 'household', 'concept', 'hcategory', 'participants', 'split',
+        ...(d.splitMode && d.splitMode !== 'equal' ? (['shares'] as Step[]) : []),
+        'payers',
+        ...((d.payers?.length ?? 0) > 1 ? (['payamounts'] as Step[]) : []),
+        // the account only matters for the user's own part
+        ...(d.payers?.includes(f.userId) ? (['account'] as Step[]) : []),
+        'due', 'comment', 'confirm',
+      ]
+    }
     // an expense of its own (not a budget's) can carry tags, like in the app; only asked when the person has some
     case 'occasional': return [...head, ...fam, ...(f.data.familyWith ? [] : (['budget', ...(f.data.budgetId === 'other' ? (['concept', 'category', ...(f.tags?.length ? ['tags'] : [])] as Step[]) : [])] as Step[])), 'account', 'comment', 'confirm']
     default: return head
@@ -165,7 +201,7 @@ function stepsOf(f: Flow): Step[] {
 function enter(f: Flow) {
   f.editing = false
   f.awaiting =
-    f.step === 'concept' || f.step === 'comment' ? f.step
+    f.step === 'concept' || f.step === 'comment' || f.step === 'shares' || f.step === 'payamounts' || f.step === 'due' ? f.step
       : f.step === 'amount' && !(f.data.amount ?? f.extracted.amount) ? 'amount'
         : f.step === 'date' && !(f.data.date ?? (validIso(f.extracted.date) ? f.extracted.date : null)) ? 'date'
           : null
@@ -200,16 +236,86 @@ function recap(f: Flow): string {
   if (d.fixedLabel) lines.push(`📌 Gasto fijo: <b>${esc(d.fixedLabel)}</b>`)
   if (d.budgetLabel) lines.push(`🛒 Presupuesto: <b>${esc(d.budgetLabel)}</b>`)
   if (d.householdLabel) lines.push(`🏠 Hogar: <b>${esc(d.householdLabel)}</b>`)
-  if (d.creditorLabel) lines.push(`🙋 Le pagas a: <b>${esc(d.creditorLabel)}</b>`)
+  if (d.kind === 'received') {
+    if (d.debtorLabel) lines.push(`🙋 Paga: <b>${esc(d.debtorLabel)}</b>`)
+    if (d.creditorLabel) lines.push(`➡️ Recibe: <b>${esc(d.creditorLabel)}</b>`)
+  } else if (d.creditorLabel) lines.push(`🙋 Le pagas a: <b>${esc(d.creditorLabel)}</b>`)
   if (d.targetDebtId) lines.push(`🎯 Va a: <b>${esc(d.targetDebtId === 'auto' ? 'sus deudas, la más antigua primero' : d.targetLabel)}</b>`)
-  if (d.concept && d.kind !== 'fixed' && d.kind !== 'abono') lines.push(`📝 Concepto: <b>${esc(d.concept)}</b>`)
-  if (d.category) lines.push(`🗂 Categoría: <b>${esc(PERSONAL_CATEGORIES.find((c) => c.id === d.category)?.label ?? d.category)}</b>`)
+  if (d.concept && d.kind !== 'fixed' && d.kind !== 'abono' && d.kind !== 'received') lines.push(`📝 Concepto: <b>${esc(d.concept)}</b>`)
+  if (d.category) lines.push(`🗂 Categoría: <b>${esc((d.kind === 'shared' ? HOUSEHOLD_DEBT_CATEGORIES : PERSONAL_CATEGORIES).find((c) => c.id === d.category)?.label ?? d.category)}</b>`)
+  if (d.kind === 'shared') {
+    const who = (uid: string) => d.memberNames?.[uid] ?? 'alguien'
+    if (d.participants?.length && d.splitMode) {
+      const values = d.splitMode !== 'equal' && d.shareValues?.length === d.participants.length ? d.shareValues : null
+      const list = d.participants.map((u, i) => `${who(u)}${values ? ` ${d.splitMode === 'percentage' ? `${values[i]}%` : cop(values[i])}` : ''}`).join(', ')
+      lines.push(`👥 Entre: <b>${esc(list)}</b> (${SPLIT_LABEL[d.splitMode]})`)
+    }
+    if (d.payers?.length && (d.payers.length === 1 || d.payerAmounts?.length === d.payers.length)) {
+      lines.push(`💳 Pagó: <b>${esc(d.payers.map((u, i) => (d.payers!.length > 1 ? `${who(u)} ${cop(d.payerAmounts![i])}` : who(u))).join(', '))}</b>`)
+    }
+    if (d.dueDate !== undefined) lines.push(`⏰ Fecha acordada: <b>${d.dueDate ? dateLabel(d.dueDate) : 'sin fecha'}</b>`)
+  }
   const tagNames = (d.tagIds ?? []).map((id) => f.tags?.find((t) => t.id === id)?.name).filter(Boolean)
   if (tagNames.length) lines.push(`🔖 Etiquetas: <b>${esc(tagNames.join(', '))}</b>`)
-  if (d.accountId !== undefined) lines.push(`🏦 Cuenta: <b>${esc(d.accountId ? d.accountLabel : 'Sin cuenta')}</b>`)
+  // a shared expense the user put nothing into moves none of their accounts
+  const noOwnMoney = (d.kind === 'shared' && !d.payers?.includes(f.userId)) || (d.kind === 'received' && !!d.creditorId && d.debtorId !== f.userId && d.creditorId !== f.userId)
+  if (d.accountId !== undefined && !noOwnMoney) lines.push(`🏦 Cuenta: <b>${esc(d.accountId ? d.accountLabel : 'Sin cuenta')}</b>`)
   return lines.length ? `${lines.join('\n')}\n\n` : ''
 }
-const KIND_LABEL: Record<Kind, string> = { income: 'Ingreso', fixed: 'Gasto fijo', occasional: 'Gasto ocasional', abono: 'Abono al hogar' }
+const KIND_LABEL: Record<Kind, string> = { income: 'Ingreso', fixed: 'Gasto fijo', occasional: 'Gasto ocasional', abono: 'Abono al hogar', received: 'Pago de una deuda del hogar', shared: 'Gasto compartido del hogar' }
+
+/** Who pays in a household payment: the user in an abono, whoever was chosen in a payment between any two people. */
+const payerOf = (f: Flow) => (f.data.kind === 'received' ? f.data.debtorId : f.userId)
+/** "Tú" for the user, the household's name for anyone else (guests marked). */
+const personLabel = (f: Flow, uid: string, name: string) => (uid === f.userId ? 'Tú' : `${name}${(f.data.guestIds ?? []).includes(uid) ? ' (invitado)' : ''}`)
+
+/** The shares and who owes whom, with the very functions the app uses to write them (null + reason when it can't be split). */
+function sharedPreview(f: Flow): { shares: { memberId: string; amount: number }[]; edges: { debtor: string; creditor: string; amount: number }[] } | { error: string } {
+  const d = f.data
+  const parts = d.participants ?? []
+  if (!d.amount || parts.length === 0 || !d.splitMode) return { error: 'Faltan datos del reparto.' }
+  try {
+    const shares = resolveExpenseShares(d.amount, parts[0], d.splitMode, parts.map((m, i) => ({
+      memberId: m,
+      percentage: d.splitMode === 'percentage' ? d.shareValues?.[i] ?? 0 : undefined,
+      fixedAmount: d.splitMode === 'fixed' ? d.shareValues?.[i] ?? 0 : undefined,
+    })))
+    const payers = payersOf(d)
+    const edges = settleExpenseContributions(shares.map((s) => ({ memberId: s.memberId, amount: s.amount })), payers)
+    return { shares, edges }
+  } catch (e: any) {
+    return { error: e?.message ?? 'No se pudo calcular la división.' }
+  }
+}
+/** Why the typed shares can't split the expense (null when they can). */
+function sharedPreviewShares(f: Flow): string | null {
+  const d = f.data
+  const parts = d.participants ?? []
+  try {
+    resolveExpenseShares(d.amount ?? 0, parts[0], d.splitMode ?? 'equal', parts.map((m, i) => ({
+      memberId: m,
+      percentage: d.splitMode === 'percentage' ? d.shareValues?.[i] ?? 0 : undefined,
+      fixedAmount: d.splitMode === 'fixed' ? d.shareValues?.[i] ?? 0 : undefined,
+    })))
+    return null
+  } catch (e: any) {
+    return e?.message ?? 'No se pudo dividir así.'
+  }
+}
+
+/** In a payment between two people the account is only asked when the user's money moves (they pay or receive). */
+function syncAccountAsk(f: Flow) {
+  const d = f.data
+  if (d.debtorId === f.userId || d.creditorId === f.userId) { if (d.accountId === null) delete d.accountId }
+  else { d.accountId = null; delete d.accountLabel }
+}
+
+/** What belonged to one household's choice (who paid, the split…) no longer applies to another one. */
+function clearHouseholdChoices(d: FlowData) {
+  delete d.debtorId; delete d.debtorLabel
+  delete d.participants; delete d.splitMode; delete d.shareValues; delete d.payers; delete d.payerAmounts; delete d.dueDate
+}
+const payersOf = (d: FlowData) => (d.payers ?? []).map((m, i) => ({ memberId: m, amount: d.payers!.length === 1 ? d.amount ?? 0 : d.payerAmounts?.[i] ?? 0 }))
 
 async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboard }> {
   const head = '📸 <b>Registrar movimiento</b>\n\n'
@@ -242,10 +348,19 @@ async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboar
       let hint = ex.direction === 'income' ? '\n<i>La captura parece un dinero recibido.</i>' : ex.direction === 'expense' ? '\n<i>La captura parece un pago o envío.</i>' : ''
       // the screenshot names someone of the household: it may be an abono (only a hint, the person decides)
       const who = await memberNamed(d, f)
-      if (who) hint += `\n<i>Menciona a <b>${esc(who.name)}</b>, de tu hogar «${esc(who.household)}»: puede ser un abono.</i>`
+      if (who) {
+        const tag = `<b>${esc(who.name)}</b>${who.guest ? ' (invitado)' : ''}, de tu hogar «${esc(who.household)}»`
+        hint += ex.direction === 'income'
+          ? `\n<i>Menciona a ${tag}: puede ser un pago que te hizo en el hogar.</i>`
+          : `\n<i>Menciona a ${tag}: puede ser el pago de una deuda del hogar o un gasto compartido.</i>`
+      }
       return {
         text: `${head}${body}¿Qué tipo de movimiento es?${hint}`,
-        kb: [[{ text: '💰 Ingreso', data: 'f:k:income' }], [{ text: '📌 Gasto fijo', data: 'f:k:fixed' }], [{ text: '🛒 Gasto ocasional', data: 'f:k:occasional' }], [{ text: '🏠 Abono al hogar', data: 'f:k:abono' }], NAV[0]],
+        kb: [
+          [{ text: '💰 Ingreso', data: 'f:k:income' }], [{ text: '📌 Gasto fijo', data: 'f:k:fixed' }], [{ text: '🛒 Gasto ocasional', data: 'f:k:occasional' }],
+          [{ text: '🤝 Pago de una deuda del hogar (quién paga a quién)', data: 'f:k:received' }],
+          [{ text: '👥 Gasto compartido del hogar', data: 'f:k:shared' }], NAV[0],
+        ],
       }
     }
     case 'family': {
@@ -298,21 +413,24 @@ async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboar
     }
     case 'household': {
       const hhs = await households(d.db, f.userId)
-      if (hhs.length === 0) return { text: `${head}${body}No perteneces a ningún hogar todavía, así que no puedo registrar un abono.`, kb: [NAV[0]] }
+      if (hhs.length === 0) return { text: `${head}${body}No perteneces a ningún hogar todavía, así que no puedo registrar esto en un hogar.`, kb: [NAV[0]] }
+      const question = f.data.kind === 'received' ? '¿En cuál <b>hogar</b> te pagaron?' : f.data.kind === 'shared' ? '¿De cuál <b>hogar</b> es el gasto?' : '¿A cuál <b>hogar</b> le abonas?'
       return {
-        text: `${head}${body}¿A cuál <b>hogar</b> le abonas?`,
+        text: `${head}${body}${question}`,
         kb: [...hhs.map(({ h, members }) => [{ text: clip(`${h.name} · ${members.length} personas`, 40), data: `f:hh:${h.id}` }]), NAV[0]],
       }
     }
     case 'creditor': {
       const hh = (await households(d.db, f.userId)).find((x) => x.h.id === f.data.householdId)
       if (!hh) return { text: `${head}${body}Ese hogar ya no está disponible.`, kb: [NAV[0]] }
-      // whom the user really has to pay, once everything is set against each other (the same plan the app shows)
-      const owed = new Map((hh.me?.pays ?? []).map((l) => [l.to, l.amount]))
-      const others = hh.members.filter((m) => m !== f.userId).sort((a, b) => (owed.get(b) ?? 0) - (owed.get(a) ?? 0))
+      const payer = payerOf(f) ?? f.userId
+      const mine = payer === f.userId
+      // whom the payer really has to pay, once everything is set against each other (the same plan the app shows)
+      const owed = new Map((hh.person(payer)?.pays ?? []).map((l) => [l.to, l.amount]))
+      const others = hh.members.filter((m) => m !== payer).sort((a, b) => (owed.get(b) ?? 0) - (owed.get(a) ?? 0))
       return {
-        text: `${head}${body}¿A quién le pagaste?`,
-        kb: [...others.map((m) => [{ text: clip(`${hh.name(m)}${owed.get(m) ? ` · le debes ${cop(owed.get(m)!)}` : ''}`, 46), data: `f:cr:${m}` }]), NAV[0]],
+        text: `${head}${body}${mine ? '¿A quién le pagaste?' : `¿A quién le pagó <b>${esc(f.data.debtorLabel)}</b>?`}`,
+        kb: [...others.map((m) => [{ text: clip(`${personLabel(f, m, hh.name(m))}${owed.get(m) ? ` · ${mine ? 'le debes' : 'le debe'} ${cop(owed.get(m)!)}` : ''}`, 46), data: `f:cr:${m}` }]), NAV[0]],
       }
     }
     case 'target': {
@@ -340,11 +458,101 @@ async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboar
         ],
       }
     }
+    case 'debtor': {
+      const hh = (await households(d.db, f.userId)).find((x) => x.h.id === f.data.householdId)
+      if (!hh) return { text: `${head}${body}Ese hogar ya no está disponible.`, kb: [NAV[0]] }
+      if (hh.members.length < 2) return { text: `${head}${body}En este hogar solo estás tú.`, kb: [NAV[0]] }
+      // anyone can pay: what each one still owes overall (the same plan the app shows), whoever owes most first
+      const owes = (m: string) => (hh.person(m)?.pays ?? []).reduce((s, l) => s + l.amount, 0)
+      const people = [...hh.members].sort((a, b) => owes(b) - owes(a))
+      return {
+        text: `${head}${body}¿<b>Quién paga</b>? Luego eliges a quién.`,
+        kb: [...people.map((m) => [{ text: clip(`${personLabel(f, m, hh.name(m))}${owes(m) ? ` · ${m === f.userId ? 'debes' : 'debe'} ${cop(owes(m))}` : ''}`, 46), data: `f:db:${m}` }]), NAV[0]],
+      }
+    }
+    case 'rtarget': {
+      const hh = (await households(d.db, f.userId)).find((x) => x.h.id === f.data.householdId)
+      if (!hh) return { text: `${head}${body}Ese hogar ya no está disponible.`, kb: [NAV[0]] }
+      const who = esc(f.data.debtorLabel)
+      const toWhom = f.data.creditorId === f.userId ? 'ti' : esc(f.data.creditorLabel)
+      const owe = f.data.debtorId === f.userId ? 'le debes' : 'le debe'
+      if ((hh.h as any).settlementPlan || (hh.h as any).payMode === 'plan') {
+        return {
+          text: `${head}${body}Este hogar ya <b>cruzó las cuentas</b>: el pago cuenta como pago del plan, no para una deuda suelta.`,
+          kb: [[{ text: '➡️ Continuar', data: 'f:rt:auto' }], NAV[0]],
+        }
+      }
+      const debts = inPaymentOrder((hh.debts as any[]).filter((x) => x.debtor === f.data.debtorId && isPendingDebt(x) && creditorOf(x, hh.members) === f.data.creditorId))
+      const total = debts.reduce((s, x) => s + remainingOf(x), 0)
+      const amount = f.data.amount ?? 0
+      const note = debts.length === 0
+        ? `${who} no ${owe} nada registrado a ${toWhom}: el pago quedará como un pago general a favor de quien paga.`
+        : `${who} ${owe} <b>${cop(total)}</b> a ${toWhom} en ${debts.length} deuda${debts.length === 1 ? '' : 's'}.${amount > total ? ` El pago (${cop(amount)}) es mayor: lo que sobre quedará a favor de quien paga.` : ''}`
+      return {
+        text: `${head}${body}${note}\n¿A qué deuda va el pago?`,
+        kb: [
+          [{ text: debts.length ? '🔀 Repartir entre sus deudas (la más antigua primero)' : '➡️ Continuar', data: 'f:rt:auto' }],
+          ...debts.slice(0, 8).map((x) => [{ text: clip(`${x.concept} · ${cop(remainingOf(x))}`, 48), data: `f:rt:${x.id}` }]),
+          NAV[0],
+        ],
+      }
+    }
+    case 'hcategory':
+      return { text: `${head}${body}¿En qué <b>categoría</b> del hogar lo pones?`, kb: [...rows(HOUSEHOLD_DEBT_CATEGORIES.map((c) => ({ text: clip(c.label, 22), data: `f:hc:${c.id}` })), 2), NAV[0]] }
+    case 'participants':
+    case 'payers': {
+      const hh = (await households(d.db, f.userId)).find((x) => x.h.id === f.data.householdId)
+      if (!hh) return { text: `${head}${body}Ese hogar ya no está disponible.`, kb: [NAV[0]] }
+      const isPart = f.step === 'participants'
+      const chosen = new Set((isPart ? f.data.participants : f.data.payers) ?? [])
+      const guests: string[] = (hh.h as any).guestIds ?? []
+      const label = (m: string) => `${m === f.userId ? 'Tú' : hh.name(m)}${guests.includes(m) ? ' (invitado)' : ''}`
+      const code = isPart ? 'pt' : 'py'
+      return {
+        text: isPart
+          ? `${head}${body}👥 ¿Entre quiénes se <b>divide</b>? Toca para quitar o poner a cada persona y luego continúa.`
+          : `${head}${body}💳 ¿Quién <b>puso el dinero</b>? Puede ser más de una persona.\n<i>Si alguien con cuenta en la app (no un invitado) puso dinero, su aporte queda por confirmar en su app: hasta que lo acepte nadie le debe nada, igual que en la app.</i>`,
+        kb: [
+          ...rows(hh.members.map((m, i) => ({ text: `${chosen.has(m) ? '✅' : '▫️'} ${clip(label(m), 20)}`, data: `f:${code}:${i}` })), 2),
+          [{ text: chosen.size ? `➡️ Continuar (${chosen.size})` : '⚠️ Elige al menos a una persona', data: `f:${code}:done` }],
+          NAV[0],
+        ],
+      }
+    }
+    case 'split':
+      return {
+        text: `${head}${body}¿Cómo se <b>divide</b>?`,
+        kb: [[{ text: '⚖️ Partes iguales', data: 'f:sp:equal' }], [{ text: '% Por porcentaje', data: 'f:sp:percentage' }], [{ text: '💵 Montos fijos', data: 'f:sp:fixed' }], NAV[0]],
+      }
+    case 'shares': {
+      const names = (f.data.participants ?? []).map((u) => f.data.memberNames?.[u] ?? 'alguien')
+      const pct = f.data.splitMode === 'percentage'
+      const example = pct ? names.map((_, i) => (i === 0 ? 100 - 10 * (names.length - 1) : 10)).join(' ') : names.map(() => Math.floor((f.data.amount ?? 0) / names.length)).join(' ')
+      return {
+        text: `${head}${body}✏️ Escribe ${pct ? 'el <b>porcentaje</b>' : 'el <b>monto</b>'} de cada uno, separados por espacios, en este orden:\n<b>${esc(names.join(', '))}</b>\n${pct ? 'Deben sumar 100.' : `Deben sumar ${cop(f.data.amount ?? 0)}.`} Ej.: <code>${example}</code>`,
+        kb: [NAV[0]],
+      }
+    }
+    case 'payamounts': {
+      const names = (f.data.payers ?? []).map((u) => f.data.memberNames?.[u] ?? 'alguien')
+      return {
+        text: `${head}${body}✏️ Escribe <b>cuánto puso</b> cada uno, separados por espacios, en este orden:\n<b>${esc(names.join(', '))}</b>\nDeben sumar ${cop(f.data.amount ?? 0)}.`,
+        kb: [NAV[0]],
+      }
+    }
+    case 'due':
+      return {
+        text: `${head}${body}⏰ ¿Hay una <b>fecha acordada</b> para pagar las partes? Escríbela (ej. 30/11/2026) o toca Sin fecha.`,
+        kb: [[{ text: 'Sin fecha acordada', data: 'f:due:none' }], NAV[0]],
+      }
     case 'account': {
       const accounts = await accountsOf(d, f.userId)
-      const effect = f.data.kind === 'income' ? 'sumará' : 'descontará'
+      const moneyIn = f.data.kind === 'income' || (f.data.kind === 'received' && f.data.creditorId === f.userId)
+      const effect = moneyIn ? 'sumará' : 'descontará'
+      const myPart = f.data.kind === 'shared' ? payersOf(f.data).find((p) => p.memberId === f.userId)?.amount ?? 0 : 0
+      const question = moneyIn ? 'lo recibiste' : f.data.kind === 'shared' ? `salió tu parte (${cop(myPart)})` : 'se pagó'
       return {
-        text: `${head}${body}¿En qué <b>cuenta</b> ${f.data.kind === 'income' ? 'lo recibiste' : 'se pagó'}?\n<i>Al confirmarlo en la app, el saldo de la cuenta se ${effect}.</i>`,
+        text: `${head}${body}¿En qué <b>cuenta</b> ${question}?\n<i>Al confirmarlo en la app, el saldo de la cuenta se ${effect}.</i>`,
         kb: [...accounts.map((a) => [{ text: clip(a.name, 40), data: `f:acc:${a.id}` }]), [{ text: 'Sin cuenta', data: 'f:acc:none' }], NAV[0]],
       }
     }
@@ -352,8 +560,28 @@ async function render(d: FlowDeps, f: Flow): Promise<{ text: string; kb: Keyboar
       return { text: `${head}${body}💬 ¿Quieres agregar un <b>comentario</b>? Escríbelo, o toca Omitir.`, kb: [[{ text: 'Omitir', data: 'f:skip' }], NAV[0]] }
     case 'confirm': {
       const c = f.data.comment
+      let extra = ''
+      if (f.data.kind === 'shared') {
+        // what will be written, worked out with the same functions the app uses
+        const p = sharedPreview(f)
+        const who = (u: string) => f.data.memberNames?.[u] ?? 'alguien'
+        if ('error' in p) extra = `⚠️ ${esc(p.error)} Usa ⬅️ Atrás para corregirlo.\n\n`
+        else {
+          const owes = p.edges.length ? p.edges.map((e) => `• ${e.debtor === f.userId ? "Tú le debes" : `${esc(who(e.debtor))} le debe`} ${cop(e.amount)} a ${e.creditor === f.userId ? "ti" : esc(who(e.creditor))}`).join('\n') : '• Nadie le queda debiendo a nadie.'
+          const waiting = (f.data.payers ?? []).filter((u) => u !== f.userId && !(f.data.guestIds ?? []).includes(u))
+          extra = `<b>Así queda:</b>\n${owes}\n${waiting.length ? `<i>El aporte de ${esc(waiting.map(who).join(', '))} queda por confirmar en su app; sus deudas aparecen cuando lo acepte.</i>\n` : ''}\n`
+        }
+      } else if (f.data.kind === 'received') {
+        const x = f.data
+        const guestTo = (x.guestIds ?? []).includes(x.creditorId ?? '')
+        extra = x.debtorId === f.userId
+          ? `<i>Es tu abono: sale de tu cuenta${x.accountId ? '' : ' (sin cuenta: no mueve saldos)'} y ${guestTo ? 'queda registrado' : `a ${esc(x.creditorLabel)} le llega para confirmar que lo recibió`}.</i>\n\n`
+          : x.creditorId === f.userId
+            ? `<i>Al confirmarlo queda como tu ingreso${x.accountId ? ' en esa cuenta' : ''} y baja lo que ${esc(x.debtorLabel)} debe en el hogar.</i>\n\n`
+            : `<i>Ninguna de tus cuentas se mueve: solo baja lo que ${esc(x.debtorLabel)} le debe a ${esc(x.creditorLabel)}${guestTo ? '' : `, y a ${esc(x.creditorLabel)} le llega para confirmar que lo recibió`}.</i>\n\n`
+      }
       return {
-        text: `${head}${body}${c ? `💬 Comentario: <b>${esc(c)}</b>\n\n` : ''}Esto <b>no se registra todavía</b>: queda pendiente para que lo confirmes dentro de la app.`,
+        text: `${head}${body}${c ? `💬 Comentario: <b>${esc(c)}</b>\n\n` : ''}${extra}Esto <b>no se registra todavía</b>: queda pendiente para que lo confirmes dentro de la app.`,
         kb: [[{ text: '📨 Enviar a la app', data: 'f:send' }], NAV[0]],
       }
     }
@@ -493,13 +721,15 @@ export async function onCallback(d: FlowDeps, userId: string, cb: { id: string; 
       if (f.step === 'date') { d0.date = isoOf(new Date(today.getFullYear(), today.getMonth(), today.getDate() - (action === 'yest' ? 1 : 0))); advance(f) }
       break
     case 'k': {
-      if (f.step !== 'kind' || !['income', 'fixed', 'occasional', 'abono'].includes(a)) break
+      if (f.step !== 'kind' || !['income', 'fixed', 'occasional', 'abono', 'received', 'shared'].includes(a)) break
       if (d0.kind !== a) {
         // another type: what belonged to the previous one no longer applies
         delete d0.concept; delete d0.category; delete d0.fixedExpenseId; delete d0.occMonth; delete d0.fixedLabel
         delete d0.budgetId; delete d0.budgetLabel; delete d0.accountId; delete d0.accountLabel
         delete d0.householdId; delete d0.householdLabel; delete d0.creditorId; delete d0.creditorLabel; delete d0.targetDebtId; delete d0.targetLabel
         delete d0.familyWith; delete d0.familyName; delete d0.tagIds
+        clearHouseholdChoices(d0)
+        delete d0.memberNames; delete d0.guestIds
       }
       d0.kind = a as Kind
       advance(f)
@@ -526,17 +756,88 @@ export async function onCallback(d: FlowDeps, userId: string, cb: { id: string; 
       if (f.step !== 'household') break
       const hh = (await households(d.db, f.userId)).find((x) => x.h.id === a)
       if (!hh) { notice = 'Ese hogar ya no está disponible'; break }
-      if (d0.householdId !== a) { delete d0.creditorId; delete d0.creditorLabel; delete d0.targetDebtId; delete d0.targetLabel }
+      if (d0.householdId !== a) {
+        delete d0.creditorId; delete d0.creditorLabel; delete d0.targetDebtId; delete d0.targetLabel
+        clearHouseholdChoices(d0)
+        // like the app's form: everyone takes part, and the user put the money
+        if (d0.kind === 'shared') { d0.participants = [...hh.members]; d0.payers = [f.userId] }
+      }
       d0.householdId = hh.h.id; d0.householdLabel = String(hh.h.name)
+      d0.memberNames = Object.fromEntries(hh.members.map((m) => [m, m === f.userId ? 'Tú' : hh.name(m)]))
+      d0.guestIds = ((hh.h as any).guestIds ?? []) as string[]
       advance(f)
       break
     }
+    case 'db': {
+      if (f.step !== 'debtor') break
+      const hh = (await households(d.db, f.userId)).find((x) => x.h.id === d0.householdId)
+      if (!hh || !hh.members.includes(a)) { notice = 'Esa persona ya no está disponible'; break }
+      // another payer: whom they pay and which debt are chosen again
+      if (d0.debtorId !== a) { delete d0.creditorId; delete d0.creditorLabel; delete d0.targetDebtId; delete d0.targetLabel }
+      d0.debtorId = a; d0.debtorLabel = personLabel(f, a, hh.name(a))
+      advance(f)
+      break
+    }
+    case 'rt': {
+      if (f.step !== 'rtarget') break
+      if (a === 'auto') { d0.targetDebtId = 'auto'; delete d0.targetLabel }
+      else {
+        const hh = (await households(d.db, f.userId)).find((x) => x.h.id === d0.householdId)
+        const debt = (hh?.debts as any[] | undefined)?.find((x) => x.id === a && x.debtor === d0.debtorId && isPendingDebt(x))
+        if (!debt) { notice = 'Esa deuda ya no está disponible'; break }
+        d0.targetDebtId = debt.id; d0.targetLabel = `${debt.concept} · ${cop(remainingOf(debt))}`
+      }
+      advance(f)
+      break
+    }
+    case 'hc':
+      if (f.step === 'hcategory' && HOUSEHOLD_DEBT_CATEGORIES.some((c) => c.id === a)) { d0.category = a; advance(f) }
+      break
+    case 'pt': case 'py': {
+      const isPart = action === 'pt'
+      if (f.step !== (isPart ? 'participants' : 'payers')) break
+      const current = (isPart ? d0.participants : d0.payers) ?? []
+      if (a === 'done') {
+        if (current.length === 0) { notice = 'Elige al menos a una persona'; break }
+        if (isPart) delete d0.shareValues // the typed values were for the previous list
+        else {
+          delete d0.payerAmounts
+          // the account is only asked for the user's own part: someone else's money is not theirs to move
+          if (current.includes(f.userId)) { if (d0.accountId === null) delete d0.accountId }
+          else { d0.accountId = null; delete d0.accountLabel }
+        }
+        advance(f)
+        break
+      }
+      const hh = (await households(d.db, f.userId)).find((x) => x.h.id === d0.householdId)
+      const m = hh?.members[Number(a)]
+      if (!m) { notice = 'Esa persona ya no está disponible'; break }
+      // kept in the household's order, so typed values line up with the names shown
+      const next = new Set(current)
+      if (next.has(m)) next.delete(m)
+      else next.add(m)
+      const ordered = hh!.members.filter((x) => next.has(x))
+      if (isPart) d0.participants = ordered
+      else d0.payers = ordered
+      break
+    }
+    case 'sp':
+      if (f.step === 'split' && (a === 'equal' || a === 'percentage' || a === 'fixed')) {
+        if (d0.splitMode !== a) delete d0.shareValues
+        d0.splitMode = a
+        advance(f)
+      }
+      break
+    case 'due':
+      if (f.step === 'due' && a === 'none') { d0.dueDate = null; advance(f) }
+      break
     case 'cr': {
       if (f.step !== 'creditor') break
       const hh = (await households(d.db, f.userId)).find((x) => x.h.id === d0.householdId)
-      if (!hh || !hh.members.includes(a) || a === f.userId) { notice = 'Esa persona ya no está disponible'; break }
+      if (!hh || !hh.members.includes(a) || a === (payerOf(f) ?? f.userId)) { notice = 'Esa persona ya no está disponible'; break }
       if (d0.creditorId !== a) { delete d0.targetDebtId; delete d0.targetLabel }
-      d0.creditorId = a; d0.creditorLabel = hh.name(a)
+      d0.creditorId = a; d0.creditorLabel = d0.kind === 'received' ? personLabel(f, a, hh.name(a)) : hh.name(a)
+      if (d0.kind === 'received') syncAccountAsk(f)
       advance(f)
       break
     }
@@ -641,6 +942,33 @@ export async function onText(d: FlowDeps, userId: string, chatId: number, text: 
     if (t.length > 300) { await d.tg.send(chatId, 'El comentario puede tener hasta 300 caracteres.'); return true }
     f.data.comment = t
     advance(f)
+  } else if (f.awaiting === 'shares') {
+    const parts = f.data.participants ?? []
+    const tokens = t.split(/[\s;]+/).filter(Boolean)
+    if (tokens.length !== parts.length) { await d.tg.send(chatId, `Escribe ${parts.length} valores, uno por persona, separados por espacios.`); return true }
+    const pct = f.data.splitMode === 'percentage'
+    const values = tokens.map((x) => (pct ? Number(x.replace('%', '').replace(',', '.')) : parseAmount(x) ?? NaN))
+    if (values.some((v) => !Number.isFinite(v) || v < 0)) { await d.tg.send(chatId, 'No entendí alguno de los valores. Usa solo números, por ejemplo 50 30 20.'); return true }
+    const previous = f.data.shareValues
+    f.data.shareValues = values
+    // checked with the same function the app uses to split it
+    const p = sharedPreviewShares(f)
+    if (p) { f.data.shareValues = previous; await d.tg.send(chatId, `${p} Escríbelos otra vez.`); return true }
+    advance(f)
+  } else if (f.awaiting === 'payamounts') {
+    const payers = f.data.payers ?? []
+    const tokens = t.split(/[\s;]+/).filter(Boolean)
+    const values = tokens.map((x) => parseAmount(x) ?? NaN)
+    if (values.length !== payers.length || values.some((v) => !Number.isFinite(v))) { await d.tg.send(chatId, `Escribe ${payers.length} montos, uno por persona, separados por espacios.`); return true }
+    const sum = values.reduce((s, v) => s + v, 0)
+    if (sum !== f.data.amount) { await d.tg.send(chatId, `Entre todos suman ${cop(sum)} y el gasto es de ${cop(f.data.amount ?? 0)}: deben coincidir.`); return true }
+    f.data.payerAmounts = values
+    advance(f)
+  } else if (f.awaiting === 'due') {
+    const v = parseDate(t, today)
+    if (!v) { await d.tg.send(chatId, 'No entendí esa fecha. Prueba con 30/11/2026 o toca Sin fecha acordada.'); return true }
+    f.data.dueDate = v
+    advance(f)
   }
   await show(d, f)
   return true
@@ -656,21 +984,52 @@ async function send(d: FlowDeps, f: Flow) {
           : x.kind === 'abono' && !x.householdId ? 'el hogar'
             : x.kind === 'abono' && !x.creditorId ? 'a quién le pagaste'
               : x.kind === 'abono' && !x.targetDebtId ? 'a qué deuda va'
-          : x.kind !== 'fixed' && x.kind !== 'abono' && !x.concept ? 'el concepto'
+                : (x.kind === 'received' || x.kind === 'shared') && !x.householdId ? 'el hogar'
+                  : x.kind === 'received' && !x.debtorId ? 'quién paga'
+                    : x.kind === 'received' && !x.creditorId ? 'a quién le paga'
+                    : x.kind === 'received' && !x.targetDebtId ? 'a qué deuda va'
+                      : x.kind === 'shared' && !x.category ? 'la categoría'
+                        : x.kind === 'shared' && !x.participants?.length ? 'entre quiénes se divide'
+                          : x.kind === 'shared' && !x.splitMode ? 'cómo se divide'
+                            : x.kind === 'shared' && !x.payers?.length ? 'quién puso el dinero'
+                              : x.kind === 'shared' && x.dueDate === undefined ? 'la fecha acordada'
+          : x.kind !== 'fixed' && x.kind !== 'abono' && x.kind !== 'received' && !x.concept ? 'el concepto'
             : x.kind === 'occasional' && x.budgetId === 'other' && !x.category ? 'la categoría' : ''
   if (missing) { await d.tg.edit(f.chatId, f.messageId!, `Falta ${missing}. Usa ⬅️ Atrás para completarlo.`, NAV); return }
+  let split: { mode: SplitMode; shares: { memberId: string; value?: number }[] } | undefined
+  let detail: string | undefined
+  if (x.kind === 'shared') {
+    // never sent unless it splits and settles exactly as the app will write it
+    const p = sharedPreview(f)
+    if ('error' in p) { await d.tg.edit(f.chatId, f.messageId!, `${esc(p.error)} Usa ⬅️ Atrás para corregirlo.`, NAV); return }
+    split = { mode: x.splitMode!, shares: x.participants!.map((u, i) => (x.splitMode === 'equal' ? { memberId: u } : { memberId: u, value: x.shareValues![i] })) }
+    const who = (u: string) => x.memberNames?.[u] ?? 'alguien'
+    detail = `Pagó ${x.payers!.map(who).join(', ')} · entre ${x.participants!.map(who).join(', ')} (${SPLIT_LABEL[x.splitMode!]})${x.dueDate ? ` · fecha acordada ${dateLabel(x.dueDate)}` : ''} · hogar «${x.householdLabel}»`
+  } else if (x.kind === 'received') {
+    detail = `${x.debtorLabel} → ${x.creditorLabel} en «${x.householdLabel}»: ${x.targetDebtId === 'auto' ? 'se reparte entre sus deudas, la más antigua primero' : `va a ${x.targetLabel}`}.`
+  }
+  // the user paying is their own abono, written exactly as before
+  const asAbono = x.kind === 'received' && x.debtorId === f.userId
+  const due = x.dueDate ? x.dueDate.split('-').map(Number) : null
 
   const [y, m, dd] = x.date!.split('-').map(Number)
   const ownId = await d.db.add('pendingMovements', {
     userId: f.userId,
-    kind: x.kind,
+    kind: asAbono ? 'abono' : x.kind,
     amount: x.amount,
     // midnight in Colombia (UTC-5), like the dates the app writes
     date: new Date(Date.UTC(y, m - 1, dd, 5, 0, 0)),
-    concept: x.kind === 'abono' ? `Abono a ${x.creditorLabel} · ${x.householdLabel}` : (x.concept ?? ''),
+    concept: x.kind === 'abono' || asAbono ? `Abono a ${x.creditorLabel} · ${x.householdLabel}`
+      : x.kind === 'received' ? (x.creditorId === f.userId ? `Pago de ${x.debtorLabel} · ${x.householdLabel}` : `Pago de ${x.debtorLabel} a ${x.creditorLabel} · ${x.householdLabel}`)
+        : (x.concept ?? ''),
     category: x.category,
     householdId: x.householdId,
     creditorId: x.creditorId,
+    debtorId: x.kind === 'received' && !asAbono ? x.debtorId : undefined,
+    split,
+    payers: x.kind === 'shared' ? payersOf(x) : undefined,
+    dueDate: x.kind === 'shared' ? (due ? new Date(Date.UTC(due[0], due[1] - 1, due[2], 17, 0, 0)) : null) : undefined,
+    detail,
     targetDebtId: x.targetDebtId && x.targetDebtId !== 'auto' ? x.targetDebtId : undefined,
     fixedExpenseId: x.fixedExpenseId,
     occMonth: x.occMonth,
@@ -729,14 +1088,14 @@ async function send(d: FlowDeps, f: Flow) {
 const plain = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 
 /** A person of one of the user's households whose name appears in what the screenshot says (a hint, never a decision). */
-async function memberNamed(d: FlowDeps, f: Flow): Promise<{ name: string; household: string } | null> {
+async function memberNamed(d: FlowDeps, f: Flow): Promise<{ name: string; household: string; guest: boolean } | null> {
   const text = plain(`${f.extracted.counterparty ?? ''} ${f.extracted.concept ?? ''}`)
   if (text.trim().length < 3) return null
   for (const hh of await households(d.db, f.userId)) {
     for (const m of hh.members.filter((x) => x !== f.userId)) {
       const name = hh.name(m)
       const first = plain(name).split(/\s+/)[0]
-      if (first.length >= 3 && text.includes(first)) return { name, household: String(hh.h.name) }
+      if (first.length >= 3 && text.includes(first)) return { name, household: String(hh.h.name), guest: ((hh.h as any).guestIds ?? []).includes(m) }
     }
   }
   return null

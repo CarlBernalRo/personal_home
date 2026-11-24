@@ -325,14 +325,18 @@ async function budgetOver(c: Ctx, n: Doc, key: string): Promise<Msg> {
   return { text: lines.join('\n'), keyboard: buttons(c.d, '/fijos?tab=config', 'Ver gastos ocasionales', n), silent: false }
 }
 
-const KIND_ICON: Record<string, string> = { income: '💰', fixed: '📌', occasional: '🛒', abono: '🏠' }
-const KIND_NAME: Record<string, string> = { income: 'Ingreso', fixed: 'Gasto fijo', occasional: 'Gasto adicional', abono: 'Abono al hogar' }
+const KIND_ICON: Record<string, string> = { income: '💰', fixed: '📌', occasional: '🛒', abono: '🏠', received: '🤝', shared: '👥' }
+const KIND_NAME: Record<string, string> = { income: 'Ingreso', fixed: 'Gasto fijo', occasional: 'Gasto adicional', abono: 'Abono al hogar', received: 'Pago en el hogar', shared: 'Gasto compartido' }
 
 async function pendingMovements(c: Ctx, n: Doc): Promise<Msg> {
   const pending = await c.pending()
   if (pending.length === 0) throw new Error('nothing pending anymore')
-  const income = pending.filter((p) => p.kind === 'income').reduce((s, p) => s + p.amount, 0)
-  const out = pending.filter((p) => p.kind !== 'income').reduce((s, p) => s + p.amount, 0)
+  // a payment in the household is money in only when it was paid to the person; between two others it moves none of theirs
+  const toMe = (p: any) => p.kind === 'received' && (p.creditorId ?? p.userId) === p.userId
+  const income = pending.filter((p) => p.kind === 'income' || toMe(p)).reduce((s, p) => s + p.amount, 0)
+  const out = pending.filter((p) => p.kind !== 'income' && p.kind !== 'received' && p.kind !== 'shared').reduce((s, p) => s + p.amount, 0)
+    // of a shared expense, only the part the person put in is theirs
+    + pending.filter((p) => p.kind === 'shared').reduce((s, p) => s + (((p as any).payers ?? []).find((x: any) => x.memberId === p.userId)?.amount ?? 0), 0)
   const lines = pending.slice(0, 8).map((p) => `${KIND_ICON[p.kind] ?? '•'} <b>${esc(p.concept || KIND_NAME[p.kind])}</b> — ${cop(p.amount)}\n   ${KIND_NAME[p.kind] ?? p.kind} · ${dayShort(new Date(p.date.getTime() - 5 * 3600_000))}${p.attachmentId ? ' · 📎' : ''}`)
   if (pending.length > 8) lines.push(`… y ${pending.length - 8} más`)
   const totals = [income ? `+${cop(income)} en ingresos` : '', out ? `-${cop(out)} en gastos` : ''].filter(Boolean).join(' · ')
