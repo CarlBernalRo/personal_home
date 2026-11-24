@@ -3,6 +3,14 @@ import { householdDebtsWithCredit } from './householdAbono'
 import { debtLines } from './householdOwed'
 import { buildHouseholdReport, toDate, type FrozenPlan, type Rec } from './householdReport'
 
+/** Someone who still has to pay the user in a household. */
+export interface HouseholdReceivable {
+  householdId: string
+  from: string
+  name: string
+  amount: number
+}
+
 export interface HouseholdStanding {
   householdId: string
   /** What the user still has to pay in this household (their payments in the plan). */
@@ -11,6 +19,8 @@ export interface HouseholdStanding {
   owedToMe: number
   /** The household pays only by the plan (its accounts were crossed). */
   crossed: boolean
+  /** Who still has to pay the user, and how much (from the household report). */
+  receivables: HouseholdReceivable[]
   /** What the user has to pay, one by one: plan payments when crossed, their open debts otherwise. */
   lines: DebtLine[]
 }
@@ -65,5 +75,9 @@ export function householdStanding(
     // paying debt by debt: the user's open debts, never for more than they really owe overall
     : debtLines(dbt as any[], uid, householdId, owes)
 
-  return { householdId, owes, owedToMe, crossed, lines }
+  const receivables: HouseholdReceivable[] = (me?.receives ?? [])
+    .map((r) => ({ householdId, from: r.from, name: r.name, amount: Math.round(r.amount) }))
+    .filter((r) => r.amount > 0)
+
+  return { householdId, owes, owedToMe, crossed, lines, receivables }
 }

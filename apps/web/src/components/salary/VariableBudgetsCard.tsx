@@ -42,9 +42,10 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
   // a budget switched off for the month this period belongs to isn't shown or reserved
   const periodMonth = monthKey(new Date(end.getTime() - 86_400_000))
   const owedOf = (b: VariableBudget) => salary.variable.householdOwedAt?.(new Date(), b.householdIds) ?? salary.variable.householdOwed ?? 0
+  const receivablesOf = (b: VariableBudget) => (salary.variable.householdReceivables ?? []).filter((r) => followsHousehold(b, r.householdId))
   const active = budgets.filter((b) => b.active && !isPaused(b, periodMonth)
-    // the household-debt one only shows while something is owed (or was paid this period)
-    && (b.source !== 'household-debt' || owedOf(b) > 0 || inRange.some((s) => s.budgetId === b.id)))
+    // the household-debt one only shows while something is owed either way (or was paid this period)
+    && (b.source !== 'household-debt' || owedOf(b) > 0 || receivablesOf(b).length > 0 || inRange.some((s) => s.budgetId === b.id)))
 
   function openSpend(b: VariableBudget) {
     setSpend({ amount: '', date: format(new Date(), 'yyyy-MM-dd'), notes: '' })
@@ -108,6 +109,13 @@ export function VariableBudgetsCard({ salary }: { salary: SalaryState }) {
                   title={b.concept}
                   subtitle={b.paymentDay ? `día ${b.paymentDay}` : undefined}
                   rows={rows}
+                  receivables={receivablesOf(b).map((r) => ({
+                    key: `${r.householdId}|${r.from}`,
+                    householdId: r.householdId,
+                    household: names[r.householdId] ?? 'Hogar',
+                    name: r.name,
+                    amount: r.amount,
+                  }))}
                   meta={`Abonado este período ${formatCOP(paid)}`}
                   note={b.notes}
                 />

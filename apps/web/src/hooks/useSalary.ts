@@ -209,9 +209,10 @@ export function useSalary() {
       householdOwedAt: household.owedAt,
       householdUndatedOwedAt: household.undatedOwedAt,
       householdLines: household.lines,
+      householdReceivables: household.receivables,
       householdNames,
     }),
-    [budgets, allSpends, household.owed, household.owedAt, household.undatedOwedAt, household.lines, householdNames],
+    [budgets, allSpends, household.owed, household.owedAt, household.undatedOwedAt, household.lines, household.receivables, householdNames],
   )
 
   async function saveBudgets(next: VariableBudget[]) {

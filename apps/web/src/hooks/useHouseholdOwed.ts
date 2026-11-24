@@ -121,5 +121,8 @@ export function useHouseholdOwed(enabled: boolean) {
 
   const owed = useMemo(() => standings.reduce((s, x) => s + x.owes, 0), [standings])
 
-  return { owed, owedAt, undatedOwedAt, lines, abonos, standings, loading }
+  /** Who owes the user what, in every household. */
+  const receivables = useMemo(() => standings.flatMap((s) => s.receivables), [standings])
+
+  return { owed, owedAt, undatedOwedAt, lines, receivables, abonos, standings, loading }
 }

@@ -1,3 +1,4 @@
+import type { HouseholdReceivable } from '../utils/householdStanding';
 /** A recurring expense with no fixed day or amount (e.g. gasoline): an approximate amount per salary period. */
 export interface VariableBudget {
   id: string;
@@ -65,6 +66,8 @@ export interface VariableData {
   householdUndatedOwedAt?: (date: Date, householdIds?: string[] | null) => number;
   /** Pending household debts one by one, so those with an agreed date can sit on that date. */
   householdLines?: DebtLine[];
+  /** Who still has to pay the user in their households (only to show it: it is money in, not a debt). */
+  householdReceivables?: HouseholdReceivable[];
   /** Household names by id, to say which household each amount comes from. */
   householdNames?: Record<string, string>;
 }
