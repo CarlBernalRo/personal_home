@@ -38,8 +38,8 @@ export function MobileSectionBar<T extends string>({ sections, active, onOpen, a
   return (
     <>
       <div ref={anchor} className="lg:hidden h-0 scroll-mt-2" aria-hidden="true" />
-      <div className="lg:hidden sticky top-0 z-20 -my-2 py-2 bg-[#051018]/85 backdrop-blur-md">
-        <div role="tablist" aria-label={label} className="grid gap-1 rounded-2xl border border-white/10 bg-[#0a1f2f] p-1" style={{ gridTemplateColumns: `repeat(${sections.length}, minmax(0, 1fr))` }}>
+      <div className="lg:hidden sticky top-0 z-20 -my-2 py-2">
+        <div role="tablist" aria-label={label} className="grid gap-1 rounded-2xl border border-white/10 bg-[#0a1f2f]/90 backdrop-blur-md shadow-lg shadow-black/20 p-1" style={{ gridTemplateColumns: `repeat(${sections.length}, minmax(0, 1fr))` }}>
           {sections.map(({ id, label: name, Icon, badge }) => {
             const on = active === id
             return (

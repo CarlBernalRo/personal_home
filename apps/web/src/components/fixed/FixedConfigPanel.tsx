@@ -878,22 +878,19 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
             )}
           </div>
 
-          {/* Notas */}
+          {/* Compartir con un hogar — always shown, so it is clear why it can't be used when it can't */}
           <div className="pt-1 border-t border-white/10">
-            <div className="pt-3">
-              <Input label="Notas" placeholder="Opcional (ej. número de cuenta)" {...form.register('notes')} />
-            </div>
-            <div className="pt-3">
-              <TagPicker value={tagIds} onChange={setTagIds} />
-            </div>
-          </div>
-
-          {/* Compartir con un hogar */}
-          {sharable.length > 0 && (
-            <div className="pt-1 border-t border-white/10">
-              <div className="pt-3 space-y-2.5">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-[#6f7a83] pt-3">Compartir con un hogar</p>
+            {sharable.length === 0 ? (
+              <p className="mt-1.5 text-[11px] leading-snug text-[#8a929a]">
+                {myHouseholds.length === 0
+                  ? 'No perteneces a ningún hogar. Crea uno en Hogar (puedes agregar a alguien como invitado) y podrás repartir aquí este gasto cada vez que lo pagues.'
+                  : 'Tus hogares están archivados o solo te tienen a ti. Agrega a alguien en Hogar (puede ser un invitado) y podrás repartir aquí este gasto cada vez que lo pagues.'}
+              </p>
+            ) : (
+              <div className="pt-2 space-y-2.5">
                 <Select
-                  label="Compartir con un hogar"
+                  label="Hogar"
                   value={link?.householdId ?? ''}
                   onChange={(e) => pickHousehold(e.target.value)}
                   options={[{ value: '', label: 'No compartir' }, ...sharable.map((h) => ({ value: h.id, label: h.name }))]}
@@ -941,8 +938,18 @@ export function FixedConfigPanel({ userId, expenses, paymentIndex, salary, onCha
                   </div>
                 )}
               </div>
+            )}
+          </div>
+
+          {/* Notas */}
+          <div className="pt-1 border-t border-white/10">
+            <div className="pt-3">
+              <Input label="Notas" placeholder="Opcional (ej. número de cuenta)" {...form.register('notes')} />
             </div>
-          )}
+            <div className="pt-3">
+              <TagPicker value={tagIds} onChange={setTagIds} />
+            </div>
+          </div>
 
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setModalOpen(false)}>Cancelar</Button>
