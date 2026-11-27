@@ -1,5 +1,6 @@
-import { collection, getDocs, query, where } from 'firebase/firestore'
+import { collection, query, where } from 'firebase/firestore'
 import { db } from './firebase'
+import { readSynced } from './sync'
 import { createHouseholdExpense, deleteHouseholdExpense, getAllFixedExpensePayments, getFixedExpenses, getHousehold } from './firestore'
 import { HOUSEHOLD_DEBT_CATEGORIES, type FixedHouseholdLink } from '@/shared'
 
@@ -40,7 +41,8 @@ async function run(uid: string) {
       const shares = link.shares.filter((s) => members.includes(s.memberId))
       if (shares.length === 0) continue
 
-      const existing = (await getDocs(query(
+      // from the device unless the household changed (creating a share is idempotent: fixed ids)
+      const existing = (await readSynced(`fxshares:${link.householdId}:${fe.id}`, [`hh.${link.householdId}`], query(
         collection(db, 'householdExpenses'),
         where('householdId', '==', link.householdId),
         where('fixedLink.fixedExpenseId', '==', fe.id),

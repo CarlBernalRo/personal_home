@@ -61,7 +61,8 @@ class Ctx {
   accounts = () => this.memo('accounts', async () => (await this.d.db.query('accounts', [{ field: 'userId', op: 'EQUAL', value: this.user.id }])).sort((a, b) => String(a.name).localeCompare(String(b.name))))
   fixed = () => this.memo('fixed', () => fixedFor(this.d.db, this.user.id, this.today))
   households = () => this.memo('households', () => households(this.d.db, this.user.id))
-  pending = () => this.memo('pending', async () => (await this.d.db.query('pendingMovements', [{ field: 'userId', op: 'EQUAL', value: this.user.id }])).filter((p) => p.status === 'pending').sort((a, b) => a.createdAt - b.createdAt))
+  // only the ones still pending (two equality filters: no composite index), not every movement ever prepared
+  pending = () => this.memo('pending', async () => (await this.d.db.query('pendingMovements', [{ field: 'userId', op: 'EQUAL', value: this.user.id }, { field: 'status', op: 'EQUAL', value: 'pending' }])).sort((a, b) => a.createdAt - b.createdAt))
   /** The account a fixed expense is paid from: the one set on it, else the default one. */
   async accountFor(fe: Doc) {
     const accounts = await this.accounts()

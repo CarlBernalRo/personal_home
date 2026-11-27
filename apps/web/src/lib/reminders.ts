@@ -1,5 +1,6 @@
-import { addDoc, collection, deleteDoc, deleteField, doc, onSnapshot, query, serverTimestamp, Timestamp, updateDoc, where } from 'firebase/firestore'
+import { addDoc, collection, deleteDoc, deleteField, doc, query, serverTimestamp, Timestamp, updateDoc, where } from 'firebase/firestore'
 import { db } from './firebase'
+import { listenSynced } from './sync'
 import type { Reminder } from '@/shared'
 
 const asReminder = (id: string, d: Record<string, any>): Reminder => ({
@@ -16,13 +17,13 @@ const asReminder = (id: string, d: Record<string, any>): Reminder => ({
   createdAt: d.createdAt instanceof Timestamp ? d.createdAt.toDate() : undefined,
 })
 
-/** The user's reminders and the ones family members share with them, live (two queries the rules allow). */
+/** The user's reminders and the ones family members share with them, live (two queries the rules allow), read again only when they changed. */
 export function subscribeReminders(uid: string, onRows: (rows: Reminder[]) => void) {
   let mine: Reminder[] = []
   let shared: Reminder[] = []
   const emit = () => onRows([...mine, ...shared.filter((s) => !mine.some((m) => m.id === s.id))])
-  const a = onSnapshot(query(collection(db, 'reminders'), where('userId', '==', uid)), (snap) => { mine = snap.docs.map((x) => asReminder(x.id, x.data())); emit() }, () => { mine = []; emit() })
-  const b = onSnapshot(query(collection(db, 'reminders'), where('sharedWith', 'array-contains', uid)), (snap) => { shared = snap.docs.map((x) => asReminder(x.id, x.data())); emit() }, () => { shared = []; emit() })
+  const a = listenSynced('reminders:mine', ['reminders'], query(collection(db, 'reminders'), where('userId', '==', uid)), (snap) => { mine = snap.docs.map((x) => asReminder(x.id, x.data())); emit() }, () => { mine = []; emit() })
+  const b = listenSynced('reminders:shared', ['reminders'], query(collection(db, 'reminders'), where('sharedWith', 'array-contains', uid)), (snap) => { shared = snap.docs.map((x) => asReminder(x.id, x.data())); emit() }, () => { shared = []; emit() })
   return () => { a(); b() }
 }
 

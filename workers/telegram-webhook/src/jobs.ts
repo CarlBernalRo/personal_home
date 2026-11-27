@@ -187,16 +187,62 @@ export async function createReminderNotices(d: JobDeps, apply = true): Promise<n
   return created
 }
 
+/**
+ * What this job last worked out, so a run only does what changed since (one small document, `system/noticeState`):
+ * per person the change stamps their notices were computed with (from `sync/{uid}`, kept by the server on every
+ * write) and the day; the same for the reminders; and when the recent notices were last looked through.
+ */
+interface NoticeState {
+  users?: Record<string, { key: string; day: string }>
+  reminders?: { key: string; day: string }
+  scan?: { key: string; at: number }
+}
+/** The stamps a person's notices depend on (their money, fixed expenses, households, profile and pending movements). */
+const NOTICE_KEYS = ['incomes', 'expenses', 'accounts', 'fixed', 'fixedPayments', 'profile', 'households', 'pending']
+const stampKey = (v: any, keys: string[]) => JSON.stringify([...keys.map((k) => v?.[k] ?? 0), keys.includes('households') ? v?.hh ?? {} : null])
+
 export async function sendTelegramAvisos(d: JobDeps & { tg: Telegram; appUrl: string }, apply = true): Promise<TelegramResult> {
   const users = await d.db.query('users', [{ field: 'telegramChatId', op: 'GREATER_THAN', value: '' }])
   const out: TelegramResult = { users: users.length, sent: 0, skipped: 0 }
   if (users.length === 0) return out
-  // first the notices the app would only make if it were open, so they go out in this same run
-  out.created = await createServerNotices(d, users, apply)
-  out.created += await createReminderNotices(d, apply)
+  const now = clock(d)
+  const day = dayKey(bogotaToday(now))
+  const hour = new Date(now - BOGOTA_HOURS * HOUR).getUTCHours()
+  const waking = hour >= 8 && hour < 21
+  const state = ((await d.db.get('system/noticeState').catch(() => null)) ?? {}) as NoticeState
+  const next: NoticeState = { users: { ...(state.users ?? {}) }, ...(state.reminders ? { reminders: state.reminders } : {}), ...(state.scan ? { scan: state.scan } : {}) }
+  // each person's change stamps (one tiny document each); without one, everything is worked out as before
+  const signals = new Map<string, any>()
+  for (const u of users) signals.set(u.id, (await d.db.get(`sync/${u.id}`).catch(() => null))?.v ?? null)
+
+  // the notices the app would only make if it were open: only for whoever had something change, or once a new day starts
+  const stale = users.filter((u) => {
+    const v = signals.get(u.id)
+    if (!v) return true
+    const seen = state.users?.[u.id]
+    return !seen || seen.day !== day || seen.key !== stampKey(v, NOTICE_KEYS)
+  })
+  out.created = await createServerNotices(d, stale, apply)
+  if (waking) for (const u of stale) { const v = signals.get(u.id); if (v) next.users![u.id] = { key: stampKey(v, NOTICE_KEYS), day } }
+
+  // reminders: once a day, and again only when someone's reminders changed
+  const remindersKey = JSON.stringify(users.map((u) => signals.get(u.id)?.reminders ?? 0))
+  const remindersStale = !state.reminders || state.reminders.day !== day || state.reminders.key !== remindersKey || users.some((u) => !signals.get(u.id))
+  if (remindersStale) {
+    out.created += await createReminderNotices(d, apply)
+    if (waking) next.reminders = { key: remindersKey, day }
+  }
+
+  // the recent notices are only looked through when some arrived (a stamp moved, or this run made some)
+  const scanKey = JSON.stringify(users.map((u) => signals.get(u.id)?.notifications ?? 0))
+  const mustScan = (out.created ?? 0) > 0 || !state.scan || state.scan.key !== scanKey || users.some((u) => !signals.get(u.id))
+  if (apply) {
+    if (mustScan) next.scan = { key: scanKey, at: now }
+    if (JSON.stringify(next) !== JSON.stringify(state)) await d.db.set('system/noticeState', next as any).catch((e: any) => console.error('noticeState:', e?.message))
+  }
 
   const since = new Date(clock(d) - NOTICE_WINDOW_MS)
-  const recent = await d.db.query('notifications', [{ field: 'createdAt', op: 'GREATER_THAN_OR_EQUAL', value: since }])
+  const recent = mustScan ? await d.db.query('notifications', [{ field: 'createdAt', op: 'GREATER_THAN_OR_EQUAL', value: since }]) : []
   const mark = (id: string, status: 'sent' | 'skipped', messageId?: number) =>
     apply ? d.db.patch(`notifications/${id}`, { telegramStatus: status, ...(status === 'sent' ? { telegramSent: true } : {}), ...(messageId ? { telegramMessageId: messageId } : {}), telegramAt: new Date(clock(d)) }) : Promise.resolve()
 
@@ -205,10 +251,15 @@ export async function sendTelegramAvisos(d: JobDeps & { tg: Telegram; appUrl: st
     const fd: FormatDeps = { db: d.db, appUrl: d.appUrl, now: clock(d) }
     const ctx = new Ctx(fd, u)
 
-    const waiting = (await ctx.pending()).length
     const pending = recent
       .filter((n) => n.userId === u.id && !n.telegramStatus && n.telegramSent !== true)
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+    // the pending movements are only read when something needs them (a notice about them, or the daily reminder below)
+    const hourNow = new Date(clock(d) - BOGOTA_HOURS * HOUR).getUTCHours()
+    const lastReminder = u.pendingReminderAt instanceof Date ? u.pendingReminderAt.getTime() : 0
+    const reminderDue = (!zones || zones.includes('gastos')) && hourNow >= 8 && hourNow < 21 && clock(d) - lastReminder >= 20 * HOUR
+    const needsPending = reminderDue || pending.some((n) => typeof n.derivedKey === 'string' && n.derivedKey.startsWith('pendmov|'))
+    const waiting = needsPending ? (await ctx.pending()).length : 0
 
     // what really goes out: archived, switched-off zones and alerts that were solved while they waited are left out.
     // Every zone (fixed payments included) goes out the first time it appears, same as the others: waiting for the
@@ -244,14 +295,10 @@ export async function sendTelegramAvisos(d: JobDeps & { tg: Telegram; appUrl: st
     // Reminder of what waits in Pendientes. The notice the app creates only exists while the app is open and its id repeats
     // for the same count, so it can never be trusted to arrive: the Worker looks at the pending movements itself.
     // At most once a day, in waking hours, for movements that have waited a while (not for one that was just sent).
-    const hourNow = new Date(clock(d) - BOGOTA_HOURS * HOUR).getUTCHours()
-    const waitingList = await ctx.pending()
+    const waitingList = reminderDue ? await ctx.pending() : []
     const oldest = waitingList[0]?.createdAt instanceof Date ? waitingList[0].createdAt.getTime() : clock(d)
-    const lastReminder = u.pendingReminderAt instanceof Date ? u.pendingReminderAt.getTime() : 0
     const covered = toSend.some((n) => typeof n.derivedKey === 'string' && n.derivedKey.startsWith('pendmov|'))
-    if (waitingList.length > 0 && !covered && (!zones || zones.includes('gastos'))
-        && hourNow >= 8 && hourNow < 21
-        && clock(d) - oldest >= 2 * HOUR && clock(d) - lastReminder >= 20 * HOUR) {
+    if (waitingList.length > 0 && !covered && reminderDue && clock(d) - oldest >= 2 * HOUR) {
       try {
         const msg = await pendingReminder(fd, u, ctx)
         if (!apply) out.sent++

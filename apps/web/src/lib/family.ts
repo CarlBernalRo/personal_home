@@ -1,7 +1,8 @@
 import {
-  arrayRemove, arrayUnion, collection, deleteDoc, deleteField, doc, getDoc, getDocs, increment, onSnapshot, query, serverTimestamp, setDoc, Timestamp, updateDoc, where, writeBatch,
+  arrayRemove, arrayUnion, collection, deleteDoc, deleteField, doc, getDoc, getDocs, increment, query, serverTimestamp, setDoc, Timestamp, updateDoc, where, writeBatch,
 } from 'firebase/firestore'
 import { db } from './firebase'
+import { listenSynced, listenSyncedDoc } from './sync'
 import { createNotification } from './firestore'
 import { sameList, viewersOf, type Family, type FamilyShare } from '@/shared'
 
@@ -38,9 +39,10 @@ export function newFamilyCode() {
 
 // ── Reading ──────────────────────────────────────────────────────────────────
 
-/** The family the user belongs to, live (null when none). */
+/** The family the user belongs to, live (null when none), read again only when it changed. */
 export function subscribeMyFamily(uid: string, onFamily: (f: Family | null) => void) {
-  return onSnapshot(
+  return listenSynced(
+    'family:mine', ['family'],
     query(collection(db, 'families'), where('members', 'array-contains', uid)),
     (snap) => onFamily(snap.docs[0] ? asFamily(snap.docs[0].id, snap.docs[0].data()) : null),
     () => onFamily(null),
@@ -49,7 +51,7 @@ export function subscribeMyFamily(uid: string, onFamily: (f: Family | null) => v
 
 /** One family, live (for following a request sent to it). */
 export function subscribeFamily(id: string, onFamily: (f: Family | null) => void) {
-  return onSnapshot(doc(db, 'families', id), (snap) => onFamily(snap.exists() ? asFamily(snap.id, snap.data()) : null), () => onFamily(null))
+  return listenSyncedDoc(`family:${id}`, ['family'], doc(db, 'families', id), (snap) => onFamily(snap.exists() ? asFamily(snap.id, snap.data()!) : null), () => onFamily(null))
 }
 
 export async function findFamilyByCode(code: string): Promise<Family | null> {

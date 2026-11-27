@@ -1,9 +1,10 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
-  getDocs, getDoc, query, where, orderBy, Timestamp, onSnapshot,
+  getDocs, getDoc, query, where, orderBy, Timestamp,
   serverTimestamp, setDoc, arrayUnion, arrayRemove, writeBatch, increment, deleteField, runTransaction,
 } from 'firebase/firestore'
 import { db, auth } from './firebase'
+import { listenSynced, listenSyncedDoc, readSynced, readSyncedDoc } from './sync'
 import type {
   NewExpense, NewAccount, NewAccountTransfer, NewSavingsGoal,
   NewFixedExpense, NewFixedExpensePayment,
@@ -70,13 +71,13 @@ export async function addExpense(expense: NewExpense) {
   await batch.commit()
 }
 
-export async function getExpenses(userId: string) {
+export async function getExpenses(userId: string, fresh = false) {
   const q = query(
     collection(db, 'expenses'),
     where('userId', '==', userId),
     orderBy('date', 'desc'),
   )
-  const snap = await getDocs(q)
+  const snap = await (fresh ? getDocs(q) : readSynced('expenses', ['expenses'], q))
   return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
 }
 
@@ -136,13 +137,13 @@ export async function addFixedExpense(data: NewFixedExpense) {
   })
 }
 
-export async function getFixedExpenses(userId: string) {
+export async function getFixedExpenses(userId: string, fresh = false) {
   const q = query(
     collection(db, 'fixedExpenses'),
     where('userId', '==', userId),
     where('active', '==', true),
   )
-  const snap = await getDocs(q)
+  const snap = await (fresh ? getDocs(q) : readSynced('fixed', ['fixed'], q))
   return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
 }
 
@@ -231,9 +232,9 @@ export async function getFixedExpensePayments(userId: string, month: string) {
 }
 
 /** Every payment ever registered by the user, for history/timeline views. */
-export async function getAllFixedExpensePayments(userId: string) {
+export async function getAllFixedExpensePayments(userId: string, fresh = false) {
   const q = query(collection(db, 'fixedExpensePayments'), where('userId', '==', userId))
-  const snap = await getDocs(q)
+  const snap = await (fresh ? getDocs(q) : readSynced('fixedPayments', ['fixedPayments'], q))
   return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
 }
 
@@ -317,13 +318,13 @@ export async function addIncome(data: NewIncome) {
   await batch.commit()
 }
 
-export async function getIncomes(userId: string) {
+export async function getIncomes(userId: string, fresh = false) {
   const q = query(
     collection(db, 'incomes'),
     where('userId', '==', userId),
     orderBy('date', 'desc'),
   )
-  const snap = await getDocs(q)
+  const snap = await (fresh ? getDocs(q) : readSynced('incomes', ['incomes'], q))
   return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
 }
 
@@ -354,9 +355,9 @@ export async function addAccount(account: NewAccount) {
   })
 }
 
-export async function getAccounts(userId: string) {
+export async function getAccounts(userId: string, fresh = false) {
   const q = query(collection(db, 'accounts'), where('userId', '==', userId))
-  const snap = await getDocs(q)
+  const snap = await (fresh ? getDocs(q) : readSynced('accounts', ['accounts'], q))
   // a parent account reports what the bank really holds (its own balance plus its pockets')
   return withPockets(snap.docs.map(d => mapDoc<Record<string, unknown>>(d) as Record<string, unknown> & { id: string; balance: number; parentId?: string }))
 }
@@ -539,7 +540,10 @@ export async function getHouseholds(ids: string[], repairForUid?: string) {
   // A stale/deleted id makes Firestore rules deny the read (permission-denied,
   // not "not found"), which would reject the whole Promise.all. Use allSettled
   // so one bad id doesn't wipe out every other household the user can see.
-  const results = await Promise.allSettled(ids.map(id => getHousehold(id)))
+  const results = await Promise.allSettled(ids.map(async (id) => {
+    const snap = await readSyncedDoc(`hh:${id}`, [`hh.${id}`], doc(db, 'households', id))
+    return snap.exists() ? mapDoc<Record<string, unknown>>(snap) : null
+  }))
   const households: Record<string, unknown>[] = []
   const stale: string[] = []
   results.forEach((r, i) => {
@@ -686,13 +690,13 @@ export async function addHouseholdDebtsBatch(rows: NewHouseholdDebt[]) {
   await batch.commit()
 }
 
-export async function getHouseholdDebts(householdId: string) {
+export async function getHouseholdDebts(householdId: string, fresh = false) {
   const q = query(
     collection(db, 'householdDebts'),
     where('householdId', '==', householdId),
     orderBy('date', 'desc'),
   )
-  const snap = await getDocs(q)
+  const snap = await (fresh ? getDocs(q) : readSynced(`debts:${householdId}`, [`hh.${householdId}`], q))
   return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
 }
 
@@ -1124,18 +1128,19 @@ export async function declineExpenseContribution(expenseId: string, memberId: st
 
 // ── Live subscriptions: what one member does shows up on the others' screens by itself ──────────────────────────
 // Each returns the function that stops listening. They take the same queries the one-off getters above use, so the
-// security rules (reads limited to the caller's household) apply unchanged.
+// security rules (reads limited to the caller's household) apply unchanged. They listen to the device's cache only and
+// read the server again when the household's change signal moves (lib/sync.ts): no full re-read on every start.
 
 type Rows = Record<string, unknown>[]
 
 export function subscribeHouseholdDebts(householdId: string, onRows: (rows: Rows) => void, onError?: (e: Error) => void) {
   const q = query(collection(db, 'householdDebts'), where('householdId', '==', householdId), orderBy('date', 'desc'))
-  return onSnapshot(q, (snap) => onRows(snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))), (e) => onError?.(e))
+  return listenSynced(`debts:${householdId}`, [`hh.${householdId}`], q, (snap) => onRows(snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))), onError)
 }
 
 export function subscribeHouseholdExpenses(householdId: string, onRows: (rows: Rows) => void, onError?: (e: Error) => void) {
   const q = query(collection(db, 'householdExpenses'), where('householdId', '==', householdId), orderBy('date', 'desc'))
-  return onSnapshot(q, (snap) => onRows(snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))), (e) => onError?.(e))
+  return listenSynced(`hexp:${householdId}`, [`hh.${householdId}`], q, (snap) => onRows(snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))), onError)
 }
 
 /**
@@ -1168,12 +1173,13 @@ export function ensurePendingContributorsBackfilled(householdId: string) {
 
 export function subscribeHouseholdCrossings(householdId: string, onRows: (rows: Rows) => void, onError?: (e: Error) => void) {
   const q = query(collection(db, 'householdCrossings'), where('householdId', '==', householdId))
-  return onSnapshot(q, (snap) => onRows(snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))), (e) => onError?.(e))
+  return listenSynced(`cross:${householdId}`, [`hh.${householdId}`], q, (snap) => onRows(snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))), onError)
 }
 
 /** Listens to each household document (members, names, guests, name): someone joining shows up without a reload. `null` = it no longer exists. */
 export function subscribeHouseholdDocs(ids: string[], onDoc: (id: string, data: Record<string, unknown> | null) => void) {
-  const stops = ids.map((id) => onSnapshot(
+  const stops = ids.map((id) => listenSyncedDoc(
+    `hh:${id}`, [`hh.${id}`],
     doc(db, 'households', id),
     (snap) => onDoc(id, snap.exists() ? mapDoc<Record<string, unknown>>(snap) : null),
     () => { /* a stale id is cleaned up by the initial load */ },
@@ -1188,7 +1194,8 @@ export function subscribeHouseholdDocs(ids: string[], onDoc: (id: string, data: 
 export function subscribePendingReceiptRows(householdIds: string[], uid: string, onRows: (rows: Rows) => void) {
   const byHousehold = new Map<string, Rows>()
   const emit = () => onRows([...byHousehold.values()].flat())
-  const stops = householdIds.map((hid) => onSnapshot(
+  const stops = householdIds.map((hid) => listenSynced(
+    `receipts:${hid}`, [`hh.${hid}`],
     query(collection(db, 'householdDebts'), where('householdId', '==', hid), where('creditor', '==', uid), where('receiptStatus', '==', 'pending')),
     (snap) => { byHousehold.set(hid, snap.docs.map((d) => mapDoc<Record<string, unknown>>(d)).filter((r) => r.tipo === 'Abono')); emit() },
     () => { byHousehold.delete(hid); emit() },
@@ -1203,16 +1210,16 @@ export function subscribePendingReceiptRows(householdIds: string[], uid: string,
  */
 export function subscribePendingContributionExpenses(householdId: string, uid: string, onRows: (rows: Rows) => void, onError?: (e: Error) => void) {
   const q = query(collection(db, 'householdExpenses'), where('householdId', '==', householdId), where('pendingContributors', 'array-contains', uid))
-  return onSnapshot(q, (snap) => onRows(snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))), (e) => onError?.(e))
+  return listenSynced(`contrib:${householdId}`, [`hh.${householdId}`], q, (snap) => onRows(snap.docs.map((d) => mapDoc<Record<string, unknown>>(d))), onError)
 }
 
-export async function getHouseholdExpenses(householdId: string) {
+export async function getHouseholdExpenses(householdId: string, fresh = false) {
   const q = query(
     collection(db, 'householdExpenses'),
     where('householdId', '==', householdId),
     orderBy('date', 'desc'),
   )
-  const snap = await getDocs(q)
+  const snap = await (fresh ? getDocs(q) : readSynced(`hexp:${householdId}`, [`hh.${householdId}`], q))
   return snap.docs.map(d => mapDoc<Record<string, unknown>>(d))
 }
 
@@ -1416,8 +1423,11 @@ export async function confirmPaymentReceipt(data: {
 }
 
 export async function getNotifications(userId: string) {
-  // sorted on the client: filtering on userId and ordering on another field would need a composite index
-  const snap = await getDocs(query(collection(db, 'notifications'), where('userId', '==', userId)))
+  // the last 60 days (index userId + createdAt), from the device unless one of them changed
+  const since = new Date(Date.now() - 60 * 86_400_000)
+  since.setHours(0, 0, 0, 0)
+  const q = query(collection(db, 'notifications'), where('userId', '==', userId), where('createdAt', '>=', Timestamp.fromDate(since)), orderBy('createdAt', 'desc'))
+  const snap = await readSynced(`notifications:${since.toISOString().slice(0, 10)}`, ['notifications'], q)
   return snap.docs
     .map((d) => mapDoc<Record<string, unknown>>(d))
     .sort((a, b) => toDate(b.createdAt).getTime() - toDate(a.createdAt).getTime())
@@ -1498,8 +1508,9 @@ export async function deleteHouseholdInvite(id: string) {
 
 /** The movements the person left pending from Telegram, oldest first. */
 export async function getPendingMovements(userId: string): Promise<PendingMovement[]> {
-  // one equality filter only (no composite index); the status is filtered here
-  const snap = await getDocs(query(collection(db, 'pendingMovements'), where('userId', '==', userId)))
+  // only the ones still pending (equality filters only: no composite index), and from the device unless they changed
+  const q = query(collection(db, 'pendingMovements'), where('userId', '==', userId), where('status', '==', 'pending'))
+  const snap = await readSynced('pending', ['pending'], q)
   return snap.docs
     .map((d) => mapDoc<PendingMovement>(d))
     .filter((p) => p.status === 'pending')
@@ -1548,7 +1559,7 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
     if (!hh || !members.includes(pm.userId)) throw new Error('Ya no perteneces a ese hogar. Descarta este movimiento.')
     if (pm.creditorId && !members.includes(pm.creditorId)) throw new Error('La persona a la que pagaste ya no está en el hogar. Descarta este movimiento.')
     // the debts as they are NOW: another payment may have changed what is owed since the screenshot was sent
-    const debts = householdDebtsWithCredit((await getHouseholdDebts(pm.householdId)) as any[], members)
+    const debts = householdDebtsWithCredit((await getHouseholdDebts(pm.householdId, true)) as any[], members)
     if (pm.targetDebtId && !debts.some((d) => d.id === pm.targetDebtId && isPendingDebt(d))) throw new Error('Esa deuda ya está saldada. Descarta este movimiento.')
 
     plan = planAbono({ debts, members, debtor: pm.userId, creditor: pm.creditorId ?? null, targetDebtId: pm.targetDebtId ?? null, amount: pm.amount, category: 'otros_hogar' })
@@ -1563,7 +1574,7 @@ export async function confirmPendingMovement(pm: PendingMovement, accountId?: st
     members = ((hh?.members as string[] | undefined) ?? [])
     if (!hh || !members.includes(pm.userId)) throw new Error('Ya no perteneces a ese hogar. Descarta este movimiento.')
     if (!members.includes(pm.debtorId) || !members.includes(receiver)) throw new Error('Esa persona ya no está en el hogar. Descarta este movimiento.')
-    const debts = householdDebtsWithCredit((await getHouseholdDebts(pm.householdId)) as any[], members)
+    const debts = householdDebtsWithCredit((await getHouseholdDebts(pm.householdId, true)) as any[], members)
     if (pm.targetDebtId && !debts.some((d) => d.id === pm.targetDebtId && isPendingDebt(d))) throw new Error('Esa deuda ya está saldada. Descarta este movimiento.')
     plan = planAbono({ debts, members, debtor: pm.debtorId, creditor: receiver, targetDebtId: pm.targetDebtId ?? null, amount: pm.amount, category: 'otros_hogar' })
     paymentId = crypto.randomUUID()
