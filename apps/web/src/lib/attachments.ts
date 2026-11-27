@@ -1,4 +1,7 @@
-import { addDoc, collection, deleteDoc, doc, serverTimestamp } from 'firebase/firestore'
+import {
+  collection, doc, serverTimestamp,
+} from 'firebase/firestore'
+import { addDoc, deleteDoc } from './writes'
 import { db } from '@/lib/firebase'
 
 /**

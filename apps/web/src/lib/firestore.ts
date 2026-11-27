@@ -1,8 +1,7 @@
 import {
-  collection, doc, addDoc, updateDoc, deleteDoc,
-  getDocs, getDoc, query, where, orderBy, Timestamp,
-  serverTimestamp, setDoc, arrayUnion, arrayRemove, writeBatch, increment, deleteField, runTransaction,
+  collection, doc, getDocs, getDoc, query, where, orderBy, Timestamp, serverTimestamp, arrayUnion, arrayRemove, increment, deleteField,
 } from 'firebase/firestore'
+import { addDoc, updateDoc, deleteDoc, setDoc, writeBatch, runTransaction } from './writes'
 import { db, auth } from './firebase'
 import { listenSynced, listenSyncedDoc, readSynced, readSyncedDoc } from './sync'
 import type {

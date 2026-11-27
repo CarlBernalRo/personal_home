@@ -1,6 +1,9 @@
 import { useEffect } from 'react'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
-import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore'
+import {
+  collection, query, where, getDocs, doc, getDoc, serverTimestamp,
+} from 'firebase/firestore'
+import { setDoc } from '@/lib/writes'
 import { auth, db } from '@/lib/firebase'
 import { getUserProfile } from '@/lib/firestore'
 import { useAuthStore } from '@/store/auth'

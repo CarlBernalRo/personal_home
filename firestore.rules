@@ -207,9 +207,11 @@ service cloud.firestore {
       allow create:         if isAuth() && isHouseholdMember(request.resource.data.householdId);
       allow update, delete: if isHouseholdMember(resource.data.householdId);
     }
-    // Change signals (written only by the server): each person reads their own, to know which module to read again
+    // Change signals: whoever changes something stamps it for the people it concerns (only `v` and `log`); each person
+    // reads their own, to know which module to read again. A stray stamp only costs its reader a refresh.
     match /sync/{uid} {
       allow read: if isAuth() && request.auth.uid == uid;
+      allow create, update: if isAuth() && request.resource.data.keys().hasOnly(['v', 'log']);
     }
     // Notifications — each one belongs to its recipient; anyone signed in may create one, but only as themselves
     match /notifications/{id} {

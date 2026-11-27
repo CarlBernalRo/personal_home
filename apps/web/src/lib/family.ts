@@ -1,6 +1,7 @@
 import {
-  arrayRemove, arrayUnion, collection, deleteDoc, deleteField, doc, getDoc, getDocs, increment, query, serverTimestamp, setDoc, Timestamp, updateDoc, where, writeBatch,
+  arrayRemove, arrayUnion, collection, deleteField, doc, getDoc, getDocs, increment, query, serverTimestamp, Timestamp, where,
 } from 'firebase/firestore'
+import { deleteDoc, setDoc, updateDoc, writeBatch } from './writes'
 import { db } from './firebase'
 import { listenSynced, listenSyncedDoc } from './sync'
 import { createNotification } from './firestore'

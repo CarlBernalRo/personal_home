@@ -1,4 +1,7 @@
-import { addDoc, collection, deleteDoc, deleteField, doc, query, serverTimestamp, Timestamp, updateDoc, where } from 'firebase/firestore'
+import {
+  collection, deleteField, doc, query, serverTimestamp, Timestamp, where,
+} from 'firebase/firestore'
+import { addDoc, deleteDoc, updateDoc } from './writes'
 import { db } from './firebase'
 import { listenSynced } from './sync'
 import type { Reminder } from '@/shared'
